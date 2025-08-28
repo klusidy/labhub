@@ -1,0 +1,9 @@
+// tsconfig.json
+{
+  "extends": "@tsconfig/svelte/tsconfig.json",
+  "compilerOptions": {
+    "types": ["svelte"],
+    "lib": ["DOM", "ES2021"]
+  },
+  "include": ["src/**/*.ts", "src/**/*.svelte"]
+}

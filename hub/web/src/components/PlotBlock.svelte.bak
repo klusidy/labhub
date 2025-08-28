@@ -1,0 +1,490 @@
+<script lang="ts">
+  import { onMount, onDestroy } from "svelte";
+  import uPlot from "uplot";
+  import "uplot/dist/uPlot.min.css";
+  export let deviceId: string;
+  export let source: string;
+  export let index = 0;
+  export let defaultOpen = false;
+
+  export let getPlotSpec!: (dev: string, src: string) => Promise<any>;
+  export let getFrame!: (dev: string, src: string) => Promise<any>;
+  export let openDataStream!: (dev: string, src: string, rate?: number) => WebSocket;
+
+  // UI state
+  let open = defaultOpen;
+  let running = false;
+  let lastError: string | null = null;
+  let loadingSpec = true;
+
+  // meta/spec
+  let spec: any = null;
+  let xLabel = "";
+  let yLabel = "";
+  let title = "";
+
+  // WS + draw cadence
+  let rateHz = 10;
+  let ws: WebSocket | null = null;
+  let wsRateApplied = 0;
+
+  // uPlot handles
+  let u: uPlot | null = null;
+  let plotEl: HTMLDivElement | null = null;
+  let xLabEl: HTMLDivElement | null = null;
+  let yLabEl: HTMLDivElement | null = null;
+
+  // current unified data
+  // uPlot expects [x, s1, s2, ...] all same length
+  let xData: number[] = [];
+  let seriesNames: string[] = [];
+  let seriesData: number[][] = [];
+
+  const bodyId = `plotbody-${(deviceId || 'plot')}-${index}`;
+
+  // ----- lifecycle -----
+  onMount(async () => {
+    try {
+      spec = await getPlotSpec(deviceId, source);
+      const xv = spec?.["x-values"];
+      xvals = Array.isArray(xv) ? xv : null;
+    } catch (e:any) {
+      lastError = e?.message ?? String(e);
+    } finally {
+      loadingSpec = false;
+    }
+    //setupCanvas();
+    draw(); // initial
+    return () => cleanup();
+  });
+
+  onDestroy(cleanup);
+
+  function cleanup() {
+    stopDrawing();
+    closeWS();
+    if (resizeObs) { resizeObs.disconnect(); resizeObs = null; }
+    ctx = null; // ensure we rebuild when canvas returns
+  }
+
+  // re-init when canvas element (re)appears
+  $: if (open && canvasEl && !ctx) {
+    setupCanvas();
+    draw();               // render latest frame immediately
+    if (running && !drawTimer) startDrawing(); // if user left it running, resume drawing
+  }
+
+  // pause everything when collapsing
+  $: if (!open) {
+    stopDrawing();
+    closeWS();            // DataSource will auto-stop if last subscriber leaves
+    // don't forcibly change `running`—just pause transport/render
+    if (resizeObs) { resizeObs.disconnect(); resizeObs = null; }
+    ctx = null;
+  }
+
+  // ----- controls -----
+  async function doOnce() {
+    lastError = null;
+    open = true; // ensure body is mounted
+    if (canvasEl && !ctx) setupCanvas();    // ← extra safety
+    try {
+      const f = await getFrame(deviceId, source);
+      applyIncomingFrame(f);
+      draw();
+    } catch (e:any) {
+      lastError = e?.message ?? String(e);
+    }
+  }
+
+  async function onStartStop() {
+    if (running) stop();
+    else start();
+  }
+
+  function start() {
+    lastError = null;
+    open = true;
+    if (canvasEl && !ctx) setupCanvas();    // ← extra safety
+    running = true;
+    openWS(rateHz);
+    startDrawing();
+  }
+
+  function stop() {
+    running = false;
+    stopDrawing();
+    closeWS(); // server producer will auto-stop (we started it), thanks to backend patch
+  }
+
+  // Re-open WS if user changes rate while running (server rate is bound to the connection)
+  $: if (open && running) {
+    if (rateHz !== wsRateApplied) {
+      closeWS();
+      openWS(rateHz);
+    }
+  }
+
+  // ----- WS helpers -----
+  function openWS(rate: number) {
+    try {
+      ws = openDataStream(deviceId, source, rate);
+      wsRateApplied = rate;
+      ws.onmessage = (ev) => {
+        try {
+          const fr = typeof ev.data === 'string'
+            ? JSON.parse(ev.data)
+            : JSON.parse(new TextDecoder().decode(ev.data));
+          applyIncomingFrame(fr);
+        } catch {}
+      };
+      ws.onerror = () => { lastError = "stream error"; };
+      ws.onclose  = () => { /* if running, draw loop keeps going but latestY freezes */ };
+    } catch (e:any) {
+      lastError = e?.message ?? String(e);
+    }
+  }
+  function closeWS() {
+    wsRateApplied = 0;
+    if (ws) { try { ws.close(); } catch {} ws = null; }
+  }
+
+  // ---- frame normalization ----
+  function applyIncomingFrame(fr: any) {
+    // Update x-values if provided with the frame (optional)
+    const xv = fr?.["x-values"] ?? fr?.x ?? null;
+    if (Array.isArray(xv)) xvals = xv;
+
+    // Normalization rules:
+    // 1) { series: [{name, data}, ...] }
+    if (Array.isArray(fr?.series) && fr.series.length) {
+      latestSeries = fr.series
+        .filter((s: any) => Array.isArray(s?.data))
+        .map((s: any) => ({ name: String(s.name ?? 'series'), data: s.data }));
+      return;
+    }
+    // 2) single { data: [...] }
+    if (Array.isArray(fr?.data)) {
+      latestSeries = [{ name: fr?.name ?? 'data', data: fr.data }];
+      return;
+    }
+    // 3) object-of-arrays: { "PSD":[...], "Ch1":[...], meta: {...} }
+    if (fr && typeof fr === 'object') {
+      const series: { name: string; data: number[] }[] = [];
+      for (const [k, v] of Object.entries(fr)) {
+        if (k === 'meta' || k === 'x' || k === 'x-values' || k === 'name' || k === 'series') continue;
+        if (Array.isArray(v) && v.every((n) => typeof n === 'number')) {
+          series.push({ name: k, data: v as number[] });
+        }
+      }
+      if (series.length) {
+        latestSeries = series;
+        return;
+      }
+    }
+    // Fallback: nothing usable
+    latestSeries = [];
+  }
+
+  // ----- draw loop -----
+  function startDrawing() {
+    stopDrawing();
+    const ms = Math.max(10, Math.floor(1000 / Math.max(0.2, rateHz)));
+    drawTimer = window.setInterval(draw, ms) as unknown as number;
+  }
+  function stopDrawing() {
+    if (drawTimer != null) { clearInterval(drawTimer as any); drawTimer = null; }
+  }
+
+  // ----- canvas -----
+function setupCanvas() {
+    if (!canvasEl) return;
+    ctx = canvasEl.getContext("2d");
+    dpi = window.devicePixelRatio || 1;
+
+    const fit = () => {
+      if (!canvasEl) return;
+      const parent = canvasEl.parentElement!;
+      const w = parent.clientWidth;
+      const h = Math.max(200, Math.floor(w * 0.45));
+      canvasEl.style.width = w + "px";
+      canvasEl.style.height = h + "px";
+      canvasEl.width = Math.floor(w * dpi);
+      canvasEl.height = Math.floor(h * dpi);
+      draw();
+    };
+    resizeObs = new ResizeObserver(fit);
+    resizeObs.observe(canvasEl.parentElement!);
+    fit();
+  }
+
+  // palette
+  const palette = [
+    "#2d6cdf","#d9534f","#5cb85c","#f0ad4e","#5bc0de",
+    "#6f42c1","#20c997","#fd7e14","#6610f2","#17a2b8"
+  ];
+
+  // tick helpers (nice numbers)
+  function niceNum(range: number, round: boolean) {
+    const exp = Math.floor(Math.log10(range || 1));
+    const f = range / Math.pow(10, exp);
+    let nf;
+    if (round) {
+      if (f < 1.5) nf = 1;
+      else if (f < 3) nf = 2;
+      else if (f < 7) nf = 5;
+      else nf = 10;
+    } else {
+      if (f <= 1) nf = 1;
+      else if (f <= 2) nf = 2;
+      else if (f <= 5) nf = 5;
+      else nf = 10;
+    }
+    return nf * Math.pow(10, exp);
+  }
+  function niceTicks(min: number, max: number, nticks = 5) {
+    if (!isFinite(min) || !isFinite(max)) return { ticks: [0], min: 0, max: 1, step: 1 };
+    if (min === max) { min -= 0.5; max += 0.5; }
+    const range = niceNum(max - min, false);
+    const step = niceNum(range / Math.max(2, nticks - 1), true);
+    const niceMin = Math.floor(min / step) * step;
+    const niceMax = Math.ceil(max / step) * step;
+    const ticks: number[] = [];
+    for (let x = niceMin; x <= niceMax + 0.5 * step; x += step) ticks.push(+x.toFixed(12));
+    return { ticks, min: niceMin, max: niceMax, step };
+  }
+  function fmtTick(v: number) {
+    const av = Math.abs(v);
+    if (av >= 1e6 || (av && av < 1e-3)) return v.toExponential(2);
+    const s = v.toFixed(6).replace(/\.?0+$/,''); // trim
+    return s;
+  }
+
+  function draw() {
+    if (!ctx || !canvasEl) return;
+    const W = canvasEl.width, H = canvasEl.height;
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.clearRect(0,0,W,H);
+    ctx.fillStyle = "#fff"; ctx.fillRect(0,0,W,H);
+
+    // paddings
+    const padL = 60*dpi, padR = 14*dpi, padT = 34*dpi, padB = 44*dpi;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+
+    // title
+    ctx.fillStyle = "#333";
+    ctx.font = `${14*dpi}px system-ui, -apple-system, Segoe UI, Roboto, sans-serif`;
+    const title = spec?.title || source;
+    ctx.fillText(title, 12*dpi, 20*dpi);
+
+    // if no data
+    if (!latestSeries || latestSeries.length === 0 || latestSeries[0].data?.length === 0) {
+      ctx.strokeStyle = "#e3e4e8"; ctx.lineWidth = 1*dpi;
+      ctx.strokeRect(padL, padT, plotW, plotH);
+      ctx.fillStyle = "#888"; ctx.font = `${12*dpi}px ui-monospace, Menlo, Consolas, monospace`;
+      ctx.fillText("no data", padL + 8*dpi, padT + 18*dpi);
+
+      // centered axis labels
+      const xl = spec?.["x-label"] ?? "", yl = spec?.["y-label"] ?? "";
+      ctx.fillStyle = "#666"; ctx.font = `${12*dpi}px system-ui, -apple-system, Segoe UI, Roboto, sans-serif`;
+      if (xl) {
+        const tw = ctx.measureText(xl).width;
+        ctx.fillText(xl, padL + (plotW - tw)/2, padT + plotH + 32*dpi);
+      }
+      if (yl) {
+        ctx.save();
+        ctx.translate(18*dpi, padT + plotH/2);
+        ctx.rotate(-Math.PI/2);
+        const tw = ctx.measureText(yl).width;
+        ctx.fillText(yl, -tw/2, 0);
+        ctx.restore();
+      }
+      return;
+    }
+
+    // derive xs per series
+    const series = latestSeries;
+    let xsBase: number[] | null = null;
+    if (Array.isArray(xvals) && xvals.length === series[0].data.length) xsBase = xvals;
+
+    // bounds across all series
+    let xmin = +Infinity, xmax = -Infinity;
+    let ymin = +Infinity, ymax = -Infinity;
+    for (const s of series) {
+      const y = s.data;
+      if (!y || !y.length) continue;
+      const n = y.length;
+      const xs = (xsBase && xsBase.length === n) ? xsBase : undefined;
+      if (xs) {
+        for (let i=0;i<n;i++){ const xv = xs[i], yv = y[i]; if (isFinite(xv) && isFinite(yv)) { if (xv<xmin) xmin=xv; if (xv>xmax) xmax=xv; if (yv<ymin) ymin=yv; if (yv>ymax) ymax=yv; } }
+      } else {
+        xmin = Math.min(xmin, 0); xmax = Math.max(xmax, n-1);
+        for (let i=0;i<n;i++){ const yv = y[i]; if (isFinite(yv)) { if (yv<ymin) ymin=yv; if (yv>ymax) ymax=yv; } }
+      }
+    }
+    if (!isFinite(xmin) || !isFinite(xmax)) { xmin=0; xmax=(series[0]?.data?.length ?? 1)-1; }
+    if (!isFinite(ymin) || !isFinite(ymax)) { ymin=0; ymax=1; }
+
+    // nice ticks
+    const xt = niceTicks(xmin, xmax, 6);
+    const yt = niceTicks(ymin, ymax, 5);
+
+    // scales
+    const X = (x:number) => padL + ((x - xt.min) / (xt.max - xt.min || 1)) * plotW;
+    const Y = (y:number) => padT + plotH - ((y - yt.min) / (yt.max - yt.min || 1)) * plotH;
+
+    // grid + axes box
+    ctx.strokeStyle = "#f0f1f4"; ctx.lineWidth = 1*dpi;
+    for (const t of xt.ticks) { const tx = X(t); ctx.beginPath(); ctx.moveTo(tx, padT); ctx.lineTo(tx, padT+plotH); ctx.stroke(); }
+    for (const t of yt.ticks) { const ty = Y(t); ctx.beginPath(); ctx.moveTo(padL, ty); ctx.lineTo(padL+plotW, ty); ctx.stroke(); }
+
+    ctx.strokeStyle = "#e3e4e8"; ctx.lineWidth = 1*dpi;
+    ctx.strokeRect(padL, padT, plotW, plotH);
+
+    // tick labels
+    ctx.fillStyle = "#555"; ctx.font = `${11*dpi}px system-ui, -apple-system, Segoe UI, Roboto, sans-serif`;
+    // x labels
+    for (const t of xt.ticks) {
+      const tx = X(t);
+      const txt = fmtTick(t);
+      const tw = ctx.measureText(txt).width;
+      ctx.fillText(txt, tx - tw/2, padT + plotH + 18*dpi);
+    }
+    // y labels
+    for (const t of yt.ticks) {
+      const ty = Y(t);
+      const txt = fmtTick(t);
+      const tw = ctx.measureText(txt).width;
+      ctx.fillText(txt, padL - 6*dpi - tw, ty + 4*dpi);
+    }
+
+    // draw series lines
+    ctx.lineWidth = 2*dpi;
+    series.forEach((s, idx) => {
+      const y = s.data; if (!y?.length) return;
+      const n = y.length;
+      const xs = (Array.isArray(xvals) && xvals.length === n) ? xvals : undefined;
+      ctx.strokeStyle = palette[idx % palette.length];
+      ctx.beginPath();
+      const x0 = xs ? xs[0] : 0;
+      ctx.moveTo(X(x0), Y(y[0]));
+      for (let i=1;i<n;i++){
+        const xx = xs ? xs[i] : i;
+        ctx.lineTo(X(xx), Y(y[i]));
+      }
+      ctx.stroke();
+    });
+
+    // centered axis labels
+    const xl = spec?.["x-label"] ?? "", yl = spec?.["y-label"] ?? "";
+    ctx.fillStyle = "#666"; ctx.font = `${12*dpi}px system-ui, -apple-system, Segoe UI, Roboto, sans-serif`;
+    if (xl) {
+      const tw = ctx.measureText(xl).width;
+      ctx.fillText(xl, padL + (plotW - tw)/2, padT + plotH + 32*dpi);
+    }
+    if (yl) {
+      ctx.save();
+      ctx.translate(18*dpi, padT + plotH/2);
+      ctx.rotate(-Math.PI/2);
+      const tw = ctx.measureText(yl).width;
+      ctx.fillText(yl, -tw/2, 0);
+      ctx.restore();
+    }
+
+    // legend (top-right inside plot)
+    const legendPad = 6*dpi, swatch = 16*dpi, gap = 8*dpi, rowH = 18*dpi;
+    ctx.font = `${12*dpi}px system-ui, -apple-system, Segoe UI, Roboto, sans-serif`;
+    const items = series.map((s, i) => ({ name: s.name ?? `S${i+1}`, color: palette[i % palette.length] }));
+    const maxW = Math.max(...items.map(it => ctx.measureText(it.name).width)) || 0;
+    const boxW = legendPad*3 + swatch + maxW;
+    const boxH = legendPad*2 + items.length*rowH;
+    const boxX = padL + plotW - boxW - 6*dpi;
+    const boxY = padT + 6*dpi;
+
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    ctx.strokeStyle = "#ddd"; ctx.lineWidth = 1*dpi;
+    ctx.fillRect(boxX, boxY, boxW, boxH);
+    ctx.strokeRect(boxX, boxY, boxW, boxH);
+
+    items.forEach((it, i) => {
+      const y = boxY + legendPad + i*rowH + 12*dpi;
+      // swatch
+      ctx.fillStyle = it.color;
+      ctx.fillRect(boxX + legendPad, y - 8*dpi, swatch, 3*dpi);
+      // text
+      ctx.fillStyle = "#333";
+      ctx.fillText(it.name, boxX + legendPad*2 + swatch, y);
+    });
+  }
+
+</script>
+
+<div class="plot-block">
+  <div class="plot-head {index % 2 ? 'alt2' : 'alt1'}">
+    <!--<button class="plot-toggle" aria-expanded={open} on:click={() => open = !open}>
+      {#if open}⟰{:else}⟱{/if}
+    </button>-->
+    <button
+        class="plot-toggle"
+        aria-expanded={open}
+        
+        on:click={() => (open = !open)}
+        title={open ? 'Hide details' : 'Show details'}>
+        {#if open}⮝{:else}⮟{/if}
+      </button>
+
+    <div class="plot-title">
+      <strong>{source}</strong>{#if spec?.title}<span class="plot-sub"> — {spec.title}</span>{/if}
+    </div>
+
+    <div class="plot-actions">
+      <button class="plot-btn" on:click={doOnce} disabled={running || loadingSpec}>Once</button>
+      <button class="plot-btn" on:click={onStartStop} disabled={loadingSpec}>
+        {#if running}Stop{:else}Start{/if}
+      </button>
+      <label class="plot-rate">
+        <span>rate</span>
+        <input type="number" min="0.2" step="0.2" bind:value={rateHz} />
+        <span>Hz</span>
+      </label>
+    </div>
+  </div>
+
+  {#if open}
+    <div class="plot-body">
+      {#if lastError}<div class="cmd-error">Error: {lastError}</div>{/if}
+      {#if loadingSpec}<div class="muted">Loading plot spec…</div>{/if}
+      <div class="plot-canvas-wrap"><canvas bind:this={canvasEl}></canvas></div>
+    </div>
+  {/if}
+</div>
+
+<style>
+  .plot-block{ border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; background:#fff; margin:12px 0 16px; }
+  .plot-head{ display:grid; grid-template-columns:auto 1fr auto; align-items:center; gap:8px; padding:8px 10px; border-bottom:1px solid var(--border); }
+  .plot-head.alt1{ background:var(--cmd-head-1); }
+  .plot-head.alt2{ background:var(--cmd-head-2); }
+  .plot-toggle{ 
+    width: 34px; height: 34px;
+    border: 1px solid #d0d0d0;
+    border-radius: 20px;
+    background: #fff;
+    line-height: 16px;
+    text-align: center;
+    cursor: pointer;
+    user-select: none;
+    font-size: 14px;
+    margin-right:10px;
+  }
+  .plot-toggle:hover { background: #f7f7f7; }
+  .plot-title{ font-size:16px; }
+  .plot-sub{ color:var(--muted); font-size:12px; margin-left:4px; }
+  .plot-actions{ display:flex; align-items:center; gap:8px; }
+  .plot-btn{ height:32px; padding:0 12px; border:1px solid #d0d0d0; border-radius:6px; background:#fff; cursor:pointer; }
+  .plot-btn:hover{ background:#fafafa; } .plot-btn:disabled{ opacity:.5; cursor:not-allowed; }
+  .plot-rate{ display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); }
+  .plot-rate input{ width:68px; height:28px; line-height:28px; padding:0 8px; border:1px solid var(--border); border-radius:6px; }
+  .plot-body{ padding:8px 10px 10px; }
+  .plot-canvas-wrap{ width:100%; } canvas{ display:block; width:100%; height:280px; }
+  .cmd-error{ color:#a00; }
+</style>

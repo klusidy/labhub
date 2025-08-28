@@ -1,0 +1,187 @@
+
+  :root {
+    --row-h: 46px;
+    --gap: 8px;
+    --pad: 10px;
+    --muted: #666;
+    --alt: #f7f8fa;
+    --border: #eaeaea;
+    --radius: 8px;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+
+    --cmd-head-1: #D2E3F2;
+    --cmd-head-2: #D2E3F2;
+    --result-bg: #fbfbfc;
+
+    --cmd-num-width: 120px;
+    --cmd-text-width: 240px;
+  }
+
+  body { margin:0; font-family: system-ui, Segoe UI, Arial, sans-serif; }
+  .bar { display:flex; gap:12px; align-items:center; padding:8px 12px; border-bottom:1px solid #eee; }
+  .grid { display:grid; grid-template-columns: 280px 1fr; min-height: calc(100vh - 48px); }
+  .sidebar { border-right:1px solid #eee; padding:8px; }
+  .content { padding:12px; }
+  .muted { color:#666; font-size: 12px; }
+  button { padding:6px 10px; width: 100%; }
+  input, select { padding:6px; }
+  .row { display:flex; gap:8px; align-items:center; margin:6px 0; }
+
+  .props-table {
+    display: grid;
+    grid-auto-rows: auto;
+    grid-template-columns: minmax(max-content, 0.4fr) minmax(max-content, 0.2fr) minmax(max-content, 1fr) minmax(max-content, 0.2fr) 100px;
+    /*grid-template-columns: max-content, max-content max-content max-content max-content; */
+    column-gap: 0;/*var(--gap);*/
+    row-gap: 0;
+
+  }
+
+  .prop-header span{
+    background: #dedede;
+    line-height: 50px;
+    padding: 0 var(--pad);
+  }
+
+  .prop-row {
+    display: contents; /* lets each cell align to the table’s columns */
+  }
+  
+  /*.prop-row:nth-child(4n+2)  .prop-cell { background: var(--alt); }*/
+  .prop-row:nth-child(2n+1) .prop-cell { background: var(--alt); }
+
+  .prop-cell {
+    padding: 5px var(--pad) 0 var(--pad);
+    display: flex;
+    align-items: center;
+    height: var(--row-h);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .prop-name {
+    font-weight: 600;
+    display:block;
+    float:left;
+    
+
+  }
+
+
+  .prop-type {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .prop-current {
+    font-family: var(--mono);
+  }
+ .spinner{ display:inline-block; width:12px; height:12px; border:2px solid #aaa; border-top-color:transparent; border-radius:50%; margin-right:6px; animation:spin .8s linear infinite }
+ @keyframes spin{to{transform:rotate(360deg)}}
+
+  .prop-edit input[type="number"],
+  .prop-edit input[type="text"],
+  .prop-edit select,
+  .prop-edit button {
+    height: 32px;
+    line-height: 32px;
+    padding: 0 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
+  .prop-edit input[type="checkbox"] {
+    transform: scale(1.1);
+  }
+
+  .prop-set-button button {
+    height: 32px;
+    padding: 0 12px;
+    /*border-radius: 6px;*/
+    /*border: 1px solid #d0d0d0;*/
+    /*background: white;*/
+    cursor: pointer;
+    width:80px
+  }
+  .prop-set-button button:hover { background: #fafafa; }
+  .prop-set-button button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* doc line spans all columns below the row */
+  .prop-doc {
+    /*grid-column: 1 / -1;*/
+    /*padding: 6px var(--pad) 10px var(--pad);*/
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.35;
+    
+    float:left;
+    clear:both;
+    font-weight: normal;
+    font-style: italic
+  }
+
+  /* composite (object) editor */
+  .composite details {
+    width: 100%;
+  }
+  .composite summary {
+    cursor: pointer;
+    list-style: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .composite summary::before {
+    content: "▸";
+    display: inline-block;
+    transition: transform 120ms ease;
+  }
+  .composite details[open] summary::before {
+    transform: rotate(90deg);
+  }
+  .composite-body {
+    margin-top: 8px;
+    display: grid;
+    grid-template-columns: 180px 1fr; /* sub-name | sub-input */
+    gap: 8px;
+  }
+  .composite-item label {
+    font-size: 12px;
+    color: var(--muted);
+    align-self: center;
+  }
+  .composite-item input[type="number"],
+  .composite-item input[type="text"] {
+    height: 32px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0 10px;
+  }
+
+  /* responsive (phone): collapse type column, stack a bit */
+  @media (max-width: 720px) {
+    .props-table {
+      grid-template-columns: 1.1fr 1fr auto; /* name | edit | apply */
+    }
+    .prop-type, .prop-current { display: none; }
+  }
+
+
+  /* Commands list wrapper */
+.cmds-list {
+  margin-top: 8px;
+}
+
+/* Optional: align section heading with your props table width */
+h3 { margin-top: 18px; }
+
+/* If you want command blocks to visually alternate like props: */
+.cmds-list .cmd-block:nth-child(odd) { background: var(--alt); }
+
+/* Make command buttons look like your Set buttons */
+.cmd-run {
+  border: 1px solid #d0d0d0;
+  background: #fff;
+  border-radius: 6px;
+}
+.cmd-run:hover { background: #fafafa; }
+.cmd-run:disabled { opacity: 0.5; cursor: not-allowed; }
+
