@@ -5,6 +5,7 @@ from urllib.parse import urlparse
 import time
 import json
 import urllib
+import types 
 
 
 # ------------------------- Formatting helpers -------------------------
@@ -68,19 +69,23 @@ def _infer_type_from_spec(p: Dict[str, Any]) -> Optional[str]:
 
 def _fmt_cmd_sig(cname: str, args_spec: Dict[str, Any]) -> str:
     parts = []
-    for k, spec in args_spec.items():
+    #print("  - inside _fmt_cmd_sig")
+    #print(cname)
+    #print(args_spec)
+    for spec in args_spec:
+        name     = spec.get("name", "unknown")
         required = spec.get("required", True)
         default  = spec.get("default")
         typ      = spec.get("type", "Any")
         if required:
-            parts.append(f"{k}: {typ}")
+            parts.append(f"{name}: {typ}")
         else:
-            parts.append(f"{k}: {typ} = {default!r}")
+            parts.append(f"{name}: {typ} = {default!r}")
     return f"{cname}(" + ", ".join(parts) + ")"
 
 # ------------------------- Proxies -------------------------
 
-class ParameterProxy:
+class PropertyProxy:
     """
     A device parameter proxy. help(obj) prints detailed spec; str(obj) prints the current value.
     """
@@ -99,7 +104,7 @@ class ParameterProxy:
     def set(self, value: Any) -> None:
         if self._spec.get("read_only"):
             raise AttributeError(f"'{self._name}' is read-only")
-        self._hub._patch(f"/api/v1/devices/{self._id}", json={"params": {self._name: value}})
+        self._hub._patch(f"/api/v1/devices/{self._id}", json={"properties": {self._name: value}})
         self._hub.refresh_device(self._id)
 
     # make assignment work: device.param = x (DeviceProxy.__setattr__ calls set())
@@ -152,11 +157,11 @@ class ParameterProxy:
     def __neg__(self):             return -self._v()
     def __pos__(self):             return +self._v()
     # comparisons
-    def __eq__(self, other):       return self._v() == (other.get() if isinstance(other, ParameterProxy) else other)
-    def __lt__(self, other):       return self._v() <  (other.get() if isinstance(other, ParameterProxy) else other)
-    def __le__(self, other):       return self._v() <= (other.get() if isinstance(other, ParameterProxy) else other)
-    def __gt__(self, other):       return self._v() >  (other.get() if isinstance(other, ParameterProxy) else other)
-    def __ge__(self, other):       return self._v() >= (other.get() if isinstance(other, ParameterProxy) else other)
+    def __eq__(self, other):       return self._v() == (other.get() if isinstance(other, PropertyProxy) else other)
+    def __lt__(self, other):       return self._v() <  (other.get() if isinstance(other, PropertyProxy) else other)
+    def __le__(self, other):       return self._v() <= (other.get() if isinstance(other, PropertyProxy) else other)
+    def __gt__(self, other):       return self._v() >  (other.get() if isinstance(other, PropertyProxy) else other)
+    def __ge__(self, other):       return self._v() >= (other.get() if isinstance(other, PropertyProxy) else other)
 
     # ------------------------- DeviceSpec and CommandSpec -------------------------    
     def __iter__(self): return iter(self.get())
@@ -176,12 +181,12 @@ class DeviceProxy:
         self.__dict__["_spec"] = spec
 
         # Build param proxies and attach as attributes by id-only
-        params = {}
-        for p in spec.get("params", []):
-            pr = ParameterProxy(hub, dev_id, p["name"], p)
-            params[p["name"]] = pr
+        properties = {}
+        for p in spec.get("properties", []):
+            pr = PropertyProxy(hub, dev_id, p["name"], p)
+            properties[p["name"]] = pr
             self.__dict__[p["name"]] = pr
-        self.__dict__["_params"] = params
+        self.__dict__["_properties"] = properties
 
         # Build command callables
         cmds = {}
@@ -197,9 +202,10 @@ class DeviceProxy:
             def _make(cname=cname, args_spec=args_spec, cdoc=cdoc, returns=returns):
                 def _cmd(**kwargs):
                     # simple arg presence check
-                    for k, aspec in args_spec.items():
-                        if aspec.get("required", True) and k not in kwargs:
-                            raise TypeError(f"Missing required arg '{k}' for {cname}()")
+                    for aspec in args_spec:
+                        name = aspec.get("name")
+                        if aspec.get("required", True) and name not in kwargs:
+                            raise TypeError(f"Missing required arg '{name}' for {cname}()")
                     return self._hub._post(
                         f"/api/v1/devices/{dev_id}/commands",
                         json={"name": cname, "args": kwargs},
@@ -213,6 +219,29 @@ class DeviceProxy:
             cmds[cname] = _make()
         self.__dict__["_cmds"] = cmds
 
+        # --- Data sources ---
+        data_specs = spec.get("data", []) or []
+        data_ns = types.SimpleNamespace()
+        data_map: Dict[str, DataSourceProxy] = {}
+        for ds in data_specs:
+            dsp = DataSourceProxy(hub, dev_id, ds)
+            setattr(data_ns, ds["name"], dsp)
+            data_map[ds["name"]] = dsp
+        self.__dict__["data"] = data_ns
+        self.__dict__["_data_sources"] = data_map
+
+        # --- Plots (only for data with has_plot=True) ---
+        plots_ns = types.SimpleNamespace()
+        plots_map: Dict[str, PlotProxy] = {}
+        for name, dsp in data_map.items():
+            if dsp._spec.get("has_plot"):
+                pp = PlotProxy(dsp)
+                setattr(plots_ns, name, pp)
+                plots_map[name] = pp
+        self.__dict__["plots"] = plots_ns
+        self.__dict__["_plots"] = plots_map
+
+
         # Device-level doc for help(...)
         self.__doc__ = self._build_doc()
 
@@ -223,10 +252,10 @@ class DeviceProxy:
         # parameters with current values
         lines.append("\nParameters:")
         state = self._hub._ensure_state(self._id)
-        for p in self._spec.get("params", []):
+        for p in self._spec.get("properties", []):
             current = state["state"].get(p["name"])
             lines.append(_fmt_param_line(p, current))
-        # commands with annotated params
+        # commands with annotated properties
         if self._spec.get("commands"):
             lines.append("\nCommands:")
             for name, fn in self._cmds.items():
@@ -234,6 +263,23 @@ class DeviceProxy:
                 doc = fn.__doc__.split("\n", 1)
                 if len(doc) > 1 and doc[1].strip():
                     lines.append("    " + doc[1].strip())
+
+        # --- Data Sources ---
+        if getattr(self, "_data_sources", None):
+            lines.append("")
+            lines.append("Data Sources:")
+            for name, dsp in self._data_sources.items():
+                plot_hint = "  (plot)" if dsp._spec.get("has_plot") else ""
+                lines.append(f"  .{name}.once(**kwargs) -> dict{plot_hint}")
+
+        # --- Plots ---
+        if getattr(self, "_plots", None):
+            lines.append("")
+            lines.append("Plots:")
+            for name, pp in self._plots.items():
+                lines.append(f"  .{name}(**kwargs) -> dict")
+
+
         return "\n".join(lines)
 
     # resolve commands as attributes
@@ -244,9 +290,9 @@ class DeviceProxy:
 
     # route assignments to parameter proxies
     def __setattr__(self, name: str, value: Any):
-        params = self.__dict__.get("_params", {})
-        if name in params:
-            params[name].set(value)
+        properties = self.__dict__.get("_properties", {})
+        if name in properties:
+            properties[name].set(value)
             # refresh doc (current values may change)
             self.__dict__["__doc__"] = self._build_doc()
             return
@@ -311,6 +357,63 @@ class DeviceProxy:
         return T, Y
 
 
+# ------------------------- Data & Plot proxies -------------------------
+
+class DataSourceProxy:
+    """
+    A data source proxy. Use .once(**kwargs) for one-shot retrieval.
+    If this source has a server-side plot, use .plot(**kwargs).
+    """
+    def __init__(self, hub: "Hub", dev_id: str, spec: Dict[str, Any]):
+        self._hub = hub
+        self._id = dev_id
+        self._name = spec["name"]
+        self._spec = spec or {}
+        doc = (self._spec.get("doc") or "").strip()
+        has_plot = bool(self._spec.get("has_plot"))
+        plot_note = " (has plot)" if has_plot else ""
+        self.__doc__ = f"{self._name}: data source{plot_note}\n\n{doc}"
+
+    def once(self, **kwargs) -> Any:
+        """Fetch a single data snapshot (JSON → Python)."""
+        return self._hub._get_data_once(self._id, self._name, kwargs)
+
+    def plot(self, **kwargs) -> Any:
+        """Fetch the associated plot payload (JSON → Python)."""
+        if not self._spec.get("has_plot"):
+            raise AttributeError(f"Data source '{self._name}' has no plot.")
+        return self._hub._get_plot(self._id, self._name, kwargs)
+
+    def __repr__(self) -> str:
+        tail = " (plot available)" if self._spec.get("has_plot") else ""
+        return f"<DataSource {self._id}.{self._name}: once(**kwargs){tail}>"
+
+    __str__ = __repr__
+
+
+class PlotProxy:
+    """
+    Thin alias around a data source's .plot(**kwargs) to make plots discoverable
+    as dev.plots.<name>(**kwargs).
+    """
+    def __init__(self, data_proxy: DataSourceProxy):
+        if not data_proxy._spec.get("has_plot"):
+            raise ValueError("Cannot create PlotProxy for a data source without a plot.")
+        self._data = data_proxy
+        self._id = data_proxy._id
+        self._name = data_proxy._name
+        doc = (data_proxy._spec.get("doc") or "").strip()
+        self.__doc__ = f"{self._name}: plot for data source '{self._name}'\n\n{doc}"
+
+    def __call__(self, **kwargs) -> Any:
+        """Fetch the plot payload (JSON → Python)."""
+        return self._data.plot(**kwargs)
+
+    def __repr__(self) -> str:
+        return f"<Plot {self._id}.{self._name}: plot(**kwargs)>"
+
+    __str__ = __repr__
+
 
 
 # ------------------------- Hub -------------------------
@@ -329,6 +432,7 @@ class Hub:
         return self._base
 
     def refresh(self) -> "Hub":
+        #print(" - inside refresh")
         devs = self._http.get("/api/v1/devices").json()
         if not isinstance(devs, list):
             raise RuntimeError("Unexpected /devices response")
@@ -369,6 +473,19 @@ class Hub:
 
     def _post(self, path: str, json: Dict[str, Any]):
         return self._http.post(path, json=json)
+
+    def _get_data_once(self, dev_id: str, name: str, params: Dict[str, Any]) -> Any:
+        url = f"/api/v1/devices/{dev_id}/data/{name}"
+        resp = self._http.get(url, params=params or None)
+        resp.raise_for_status()
+        return resp.json()
+
+    def _get_plot(self, dev_id: str, name: str, params: Dict[str, Any]) -> Any:
+        url = f"/api/v1/devices/{dev_id}/plots/{name}"
+        resp = self._http.get(url, params=params or None)
+        resp.raise_for_status()
+        return resp.json()
+
 
     # ---- presentation ----
     def _host_port(self) -> str:
