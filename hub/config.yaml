@@ -1,0 +1,12 @@
+devices:
+  - id: "dummy_01"
+    driver: "dummy"
+    properties:
+      foo: 0.42
+  - id: "example_device_01"
+    driver: "example_device"
+    properties:
+      duration_in_seconds: 10
+      time_step: 0.1
+      number_of_time_steps: 500
+      noise: true

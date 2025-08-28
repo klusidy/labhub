@@ -33,7 +33,7 @@ def get_config_path() -> str:
 class DeviceCfg:
     id: str
     driver: str
-    options: Dict[str, Any]
+    default_property_values: Dict[str, Any]
 
 @dataclass
 class HubCfg:
@@ -47,7 +47,7 @@ def load_config() -> HubCfg:
         raw = yaml.safe_load(f) or {}
     devices: List[DeviceCfg] = []
     for d in raw.get("devices", []):
-        devices.append(DeviceCfg(id=d["id"], driver=d["driver"], options=d.get("conn", {})))
+        devices.append(DeviceCfg(id=d["id"], driver=d["driver"], default_property_values=d.get("properties", {})))
     return HubCfg(devices=devices)
 
 @asynccontextmanager
@@ -64,7 +64,8 @@ async def lifespan(app: FastAPI):
 
     cfg = load_config()
     for d in cfg.devices:
-        await _manager.add_device(d.id, d.driver, d.options)
+        print("-------- adding device based on config ---------------")
+        await _manager.add_device(d.id, d.driver, d.default_property_values)
     await _manager.start_polling(500)
     yield
     # shutdown
@@ -140,7 +141,7 @@ from time import monotonic
 @app.websocket("/api/v1/events")
 async def ws_events(ws: WebSocket):
     await ws.accept()
-    qp = dict(ws.query_properties)
+    qp = dict(ws.query_params)
     want_ids = set(qp["ids"].split(",")) if qp.get("ids") else None
     rate_hz = float(qp.get("rate", 0) or 0)
     min_period = (1.0 / rate_hz) if rate_hz > 0 else 0.0

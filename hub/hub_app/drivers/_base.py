@@ -93,10 +93,10 @@ class Device:
             if "default" in metadata:
                 self.property_set(property_name, metadata["default"])
         # enforce defaults from config.yaml
-        for config_props in (options.get("properties", {}), options):
+        for config_props in (options.get("properties", {}), options): # todo - rename options to default_values and add support for specifying min/max/step/etc in config
             for k, v in config_props.items():
                 if k in self.PROPERTIES:  # ignore non-property keys (e.g., driver-specific)
-                    self.property_set(k, v)
+                    self.property_set(k, v) # to
             
 
 

@@ -59,8 +59,14 @@ class DataSource:
         return q
 
     async def unsubscribe(self, q: asyncio.Queue) -> None:
+        # If unsubscribing the last listener, stop the producer.
+        should_stop = False
         async with self._lock:
             self._subscribers.discard(q)
+            # decide *outside* the lock to avoid deadlocks
+            should_stop = (not self._subscribers) and self.running()
+        if should_stop:
+            await self.stop()
 
     async def start(self, interval: Optional[float] = None) -> None:
         """If interval is None, runs exactly one cycle and stops."""
@@ -81,9 +87,17 @@ class DataSource:
 
                     if interval is None:
                         break
+
+                    async with self._lock:
+                        no_listeners = (len(self._subscribers) == 0)
+                    if no_listeners:
+                        break
+
                     await asyncio.sleep(interval)
             except asyncio.CancelledError:
                 pass
+            finally:
+                self._task = None
 
         self._task = asyncio.create_task(_runner(), name=f"DataSource[{self.name}]")
 
@@ -115,12 +129,13 @@ class DataSource:
             try:
                 q.put_nowait(env)
             except asyncio.QueueFull:
+                # drop oldest and try once more (non-blocking)
                 try:
                     _ = q.get_nowait()
                 except Exception:
                     pass
                 try:
-                    await q.put(env)
+                    q.put_nowait(env)
                 except Exception:
                     dead.append(q)
             except Exception:

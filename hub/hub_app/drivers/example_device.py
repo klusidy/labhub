@@ -63,8 +63,8 @@ class ExampleDevice(Device):
 
     # -------------------------------------------------------------------------
 
-    def __init__(self, dev_id: str, options: Dict[str, Any]):
-        super().__init__(dev_id, options)
+    def __init__(self, dev_id: str, default_values: Dict[str, Any]):
+        super().__init__(dev_id, default_values)
         
         # Streaming state
         self._stream_task: Optional[asyncio.Task] = None
@@ -92,7 +92,7 @@ class ExampleDevice(Device):
         return self._time_step
     
     @time_step.setter
-    def time_step(self, value:float):
+    def time_step(self, value:float): # todo when value is dict, update min/max/default etc
         self._time_step = value
 
     @api_property(min=1, max=1_000_000, default=1000, step=10)
@@ -173,8 +173,16 @@ class ExampleDevice(Device):
     @api_data()
     def demo_wave(self) -> Frame:
         """Simple wave generator for demo purposes"""
-        tst = np.sin(self.get_timestamps()) + np.random.rand(self.number_of_time_steps)
-        return {"data": tst.tolist()}
+        wave = np.sin(self.get_timestamps())
+        if self.wave_type == "square":
+            wave = np.sign(wave)
+        if self.noise:
+            wave += np.random.rand(self.number_of_time_steps)
+        return {"series": [{"name":"Test waveform", "data": wave.tolist()},]}
+    
+    # simple payload: { data: [...] }
+    # object-of-arrays: { "PSD": [...], "Channel 1": [...], meta: {...} }
+    # explicit series list: { series: [ { name: "PSD", data: [...] }, { name: "Ch 1", data: [...] } ], "x-values": [...] }
     
     @demo_wave.plot()
     def demo_plot(self) -> Dict[str, Any]:

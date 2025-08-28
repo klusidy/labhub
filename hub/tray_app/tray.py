@@ -251,7 +251,7 @@ class TrayApp:
                 self.proc.kill()
             self.tray.setIcon(self.icon_red)
             self.tray.setToolTip("LabHub: stopped")
-            self.tray.showMessage("LabHub", "Server stopped successfully", QSystemTrayIcon.Information, 1200)
+            self.tray.showMessage("LabHub", "Server stopped successfully", QSystemTrayIcon.Information, 200)
         except Exception as e:
             self.tray.showMessage("LabHub", f"Failed to stop server: {e}", QSystemTrayIcon.Critical, 2000)
         

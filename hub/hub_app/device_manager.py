@@ -29,13 +29,13 @@ class DeviceManager:
         self._stop_evt = asyncio.Event()
         
 
-    async def add_device(self, dev_id: str, driver: str, options: dict) -> None:
+    async def add_device(self, dev_id: str, driver: str, default_property_values: dict) -> None:
         cls = drivers.get(driver)
         if cls is None:
             raise RuntimeError(f"Unknown driver '{driver}' or not available on this platform")
         print("Adding device:", driver)  # Debugging line
-        print(cls, dev_id, options)  # Debugging line
-        dev: drivers.Device = cls(dev_id, options)
+        print(cls, dev_id, default_property_values)  # Debugging line
+        dev: drivers.Device = cls(dev_id, default_property_values)
         await dev.connect()
         self.devices[dev_id] = dev
 
@@ -211,10 +211,13 @@ class DeviceManager:
             for dsname, dsinfo in ds_meta.items():
                 dss.append(DataSourceSpec(name=dsname, has_plot=dsinfo.get("has_plot", False), doc=dsinfo.get("doc", "")))
 
+        dev_meta = getattr(dev, "_api_device_meta")#["doc"]
+        #print("  --- inside Device Spec constructor ---")
+        #print(f"dev = {dev}, dev_id = {dev_id}, dev_meta = {dev_meta}")
         return DeviceSpec(
             id=dev_id,
             kind=getattr(dev, "kind", "device"),
-            doc=getattr(dev, "doc", None),  # <-- add doc field
+            doc=dev_meta.get("doc", "No docstring found in driver class"),  # <-- add doc field
             properties=properties,
             commands=cmds,
             data_sources=dss
