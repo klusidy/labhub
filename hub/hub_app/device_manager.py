@@ -1,0 +1,223 @@
+from __future__ import annotations
+import asyncio
+from typing import Dict, List, Type, Any
+import time
+from .schemas import DeviceInfo, PropertySpec, CommandSpec, DeviceSpec, DataSourceSpec, ArgSpec   # <-- add these
+from .events import EventBus
+
+from .drivers._base import Device
+# from .drivers.sim_piezo import SimPiezo
+# try:
+#     from .drivers.thorlabs_kcube_piezo import ThorlabsKCubePiezo
+# except Exception:  # pythonnet missing or non-Windows
+#     ThorlabsKCubePiezo = None  # type: ignore
+
+
+# DRIVER_REGISTRY = {
+#     "sim_piezo": SimPiezo,
+#     "kcube_piezo": ThorlabsKCubePiezo,
+# }
+
+from . import drivers
+
+
+class DeviceManager:
+    def __init__(self, event_bus: EventBus):
+        self.event_bus = event_bus
+        self.devices: Dict[str, drivers.Device] = {}
+        self._poll_tasks: List[asyncio.Task] = []
+        self._stop_evt = asyncio.Event()
+        
+
+    async def add_device(self, dev_id: str, driver: str, options: dict) -> None:
+        cls = drivers.get(driver)
+        if cls is None:
+            raise RuntimeError(f"Unknown driver '{driver}' or not available on this platform")
+        print("Adding device:", driver)  # Debugging line
+        print(cls, dev_id, options)  # Debugging line
+        dev: drivers.Device = cls(dev_id, options)
+        await dev.connect()
+        self.devices[dev_id] = dev
+
+    async def remove_device(self, dev_id: str) -> None:        # <-- add (useful for reloads, tests)
+        dev = self.devices.pop(dev_id, None)
+        if dev:
+            try:
+                await dev.disconnect()
+            except Exception:
+                pass
+
+    async def remove_all(self) -> None:
+        for dev in list(self.devices.values()):
+            try:
+                await dev.disconnect()
+            except Exception:
+                pass
+        self.devices.clear()
+    
+    async def start_polling(self, state_ms: int = 200, data_ms: int = 50) -> None:
+        async def _poll_state(dev_id: str, dev: Device):
+            try:
+                while not self._stop_evt.is_set():
+                    state = await dev.read_state()
+                    await self.event_bus.publish({"type": "device.state", "id": dev_id, "state": state})
+                    await asyncio.sleep(state_ms / 1000)
+            except asyncio.CancelledError:
+                pass
+
+        async def _poll_data(dev_id: str, dev: Device):
+            try:
+                while not self._stop_evt.is_set():
+                    chunk = await dev.read_stream_chunk()
+                    if chunk:
+                        await self.event_bus.publish({"type": "device.data", "id": dev_id, "stream": chunk})
+                    await asyncio.sleep(data_ms / 1000)
+            except asyncio.CancelledError:
+                pass
+
+        for dev_id, dev in self.devices.items():
+            self._poll_tasks.append(asyncio.create_task(_poll_state(dev_id, dev)))
+            self._poll_tasks.append(asyncio.create_task(_poll_data(dev_id, dev)))
+
+    async def stop_polling(self) -> None:
+        self._stop_evt.set()
+        for t in self._poll_tasks: t.cancel()
+        await asyncio.gather(*self._poll_tasks, return_exceptions=True)
+        self._poll_tasks.clear()
+        self._stop_evt = asyncio.Event()  # allow restart
+
+    # API helpers
+    async def list_devices(self) -> List[DeviceInfo]:
+        out: List[DeviceInfo] = []
+        for dev_id, dev in self.devices.items():
+            st = await dev.read_state()
+            out.append(DeviceInfo(
+                id=dev_id,
+                kind=getattr(dev, "kind", "device"),
+                status=("connected" if dev.is_connected else "disconnected"),
+                state=st
+            ))
+        return out
+
+    async def get_device_state(self, dev_id: str) -> DeviceInfo:
+        dev = self.devices[dev_id]
+        st = await dev.read_state()
+        return DeviceInfo(
+            id=dev_id,
+            kind=getattr(dev, "kind", "device"),
+            status=("connected" if dev.is_connected else "disconnected"),
+            state=st
+        )
+
+    async def apply_properties(self, dev_id: str, properties: dict) -> DeviceInfo:
+        dev = self.devices[dev_id]
+        #t0=time.perf_counter();
+        st = await dev.apply_properties(properties)
+        #t1=time.perf_counter();
+        await self.event_bus.publish({"type": "device.state", "id": dev_id, "state": st})
+        #t2=time.perf_counter(); print(f"set={(t1-t0)*1000:.1f}ms publish={(t2-t1)*1000:.1f}ms")
+        #return await self.get_device_state(dev_id)
+        return DeviceInfo(
+            id=dev_id,
+            kind=getattr(dev, "kind", "device"),
+            status=("connected" if dev.is_connected else "disconnected"),
+            state=st
+        )
+
+    async def run_command(self, dev_id: str, name: str, args: dict):     # <-- keep/add
+        dev = self.devices[dev_id]
+        if not hasattr(dev, "run_command"):
+            raise RuntimeError("Commands not supported")
+        res = await dev.run_command(name, args)
+        # push latest state so GUIs reflect the action
+        st = await dev.read_state()
+        await self.event_bus.publish({"type":"device.state","id":dev_id,"state":st})
+        return res
+    
+    # thin wrappers for data source - are they necessary? TODO 
+    async def get_data_catalog(self, dev_id: str) -> Dict[str, Any]:
+        dev = self.devices[dev_id]
+        return {"device": dev_id, "sources": dev.list_data_sources()}
+    
+    async def get_plot_spec(self, dev_id: str, source: str) -> Dict[str, Any]:
+        dev = self.devices[dev_id]
+        ds = dev.get_datasource(source)
+        return ds.plot()  # {} if not provided
+    
+    async def get_one_frame(self, dev_id: str, source: str) -> Dict[str, Any]:
+        dev = self.devices[dev_id]
+        ds = dev.get_datasource(source)
+        return await ds.once()
+    
+    async def subscribe_stream(self, dev_id: str, source: str, *, maxsize: int = 64):
+        dev = self.devices[dev_id]
+        ds = dev.get_datasource(source)
+        return await ds.subscribe(maxsize=maxsize)
+
+    async def start_stream(self, dev_id: str, source: str, *, interval: float | None):
+        dev = self.devices[dev_id]
+        await dev.get_datasource(source).start(interval=interval)
+
+    async def stop_stream(self, dev_id: str, source: str):
+        dev = self.devices[dev_id]
+        await dev.get_datasource(source).stop()
+    
+
+
+    async def get_device_spec(self, dev_id: str) -> DeviceSpec:               # <-- new
+        """Build a SpecResponse from driver-declared PROPERTIES/COMMANDS."""
+        dev = self.devices[dev_id]
+        # PROPERTIES: expect a dict meta; tolerate missing keys
+        properties: List[PropertySpec] = []
+        for name, meta in getattr(dev, "PROPERTIES", {}).items():
+            properties.append(PropertySpec(
+                name=name,
+                read_only=bool(meta.get("read_only", False)),
+                unit=meta.get("unit"),
+                type=meta.get("type", object).__qualname__,  # str, int, float, bool # todo - for complex types, this does not work
+                min=meta.get("min"),
+                max=meta.get("max"),
+                choices=meta.get("choices"),
+                fields=meta.get("fields"),     # list[str] or dict – matches your schemas.py
+                doc=meta.get("doc"),           # <-- add doc field
+                default=meta.get("default"),   # <-- add default field
+                # doc/default/step if you add them later
+                # TODO - ADD STEP/DEFAULT AND DOCS FIELDS
+            ))
+        # COMMANDS: list[str] or list of {name, args}
+        cmds: List[CommandSpec] = []
+        cmd_meta = getattr(dev, "COMMANDS", [])
+        if isinstance(cmd_meta, dict):
+            for cname, cinfo in cmd_meta.items():
+                args=[]
+                raw_args = cinfo.get("args", [])
+                for a in raw_args:
+                    args.append(ArgSpec(
+                        name=a.get("name"),
+                        type=a.get("type", object).__qualname__, #_type_name(a.get("type", Any)), <-- for more complex args, this will be necessary
+                        default=a.get("default"),
+                        required=a.get("default", None) is None,
+                    ))
+                cmds.append(CommandSpec(name=cname, args=cinfo.get("args", {}), doc=cinfo.get("doc", "")))
+        else:
+            for cname in cmd_meta: #COMMANDS SHOULD BE DICTIONARY, THIS SHOULD NOT HAPPEN
+                cmds.append(CommandSpec(name=cname, args={}))
+
+
+        # DATA SOURCES
+        dss: List[DataSourceSpec] = []
+        ds_meta = getattr(dev, "DATA_SOURCES")
+        if isinstance(ds_meta, dict):
+            for dsname, dsinfo in ds_meta.items():
+                dss.append(DataSourceSpec(name=dsname, has_plot=dsinfo.get("has_plot", False), doc=dsinfo.get("doc", "")))
+
+        return DeviceSpec(
+            id=dev_id,
+            kind=getattr(dev, "kind", "device"),
+            doc=getattr(dev, "doc", None),  # <-- add doc field
+            properties=properties,
+            commands=cmds,
+            data_sources=dss
+        )
+
+        
