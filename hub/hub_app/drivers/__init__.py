@@ -18,6 +18,6 @@ from .example_device import ExampleDevice
 #todo - if you dont import device that you then try to use, server will crash but report correct loading
 
 try:
-    from .thorlabs_kcube_piezo import ThorlabsKCubePiezo
-except Exception:
-    ThorlabsKCubePiezo = None  # optional dri
+    from .kinesis.kpz101 import KPZ101
+except Exception as e:  # pythonnet missing or non-Windows
+    KPZ101 = None  

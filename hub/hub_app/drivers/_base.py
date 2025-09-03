@@ -75,29 +75,38 @@ class Device:
         cls.PROPERTIES = properties
         cls.DATA_SOURCES = data_sources
 
+    @classmethod
+    async def create(cls, dev_id: str, options: dict[str, object]):
+        self = cls(dev_id, options) # just create the object
+        await self.connect()
+        if self._connected:
+            await self._apply_driver_defaults()
+            await self._apply_config_defaults()
+        else:
+            pass # TODO report that device was not connected??
+        return self
+
     def __init__(self, dev_id: str, options: Dict[str, Any]):
         """Initialize device with ID and options from config.yaml."""
         self.id = dev_id
-        self.options = options
-        #self._state: Dict[str, Any] = {}
+        self.options = options # whatever was in config.yaml
         #self._state_lock = asyncio.Lock() # todo - maybe add later when multiple clients are connected to the same device?
         self._connected = False
 
-        # enforce dafaults from PROPERTIES
+
+    async def _apply_driver_defaults(self):
         for property_name, metadata in getattr(self, "PROPERTIES", {}).items():
-            if "fields" in metadata:  # composite default dict
-                fields = metadata["fields"] if isinstance(metadata["fields"], dict) else {k:{} for k in metadata["fields"]}
-                default = {k: v.get("default") for k, v in fields.items() if "default" in v}
-                self.property_set(property_name, default)
-               
-            if "default" in metadata:
-                self.property_set(property_name, metadata["default"])
-        # enforce defaults from config.yaml
-        for config_props in (options.get("properties", {}), options): # todo - rename options to default_values and add support for specifying min/max/step/etc in config
-            for k, v in config_props.items():
-                if k in self.PROPERTIES:  # ignore non-property keys (e.g., driver-specific)
-                    self.property_set(k, v) # to
-            
+            if "default" in metadata and metadata["default"] is not None: 
+                #print(f" - base init, prop_name = {property_name}, metadata = {metadata}")
+                await self.property_set_async(property_name, metadata["default"])
+
+
+    async def _apply_config_defaults(self):
+        for k, v in self.options.get("defaults", {}).items():
+            if k in getattr(self, "PROPERTIES", {}):
+                await self.property_set_async(k, v)
+
+
 
 
     # --- lifecycle ---
@@ -109,13 +118,36 @@ class Device:
 
     # --- core ops ---
     async def read_state(self) -> Dict[str, Any]:  # override
-        return {k: self.property_get(k) for k in getattr(self, "PROPERTIES", {})}    
+        keys = list(getattr(self, "PROPERTIES", {}).keys())
+        vals = await asyncio.gather(*(self.property_get_async(k) for k in keys))
+        state = dict(zip(keys, vals))
+        #state["connected"] = True
+        return state
     
-    def property_get(self, name: str) -> Any:
-        if hasattr(self, name):
-            return getattr(self, name)  
-        raise RuntimeError(f"API Property '{name}' has no @property counterpart in class")
+    
 
+    def property_get(self, name: str) -> Any:
+        return getattr(self, name)  
+    
+    async def property_get_async(self, name: str):
+        return await self._on_device(lambda: self.property_get(name))
+    
+
+    async def apply_properties(self, properties: dict) -> dict:
+        for k, v in properties.items():
+            await self.property_set_async(k, v)
+
+        # read back concurrently (optional)
+        return await self.read_state()
+
+
+    def property_set(self, name: str, value):
+        meta = getattr(self, "PROPERTIES", {}).get(name, {})
+        setattr(self, name, self._coerce_clamp(meta, value))
+
+    async def property_set_async(self, name: str, value):
+        return await self._on_device(lambda: self.property_set(name, value))
+    
     def _coerce_clamp(self, spec: Dict[str, Any], value: Any) -> Any:
         # best-effort type + bounds + choices enforcement
         t = spec.get("type") or Any
@@ -136,19 +168,16 @@ class Device:
                 # pick closest/default if out of set
                 value = spec.get("default", spec["choices"][0])
         return value
+    
+    # Default marshaller: just offload to a thread so we don't block the loop.
+    # Drivers that need strict thread affinity will override this (see KPZ).
+    async def _on_device(self, fn):
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, fn)
 
-    def property_set(self, name: str, value: Any) -> None:
-        setattr(self, name, self._coerce_clamp(getattr(self, "PROPERTIES", {}).get(name, {}), value))
-        
-    async def apply_properties(self, properties: Dict[str, Any]) -> Dict[str, Any]:
-        for k, v in properties.items():
-            self.property_set(k, v)
-        # default: return a dict with all PROPERTIES reflected #todo - is this desired behavior?
-        state: Dict[str, Any] = {}
-        for k in getattr(self, "PROPERTIES", {}).keys():
-            state[k] = self.property_get(k)
-        state["connected"] = True
-        return state
+    
+
+
 
     # ---- generic command runner -------------------------------------------
     async def run_command(self, name: str, args: Dict[str, Any] | None = None):

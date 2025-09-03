@@ -10,6 +10,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 import msgpack
+import pdb # for live debugging
 
 
 from .schemas import DeviceInfo, PatchRequest, DeviceSpec, CommandRequest
@@ -33,7 +34,7 @@ def get_config_path() -> str:
 class DeviceCfg:
     id: str
     driver: str
-    default_property_values: Dict[str, Any]
+    options: Dict[str, Any] #full dict from config.yaml for that device (incl. id and driver)
 
 @dataclass
 class HubCfg:
@@ -47,7 +48,8 @@ def load_config() -> HubCfg:
         raw = yaml.safe_load(f) or {}
     devices: List[DeviceCfg] = []
     for d in raw.get("devices", []):
-        devices.append(DeviceCfg(id=d["id"], driver=d["driver"], default_property_values=d.get("properties", {})))
+        # TODO: what if "id" or "driver" is missing?
+        devices.append(DeviceCfg(id=d["id"], driver=d["driver"], options=d))
     return HubCfg(devices=devices)
 
 @asynccontextmanager
@@ -63,9 +65,20 @@ async def lifespan(app: FastAPI):
         raise RuntimeError(f"Another LabHub instance is already running for config: {cfg_path}")
 
     cfg = load_config()
-    for d in cfg.devices:
-        print("-------- adding device based on config ---------------")
-        await _manager.add_device(d.id, d.driver, d.default_property_values)
+    add_tasks = [asyncio.create_task(_manager.add_device(d.id, d.driver, d.options)) for d in cfg.devices]
+    results = await asyncio.gather(*add_tasks, return_exceptions=True)
+
+    for d, res in zip(cfg.devices, results):
+        if isinstance(res, Exception):
+            raise res
+            print(f"Device '{d.id}' failed to add: {res!r}")
+
+    #for d in cfg.devices:
+    #    print("-------- adding device based on config ---------------")
+    #    await _manager.add_device(d.id, d.driver, d.options)
+    #for d in cfg.devices:
+    #    asyncio.create_task(_manager.add_device(d.id, d.driver, d.options))
+
     await _manager.start_polling(500)
     yield
     # shutdown

@@ -6,3 +6,4 @@ hub/_config.yaml
 hub/web/dist
 hub/web/package-lock.json
 temp
+hub/hub_app/drivers/kinesis/__pycache__

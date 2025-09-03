@@ -29,14 +29,17 @@ class DeviceManager:
         self._stop_evt = asyncio.Event()
         
 
-    async def add_device(self, dev_id: str, driver: str, default_property_values: dict) -> None:
+    async def add_device(self, dev_id: str, driver: str, options: dict) -> None:
         cls = drivers.get(driver)
         if cls is None:
             raise RuntimeError(f"Unknown driver '{driver}' or not available on this platform")
+        
         print("Adding device:", driver)  # Debugging line
-        print(cls, dev_id, default_property_values)  # Debugging line
-        dev: drivers.Device = cls(dev_id, default_property_values)
-        await dev.connect()
+        print(cls, dev_id, options)  # Debugging line
+        
+        dev: drivers.Device = await cls.create(dev_id, options)
+        # TODO: dev.connect() and defaults are hanled in .create, but it may be here...?
+
         self.devices[dev_id] = dev
 
     async def remove_device(self, dev_id: str) -> None:        # <-- add (useful for reloads, tests)
@@ -65,19 +68,19 @@ class DeviceManager:
             except asyncio.CancelledError:
                 pass
 
-        async def _poll_data(dev_id: str, dev: Device):
-            try:
-                while not self._stop_evt.is_set():
-                    chunk = await dev.read_stream_chunk()
-                    if chunk:
-                        await self.event_bus.publish({"type": "device.data", "id": dev_id, "stream": chunk})
-                    await asyncio.sleep(data_ms / 1000)
-            except asyncio.CancelledError:
-                pass
+        # async def _poll_data(dev_id: str, dev: Device):
+        #     try:
+        #         while not self._stop_evt.is_set():
+        #             chunk = await dev.read_stream_chunk()
+        #             if chunk:
+        #                 await self.event_bus.publish({"type": "device.data", "id": dev_id, "stream": chunk})
+        #             await asyncio.sleep(data_ms / 1000)
+        #     except asyncio.CancelledError:
+        #         pass
 
         for dev_id, dev in self.devices.items():
             self._poll_tasks.append(asyncio.create_task(_poll_state(dev_id, dev)))
-            self._poll_tasks.append(asyncio.create_task(_poll_data(dev_id, dev)))
+            #self._poll_tasks.append(asyncio.create_task(_poll_data(dev_id, dev)))
 
     async def stop_polling(self) -> None:
         self._stop_evt.set()
