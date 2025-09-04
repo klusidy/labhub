@@ -3,7 +3,6 @@ hub/hub_app/__pycache__
 hub/hub_app/drivers/__pycache__
 hub/web/node_modules
 hub/_config.yaml
-hub/web/dist
 hub/web/package-lock.json
 temp
 hub/hub_app/drivers/kinesis/__pycache__

@@ -16,6 +16,24 @@ export default defineConfig(({ command }) => ({
     }
   },
   build: {
-    outDir: 'dist', emptyOutDir: true
+    outDir: 'dist', 
+    assetsDir: 'assets',
+    emptyOutDir: true,
+    cssCodeSplit: false,              // one CSS file
+    sourcemap: false,
+    rollupOptions: {
+      output: {
+        // fixed names -> no content hashes
+        entryFileNames: 'assets/app.js',
+        chunkFileNames: 'assets/[name].js',      // if you do dynamic imports
+        assetFileNames: (asset) => {
+          // collapse CSS to a fixed name; keep other assets stable
+          if (asset.name?.endsWith('.css')) return 'assets/app.css';
+          return 'assets/[name][extname]';
+        },
+      },
+    },
   }
 }));
+
+
