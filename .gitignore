@@ -7,3 +7,6 @@ hub/web/dist
 hub/web/package-lock.json
 temp
 hub/hub_app/drivers/kinesis/__pycache__
+.vscode/settings.json
+hub/config.yaml
+02_kpz_demo.py

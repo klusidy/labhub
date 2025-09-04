@@ -1,12 +1,12 @@
 fastapi==0.111.0
 uvicorn[standard]==0.30.0
-pydantic==2.7.1
+pydantic>=2.7.1
 pyyaml==6.0.1
-pythonnet==3.0.3     # for Kinesis .NET (Windows, x64 Python)
-msgpack==1.0.8
+pythonnet>=3.0.3      # for Kinesis .NET (Windows, x64 Python)
+msgpack>=1.0.8
 anyio==4.4.0
 filelock==3.12.2
-PySide6==6.7.2 # for tray app
+PySide6>=6.7.2 # for tray app
 httpx==0.27.0  # for tray app
 websocket-client==1.6.2  # for client
 urllib3==2.1.0  # for client
