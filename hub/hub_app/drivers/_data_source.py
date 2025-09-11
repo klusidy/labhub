@@ -1,4 +1,5 @@
 from typing import Set, Dict, Any, Callable, Awaitable, Optional, List
+from contextlib import aclosing
 import time
 import asyncio
 import inspect
@@ -49,8 +50,10 @@ class DataSource:
         return self._task is not None and not self._task.done()
 
     async def once(self) -> Frame:
-        frame = await _maybe_await(self._frame_fn())
+        async with aclosing(self._frame_fn()) as frame_generator:
+            frame = await anext(frame_generator)
         return self._envelope(frame)
+
 
     async def subscribe(self, maxsize: int = 8) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue(maxsize=maxsize)
@@ -74,32 +77,36 @@ class DataSource:
             return
 
         async def _runner():
+            frame_generator = self._frame_fn() # should be async
             try:
-                while True:
-                    try:
-                        raw = await _maybe_await(self._frame_fn())
-                        env = self._envelope(raw)
-                        await self._fan_out(env)
-                    except Exception as e:
-                        # send an error frame, don't crash the loop
-                        env = self._envelope({"data": None, "meta": {"error": str(e)}})
+                async with aclosing(frame_generator): # ensure generator cleanup (finally in the driver function)
+                    async for frame in frame_generator: #await next infinite iterator
+                        env = self._envelope(frame)
                         await self._fan_out(env)
 
-                    if interval is None:
-                        break
+                        if interval is None:
+                            break # run once
 
-                    async with self._lock:
-                        no_listeners = (len(self._subscribers) == 0)
-                    if no_listeners:
-                        break
-
-                    await asyncio.sleep(interval)
-            except asyncio.CancelledError:
-                pass
-            finally:
+                        async with self._lock:
+                            if (len(self._subscribers) == 0):
+                                break
+         
+                        await asyncio.sleep(interval)
+        
+            finally: # ensure task is cleared when finishing naturally/crashing (cancel case is handled in stop())
                 self._task = None
 
-        self._task = asyncio.create_task(_runner(), name=f"DataSource[{self.name}]")
+        self._task = asyncio.create_task(_runner(), name=f"DataSource[{self.name}]") # creates independent task that can be stopped
+
+        def _on_done(t: asyncio.Task):
+            try:
+                exc = t.exception()
+                if exc and not isinstance(exc, asyncio.CancelledError):
+                    print(f"DataSource crashed  \n {exc}")
+            except asyncio.CancelledError:
+                pass
+
+        self._task.add_done_callback(_on_done)
 
     async def stop(self) -> None:
         if self._task and not self._task.done():

@@ -1,7 +1,7 @@
 # hub_app/drivers/example_device.py
 from __future__ import annotations
 import asyncio, math, random
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, Optional, List, AsyncIterator
 import numpy as np
 from ._base import Device, api_device, api_command, api_property, api_data, Frame
 
@@ -164,15 +164,33 @@ class ExampleDevice(Device):
 
     # --- API DATA/PLOTS ---
 
+    # @api_data()
+    # def demo_wave(self) -> Frame:
+    #     """Simple wave generator for demo purposes"""
+    #     wave = np.sin(self.get_timestamps())
+    #     if self.wave_type == "square":
+    #         wave = np.sign(wave)
+    #     if self.noise:
+    #         wave += np.random.rand(self.number_of_time_steps)
+    #     return {"series": [{"name":"Test waveform", "data": wave.tolist()},]}
     @api_data()
-    def demo_wave(self) -> Frame:
+    async def demo_wave(self) -> AsyncIterator[Frame]:
         """Simple wave generator for demo purposes"""
-        wave = np.sin(self.get_timestamps())
-        if self.wave_type == "square":
-            wave = np.sign(wave)
-        if self.noise:
-            wave += np.random.rand(self.number_of_time_steps)
-        return {"series": [{"name":"Test waveform", "data": wave.tolist()},]}
+        try:
+            # setup
+            wave = np.sin(self.get_timestamps())
+            if self.wave_type == "square":
+                wave = np.sign(wave)
+            
+            # repeated action
+            while True:
+                ret_wave = wave + (np.random.rand(self.number_of_time_steps) * 0.5) if self.noise else wave.copy()
+                yield {"series": [{"name":"Test waveform", "data": ret_wave.tolist()},]}
+                await asyncio.sleep(0.05) # 
+
+        finally:
+            print("demo_wave generator exiting") # teardown
+
     
     # simple payload: { data: [...] }
     # object-of-arrays: { "PSD": [...], "Channel 1": [...], meta: {...} }
