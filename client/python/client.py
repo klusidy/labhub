@@ -458,10 +458,15 @@ class Hub:
 
     # ---- used by proxies ----
     def _ensure_state(self, dev_id: str) -> Dict[str, Any]:
-        st = self._devices.get(dev_id)
-        if not st:
-            st = self._http.get(f"/api/v1/devices/{dev_id}").json()
-            self._devices[dev_id] = st
+        # st = self._devices.get(dev_id)
+        # if not st:
+        #     st = self._http.get(f"/api/v1/devices/{dev_id}").json()
+        #     self._devices[dev_id] = st
+        
+        # ugly hack to always get fresh state (should be subscibed to event bus instead TODO) 
+        st = self._http.get(f"/api/v1/devices/{dev_id}").json()
+        self._devices[dev_id] = st
+
         return st
 
     def _get_param(self, dev_id: str, name: str):
