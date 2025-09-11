@@ -1,0 +1,20 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Manual labhub start",
+      "type": "python",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": [
+        "hub.hub_app.main:app",
+        "--reload",
+        "--host", "127.0.0.1",
+        "--port", "8212"
+      ],
+      "jinja": true,
+      "justMyCode": false,
+      "subProcess": true
+    }
+  ]
+}
