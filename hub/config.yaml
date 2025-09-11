@@ -10,12 +10,4 @@ devices:
       time_step: 0.1
       number_of_time_steps: 500
       noise: true
-  - id: "kcube"
-    driver: "KPZ101"
-    conn:
-      serial: "29251095"         # <- your device serial
-      kinesis_path: "C:/Program Files/Thorlabs/Kinesis"  # optional if KINESIS_PATH env set
-      poll_ms: 200
-      simulate: false
-    defaults:
-      voltage: 0.1
+

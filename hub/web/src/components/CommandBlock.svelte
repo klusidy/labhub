@@ -1,71 +1,89 @@
 <script lang="ts">
   import { createEventDispatcher } from "svelte";
 
-  /** One command spec from /spec */
-  export let command: any;
-  export let index: number = 0;
-  export let executor: (name: string, args: Record<string, any>) => Promise<any>;  
-  export let defaultOpen: boolean = false;
+  // Props
+  export let command: any;                        // {name, doc, args:[{name,type,doc,required,default,choices}]}
+  export let index = 0;
+  export let defaultOpen = false;
+  export let executor: (name: string, args: Record<string, any>) => Promise<any>;
 
   const dispatch = createEventDispatcher();
 
-  let open = defaultOpen; 
-  let edit: Record<string, any> = {};
+  // UI state
+  let open = defaultOpen;
   let running = false;
-  let result: any = null;
   let error: string | null = null;
+  let result: any = null;
 
-  const bodyId = `cmdbody-${(command?.name || 'cmd')}-${index}`;
+  // Arg defs & values
+  $: argDefs = Array.isArray(command?.args) ? command.args : [];
 
-  function argEntries(args: any): [string, any][] {
-    if (!args) return [];
-    if (Array.isArray(args)) return args.map((n: string) => [n, {} as any]);
-    if (typeof args === "object") return Object.entries(args);
-    return [];
-  }
-
-  function coerce(value: any, spec: any) {
-    const t = spec?.type ?? "any";
-    if (value === "" || value === undefined || value === null) return undefined;
-    if (spec?.choices?.length) return value;
-    if (t === "bool") return !!value;
-    if (t === "int")  { const v = parseInt(value, 10);   return Number.isFinite(v) ? v : undefined; }
-    if (t === "float" || t === "number") { const v = parseFloat(value); return Number.isFinite(v) ? v : undefined; }
-    return value; // string/any
-  }
-  function stepFor(spec: any) {
-    if (spec?.step != null) return spec.step;
-    return spec?.type === "int" ? 1 : "any";
-  }
-
-  function buildArgs(): Record<string, any> {
+  // keep user edits on spec refresh; fill sensible defaults
+  function initValues(args: any[], prev: Record<string, any>) {
     const out: Record<string, any> = {};
-    for (const [name, spec] of argEntries(command?.args)) {
-      const raw = edit[name] !== undefined ? edit[name] : spec?.default;
-      const v = coerce(raw, spec);
-      if (v !== undefined) out[name] = v;
+    for (const a of args) {
+      const prevVal = prev?.[a.name];
+      if (prevVal !== undefined) {
+        out[a.name] = prevVal;
+        continue;
+      }
+      if (Array.isArray(a.choices) && a.choices.length) {
+        out[a.name] = a.default ?? (a.required ? a.choices[0] : "");
+      } else if (a.default !== null && a.default !== undefined) {
+        out[a.name] = a.default;
+      } else if (a.type === "bool") {
+        out[a.name] = false;
+      } else {
+        out[a.name] = "";
+      }
     }
     return out;
   }
-  function missingRequired(): string[] {
-    const miss: string[] = [];
-    for (const [name, spec] of argEntries(command?.args)) {
-      if (!spec?.required) continue;
-      const raw = edit[name] !== undefined ? edit[name] : spec?.default;
-      const v = coerce(raw, spec);
-      if (v === undefined) miss.push(name);
+
+  let values: Record<string, any> = {};
+  $: values = initValues(argDefs, values);
+
+  function coerceForSubmit(def: any, raw: any) {
+    // Treat empty string as null for non-required fields
+    if (raw === "" && !def.required) return null;
+
+    switch (def.type) {
+      case "int": {
+        const n = parseInt(raw, 10);
+        return Number.isFinite(n) ? n : null;
+      }
+      case "float": {
+        const n = parseFloat(raw);
+        return Number.isFinite(n) ? n : null;
+      }
+      case "bool":
+        return !!raw;
+      case "str":
+      default:
+        return raw;
     }
-    return miss;
   }
 
-  function pretty(v: any) {
-    try { return JSON.stringify(v, null, 2); }
-    catch { return String(v); }
+  function buildArgs() {
+    const out: Record<string, any> = {};
+    for (const def of argDefs) {
+      out[def.name] = coerceForSubmit(def, values[def.name]);
+    }
+    return out;
+  }
+
+  function fmtType(t: string | null | undefined) {
+    return t ? String(t) : "Any";
+  }
+
+  function pretty(x: any) {
+    try { return JSON.stringify(x, null, 2); } catch { return String(x); }
   }
 
   async function onRun() {
-    running = true; open=true; error = null; result = null;
+    running = true; error = null; result = null;
     const args = buildArgs();
+
     try {
       const r = executor ? await executor(command?.name, args) : null;
       result = r;
@@ -80,201 +98,144 @@
 </script>
 
 <div class="cmd-block">
-  <!-- HEADER (accent, alternating) -->
   <div class="cmd-head {index % 2 ? 'alt2' : 'alt1'}">
-    
+    <button
+      class="cmd-toggle"
+      aria-expanded={open}
+      on:click={() => (open = !open)}
+      title={open ? 'Hide' : 'Show'}
+    >
+      {#if open}⮝{:else}⮟{/if}
+    </button>
+
     <div class="cmd-title">
-      <button
-        class="cmd-toggle"
-        aria-expanded={open}
-        aria-controls={bodyId}
-        on:click={() => (open = !open)}
-        title={open ? 'Hide details' : 'Show details'}>
-        {#if open}⮝{:else}⮟{/if}
-      </button>
       <strong>{command?.name}()</strong>
-      {#if command?.returns}
-        <span class="cmd-returns">→ {command.returns}</span>
+      {#if command?.doc}
+        <div class="cmd-doc">{command.doc}</div>
       {/if}
     </div>
+
     <div class="cmd-actions">
-      <button
-        class="cmd-run"
-        disabled={running || !!missingRequired().length}
-        title={missingRequired().length ? "Missing: " + missingRequired().join(", ") : ""}
-        on:click={onRun}>
-        {#if running}<span class="cmd-spinner" aria-hidden="true"></span> Running…{:else}⏵ Run{/if}
+      <button class="cmd-btn" on:click={onRun} disabled={running}>
+        {#if running}Running…{:else}Run{/if}
       </button>
     </div>
   </div>
- {#if open}
-    <!-- DOC (neutral) -->
-    {#if command?.doc}
-        <div class="cmd-doc">{command.doc}</div>
-    {/if}
 
-    <!-- ARGS (neutral area) -->
-    {#if argEntries(command?.args).length}
-        <div class="cmd-args">
-        {#each argEntries(command.args) as [aname, aspec]}
-            <div class="cmd-arg-row">
-            <div class="cmd-arg-name">{aname}</div>
-            <div class="cmd-arg-type">{aspec?.type ?? 'Any'}</div>
+  {#if open}
+    <div class="cmd-body">
+      {#if argDefs.length === 0}
+        <div class="muted">No arguments.</div>
+      {:else}
+        <form class="args" on:submit|preventDefault={onRun}>
+          <div class="arg-row arg-header">
+            <div>Argument</div>
+            <div>Type</div>
+            <div>Value</div>
+          </div>
 
-            <div class="cmd-arg-input">
-                {#if aspec?.choices}
-                <select bind:value={edit[aname]}>
-                    {#each aspec.choices as c}<option value={c}>{c}</option>{/each}
-                </select>
+          {#each argDefs as a}
+            <div class="arg-row">
+              <div class="arg-name">
+                <div class="label">
+                  {a.name}{#if a.required}<span class="req" title="Required">*</span>{/if}
+                </div>
+                {#if a.doc}<div class="doc">{a.doc}</div>{/if}
+              </div>
 
-                {:else if aspec?.type === 'bool'}
-                <input type="checkbox" bind:checked={edit[aname]}>
+              <div class="arg-type">{fmtType(a.type)}</div>
 
-                {:else if aspec?.type === 'int' || aspec?.type === 'float' || aspec?.min != null || aspec?.maximum != null}
-                <input
-                    class="cmd-num"
+              <div class="arg-input">
+                {#if Array.isArray(a.choices) && a.choices.length}
+                  <select bind:value={values[a.name]} disabled={running}>
+                    {#if !a.required}<option value="">—</option>{/if}
+                    {#each a.choices as opt}
+                      <option value={opt}>{opt}</option>
+                    {/each}
+                  </select>
+
+                {:else if a.type === 'bool'}
+                  <label class="check">
+                    <input type="checkbox" bind:checked={values[a.name]} disabled={running} />
+                    <span>Enable</span>
+                  </label>
+
+                {:else if a.type === 'int' || a.type === 'float'}
+                  <input
                     type="number"
-                    bind:value={edit[aname]}
-                    placeholder={aspec?.default ?? ''}
-                    step={stepFor(aspec)}
-                    min={aspec?.min}
-                    max={aspec?.max}
-                >
+                    bind:value={values[a.name]}
+                    step={a.type === 'float' ? 'any' : '1'}
+                    inputmode="decimal"
+                    disabled={running}
+                  />
 
                 {:else}
-                <input
-                    class="cmd-text"
-                    type="text"
-                    bind:value={edit[aname]}
-                    placeholder={aspec?.default ?? ''}
-                >
+                  <input type="text" bind:value={values[a.name]} disabled={running} />
                 {/if}
+              </div>
             </div>
-            </div>
-        {/each}
-        </div>
-    {/if}
+          {/each}
 
-    <!-- RESULT (neutral area) -->
-    <div class="cmd-result">
-        {#if running}
-        <div class="muted">Executing…</div>
-        {/if}
-        {#if error}
-        <div class="cmd-error">Error: {error}</div>
-        {/if}
-        {#if !running && result !== null}
-        <div class="cmd-result-title">Result</div>
-        <pre class="cmd-result-pre">{pretty(result)}</pre>
-        {/if}
+          <div class="arg-actions">
+            <button type="submit" class="cmd-btn" disabled={running}>
+              {#if running}Running…{:else}Run{/if}
+            </button>
+          </div>
+        </form>
+      {/if}
+
+      {#if error}<div class="cmd-error">Error: {error}</div>{/if}
+      {#if result !== null}
+        <pre class="cmd-result">{pretty(result)}</pre>
+      {/if}
     </div>
   {/if}
 </div>
 
 <style>
-  .cmd-block {
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    overflow: hidden;           /* header corners */
-    background: var(--alt);
-    margin: 12px 0 16px;
+  .cmd-block{ border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; background:#fff; margin:12px 0 16px; }
+  .cmd-head{ display:grid; grid-template-columns:auto 1fr auto; align-items:center; gap:8px; padding:8px 10px; border-bottom:1px solid var(--border); }
+  .cmd-head.alt1{ background:var(--cmd-head-1); }
+  .cmd-head.alt2{ background:var(--cmd-head-2); }
+
+  .cmd-toggle{
+    width: 34px; height: 34px; border:1px solid #d0d0d0; border-radius:20px; background:#fff;
+    line-height:16px; text-align:center; cursor:pointer; user-select:none; font-size:14px; margin-right:10px;
+  }
+  .cmd-title{ display:flex; flex-direction:column; gap:4px; }
+  .cmd-doc{ color:var(--muted); font-size:12px; }
+
+  .cmd-actions .cmd-btn{ height:32px; padding:0 12px; border:1px solid #d0d0d0; border-radius:6px; background:#fff; cursor:pointer; }
+  .cmd-actions .cmd-btn:hover{ background:#fafafa; }
+  .cmd-actions .cmd-btn:disabled{ opacity:.6; cursor:not-allowed; }
+
+  .cmd-body{ padding:10px; }
+
+  .args{ display:block; }
+  .arg-header{ font-weight:600; background:var(--alt); }
+  .arg-row{
+    display:grid;
+    grid-template-columns: minmax(160px, 2fr) 110px minmax(220px, 3fr);
+    gap:10px; align-items:center;
+    padding:8px 6px; border-bottom:1px solid #eee;
   }
 
-  /* Header (accent only here) */
-  .cmd-head {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    align-items: center;
-    padding: 8px 10px;
-    border-bottom: 1px solid var(--border);
-  }
-  .cmd-head.alt1 { background: var(--cmd-head-1); }
-  .cmd-head.alt2 { background: var(--cmd-head-2); }
+  .arg-name .label{ font-weight:600; }
+  .arg-name .doc{ color:var(--muted); font-size:12px; margin-top:2px; }
+  .arg-type{ color:#444; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size:12px; }
+  .req{ color:#d33; margin-left:4px; }
 
-  .cmd-toggle {
-    width: 34px; height: 34px;
-    border: 1px solid #d0d0d0;
-    border-radius: 20px;
-    background: #fff;
-    line-height: 16px;
-    text-align: center;
-    cursor: pointer;
-    user-select: none;
-    font-size: 14px;
-    margin-right:10px;
+  .arg-input input[type="text"],
+  .arg-input input[type="number"],
+  .arg-input select{
+    height:32px; line-height:32px; padding:0 8px; border:1px solid var(--border); border-radius:6px; width:100%;
   }
-  .cmd-toggle:hover { background: #f7f7f7; }
+  .check{ display:flex; align-items:center; gap:8px; }
 
-  .cmd-title { font-size: 16px; }
-  .cmd-returns {
-    color: var(--muted);
-    font-size: 12px;
-    margin-left: 6px;
-    font-family: var(--mono);
-  }
-  .cmd-actions { display: flex; gap: 8px; }
-  .cmd-run {
-    height: 32px; padding: 0 14px;
-    border: 1px solid #d0d0d0; 
-    background: #fafafa;
-    border-radius: 6px; cursor: pointer;
-    width: 80px;
-  }
-  .cmd-run:hover { background: #ededea; }
-  .cmd-run:disabled { opacity: .5; cursor: not-allowed; }
-  .cmd-spinner {
-    width: 12px; height: 12px; display: inline-block; margin-right: 6px;
-    border: 2px solid #999; border-top-color: transparent; border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
+  .arg-actions{ display:flex; justify-content:flex-end; padding:10px 6px 0; }
+  .arg-actions .cmd-btn{ height:32px; padding:0 12px; border:1px solid #d0d0d0; border-radius:6px; background:#fff; cursor:pointer; }
+  .arg-actions .cmd-btn:hover{ background:#fafafa; }
 
-  /* Neutral body */
-  .cmd-doc {
-    color: var(--muted);
-    font-size: 12px;
-    line-height: 1.35;
-    padding: 8px 10px 4px;
-  }
-
-  .cmd-args {
-    padding: 6px 10px 10px;
-    display: grid; row-gap: 6px;
-  }
-  .cmd-arg-row {
-    display: grid;
-    grid-template-columns: 220px 120px auto; /* name | type | input */
-    align-items: center; column-gap: 8px;
-    min-height: var(--row-h);
-  }
-  .cmd-arg-name { font-weight: 600; }
-  .cmd-arg-type { font-family: var(--mono); font-size: 12px; color: var(--muted); }
-
-  .cmd-arg-input input[type="number"],
-  .cmd-arg-input input[type="text"],
-  .cmd-arg-input select {
-    height: 32px; line-height: 32px;
-    padding: 0 10px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-  }
-  .cmd-arg-input .cmd-num  { width: var(--cmd-num-width, 120px); }  /* ⬅️ narrower */
-  .cmd-arg-input .cmd-text { width: var(--cmd-text-width, 240px); }
-
-  .cmd-result {
-    padding: 6px 10px 10px;
-    border-top: 1px solid var(--border);
-  }
-  .cmd-result-title { font-weight: 600; margin-bottom: 4px; }
-  .cmd-result-pre {
-    margin: 0; padding: 8px; border: 1px solid var(--border);
-    border-radius: 6px; background: var(--result-bg);
-    font-family: var(--mono); font-size: 12px; overflow: auto;
-  }
-  .cmd-error { color: #a00; }
-
-  @media (max-width: 720px) {
-    .cmd-arg-row { grid-template-columns: 1fr; row-gap: 4px; }
-    .cmd-arg-type { display: none; }
-  }
+  .cmd-error{ color:#a00; margin-top:8px; }
+  .cmd-result{ background:#fafafa; border:1px solid #eee; border-radius:6px; padding:8px; margin-top:8px; max-height:240px; overflow:auto; }
 </style>

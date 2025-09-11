@@ -1,6 +1,6 @@
 from __future__ import annotations
 from pydantic import BaseModel, Field
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Tuple
 
 # ---------- existing ----------
 class DeviceInfo(BaseModel):  # keep
@@ -24,6 +24,7 @@ class ArgSpec(BaseModel):
     doc: Optional[str] = None
     required: bool = True
     default: Optional[Any] = None
+    choices: Optional[List[str]] = None # for literal types
 
 class CommandSpec(BaseModel):
     name: str

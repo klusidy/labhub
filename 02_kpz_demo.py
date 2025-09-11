@@ -59,13 +59,13 @@ if not device.IsSettingsInitialized():
 #print("Setting Zero Point")
 #device.SetZero()
 
-# Get the maximum voltage output of the KPZ
-#max_voltage = device.GetMaxOutputVoltage()  # This is stored as a .NET decimal
-#print(f'Max voltage {max_voltage}')
-#device.SetMaxOutputVoltage(max_voltage)
+#Get the maximum voltage output of the KPZ
+max_voltage = device.GetMaxOutputVoltage()  # This is stored as a .NET decimal
+print(f'Max voltage {max_voltage}')
+device.SetMaxOutputVoltage(max_voltage)
 
 # Go to a voltage
-dev_voltage = Decimal(0.4)
+dev_voltage = Decimal(0.29)
 print(f'Going to voltage {dev_voltage}')
 device.SetOutputVoltage(dev_voltage)
 

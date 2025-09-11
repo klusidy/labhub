@@ -9,3 +9,5 @@ hub/hub_app/drivers/kinesis/__pycache__
 .vscode/settings.json
 hub/config.yaml
 02_kpz_demo.py
+hub/hub_app/drivers/pico_technology/__pycache__/__init__.cpython-312.pyc
+hub/hub_app/drivers/pico_technology/__pycache__/ps5000a.cpython-312.pyc

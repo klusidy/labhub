@@ -1,6 +1,6 @@
 from __future__ import annotations
 import asyncio
-from typing import Dict, List, Type, Any
+from typing import Dict, List, Type, Any, get_args
 import time
 from .schemas import DeviceInfo, PropertySpec, CommandSpec, DeviceSpec, DataSourceSpec, ArgSpec   # <-- add these
 from .events import EventBus
@@ -192,16 +192,28 @@ class DeviceManager:
         cmd_meta = getattr(dev, "COMMANDS", [])
         if isinstance(cmd_meta, dict):
             for cname, cinfo in cmd_meta.items():
-                args=[]
+                args=[] # process args to match argspec format
                 raw_args = cinfo.get("args", [])
+                print(f"  !!!!!!!!! --- command {cname} raw args = {raw_args}")
                 for a in raw_args:
-                    args.append(ArgSpec(
+                    qualname = a.get("type", object).__qualname__
+                    if qualname == "Literal":
+                        choices = get_args(a["type"])
+                        type_str = type(choices[0]).__qualname__
+                    else:
+                        choices = None
+                        type_str = qualname
+
+                    args.append(ArgSpec(   
                         name=a.get("name"),
-                        type=a.get("type", object).__qualname__, #_type_name(a.get("type", Any)), <-- for more complex args, this will be necessary
+                        type= type_str, #_type_name(a.get("type", Any)), <-- for more complex args, this will be necessary
                         default=a.get("default"),
                         required=a.get("default", None) is None,
+                        choices=choices
                     ))
-                cmds.append(CommandSpec(name=cname, args=cinfo.get("args", {}), doc=cinfo.get("doc", "")))
+                    print(f" --- type_str = {type_str}, choices = {args[-1].choices}")
+                print(f"  !!!!!!!!! --- command {cname} args = {args}")
+                cmds.append(CommandSpec(name=cname, args=args, doc=cinfo.get("doc", "")))
         else:
             for cname in cmd_meta: #COMMANDS SHOULD BE DICTIONARY, THIS SHOULD NOT HAPPEN
                 cmds.append(CommandSpec(name=cname, args={}))

@@ -21,3 +21,9 @@ try:
     from .kinesis.kpz101 import KPZ101
 except Exception as e:  # pythonnet missing or non-Windows
     KPZ101 = None  
+
+try:
+    from .pico_technology.ps5000a import PicoScope5000a
+except Exception as e:
+    PicoScope5000a = None
+    print(f" - could not import PicoScope5000a driver: {e}")

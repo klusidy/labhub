@@ -64,7 +64,7 @@ class Device:
                 properties[fget._api_property_name] = prop
 
             if isinstance(attr, api_data):
-                data_source_meta = command_meta = getattr(attr, "_api_data_meta", {})
+                data_source_meta = getattr(attr, "_api_data_meta", {})
                 data_source = {}
                 data_source["doc"] = data_source_meta.get("doc", "No doc provided. Fill in doc string of decorated property in device driver.")
                 data_source["has_plot"] = attr._plot_fn is not None

@@ -66,12 +66,6 @@ class ExampleDevice(Device):
     def __init__(self, dev_id: str, default_values: Dict[str, Any]):
         super().__init__(dev_id, default_values)
         
-        # Streaming state
-        self._stream_task: Optional[asyncio.Task] = None
-        self._stream_running: bool = False
-        self._stream_end: Optional[float] = None   # loop.time() deadline
-        self._t0: float = 0.0                      # start time for current run
-        self._q: asyncio.Queue[tuple[float, float]] = asyncio.Queue(maxsize=4096)
 
 
     # --- lifecycle -----------------------------------------------------------

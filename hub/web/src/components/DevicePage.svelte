@@ -96,9 +96,9 @@ async function onPropertySet(name: string, value: any) {
   }
 
 
-  const properties = () => (spec?.properties || []).filter((p: { read_only: any; }) => !p.read_only);
+  const properties = () => (spec?.properties || []);//.filter((p: { read_only: any; }) => !p.read_only);
   //const commands = () => (spec?.commands || []);
-  const plotSources = () => (spec?.data_sources || []).filter((s:any) => s?.has_plot);
+  const plotSources = () => (spec?.data_sources || []).filter((s:any) => s?.has_plot); // TODO - is this filter relevant?
 
   // widget handling
   let Widget:any = null;
