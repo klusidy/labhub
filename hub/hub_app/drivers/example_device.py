@@ -163,16 +163,6 @@ class ExampleDevice(Device):
         return self._ts.tolist() # todo - find faster way to serialize numpy
 
     # --- API DATA/PLOTS ---
-
-    # @api_data()
-    # def demo_wave(self) -> Frame:
-    #     """Simple wave generator for demo purposes"""
-    #     wave = np.sin(self.get_timestamps())
-    #     if self.wave_type == "square":
-    #         wave = np.sign(wave)
-    #     if self.noise:
-    #         wave += np.random.rand(self.number_of_time_steps)
-    #     return {"series": [{"name":"Test waveform", "data": wave.tolist()},]}
     @api_data()
     async def demo_wave(self) -> AsyncIterator[Frame]:
         """Simple wave generator for demo purposes"""

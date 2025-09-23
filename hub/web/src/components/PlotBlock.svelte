@@ -34,6 +34,12 @@
   let xLabEl: HTMLDivElement | null = null;
   let yLabEl: HTMLDivElement | null = null;
 
+  // scale modes
+  let xScale: 'linear' | 'log' = 'linear';
+  let yScale: 'linear' | 'log' = 'linear';
+  let lastXScale: 'linear' | 'log' = 'linear';
+  let lastYScale: 'linear' | 'log' = 'linear';
+
   // current unified data
   // uPlot expects [x, s1, s2, ...] all same length
   let xData: number[] = [];
@@ -52,6 +58,7 @@
   onDestroy(cleanup);
 
   async function loadSpec() {
+    console.log("Inside load Spec")
     try {
       loadingSpec = true;
       lastError = null;
@@ -81,29 +88,50 @@
     mountChart();
     const data: uPlot.AlignedData = [xData, ...(seriesData.length ? seriesData : [[]])];
     u!.setData(data);          // compute initial scales
-    restoreScales(savedScales);
+    restoreLimits(savedLimits);
     bootstrapped = true;
   }
   // pause everything when collapsing
   $: if (!open) {
     closeWS();
-    savedScales = captureScales();
+    savedLimits = captureLimits();
     destroyChart();
   }
 
-  // ----- controls -----
+  // change scales
+  $: if (u && (xScale !== lastXScale || yScale !== lastYScale)) {
+    const keep = captureLimits();
+
+    // if switching to log and previous min/max are non-positive, drop them to re-auto
+    if (xScale === 'log' && keep?.x?.min != null && keep.x.min <= 0) keep.x.min = 1;
+    if (xScale === 'log' && keep?.x?.max != null && keep.x.max <= 0) keep.x.max = 10;
+    if (yScale === 'log' && keep?.y?.min != null && keep.y.min <= 0) keep.y.min = 1;
+    if (yScale === 'log' && keep?.y?.max != null && keep.y.max <= 0) keep.y.max = 10;
+
+
+    destroyChart();
+    if (open && plotEl) mountChart();
+    if (u) {
+      //u.setData(alignedForPlot());        // autoscale once with new distr
+      restoreLimits(keep);                // restore valid zooms
+    }
+
+    lastXScale = xScale;
+    lastYScale = yScale;
+  }
+
+  // draw one frame of the data
   async function doOnce() {
     try {
       open = true;
-      //destroyChart();
-      //mountChart();
-      //if (!u) mountChart();
       await refreshSpec(true);
       const fr = await getFrame(deviceId, source);
       applyIncoming(fr);
       redraw();
     } catch (e:any) { lastError = String(e); }
   }
+
+  // toggle start/stop
   function onStartStop() {
     running ? stop() : start();
   }
@@ -112,23 +140,20 @@
     open = true;
     await refreshSpec(true); 
     openWS(rateHz); 
-
-    //if (!u) mountChart();
-    //await refreshSpec(true);
     running = true;
-    //openWS(rateHz);
   }
   function stop() {
     running = false;
     closeWS();
   }
+
   // reopen WS if rate changes while running/open
   $: if (open && running && rateHz !== wsRateApplied) {
     closeWS();
     openWS(rateHz);
   }
 
-  // ----- WS -----
+  // ----- websocket -----
   function openWS(rate: number) {
     try {
       ws = openDataStream(deviceId, source, rate);
@@ -137,8 +162,6 @@
         try {
           const fr = typeof ev.data === "string" ? JSON.parse(ev.data) : JSON.parse(new TextDecoder().decode(ev.data));
           applyIncoming(fr);
-          // Throttle redraw to ~rateHz by just letting uPlot render each frame quickly.
-          // uPlot render is very fast; if you want extra throttle, gate with a timestamp.
           redraw();
         } catch {}
       };
@@ -236,7 +259,7 @@ function unifyLengths() {
       width, height,
       title,
       legend: { show: true },
-      scales: { x: { time: false }, y: { auto: true } },
+      scales: { x: { time: false }, y: { auto: true } }, // wtf does this option do
       axes,
       series: [
         {}, // x
@@ -252,8 +275,8 @@ function unifyLengths() {
           (uu) => {
             // dblclick to reset
             uu.root.addEventListener("dblclick", () => {
-              uu.setScale("x", { min: null, max: null });
-              uu.setScale("y", { min: null, max: null });
+              uu.setScale("x", { min: 0, max: 1 });
+              uu.setScale("y", { min: 0, max: 1 });
             });
 
             // wheel zoom centered at cursor
@@ -323,14 +346,14 @@ function isZoomed(axis: "x" | "y") {
   return s.min != null || s.max != null;   // numeric bounds = user-zoomed
 }
 
-function captureScales() {
+function captureLimits() {
   if (!u) return null;
   return {
     x: { min: u.scales.x.min, max: u.scales.x.max },
     y: { min: u.scales.y.min, max: u.scales.y.max },
   };
 }
-function restoreScales(saved: any) {
+function restoreLimits(saved: any) {
   if (!u || !saved) return;
   const { x, y } = saved;
   if (x && x.min != null && x.max != null) u.setScale("x", { min: x.min, max: x.max });
@@ -340,7 +363,7 @@ function restoreScales(saved: any) {
 let lastXLen = 0; // top-level
 
 async function refreshSpec(keepZoom = true) {
-  const keep = keepZoom ? captureScales() : null;
+  const keep = keepZoom ? captureLimits() : null;
 
   let xLenChanged = false;
   try {
@@ -383,7 +406,7 @@ async function refreshSpec(keepZoom = true) {
 
 
 let bootstrapped = false;
-let savedScales: any = null;
+let savedLimits: any = null;
 
 
 function redraw() {
@@ -394,10 +417,10 @@ function redraw() {
   // series count changed? -> rebuild (legend/colors), keep zoom
   const needsRebuild = u.series.length - 1 !== seriesNames.length;
   if (needsRebuild) {
-    const keep = captureScales();
+    const keep = captureLimits();
     mountChart();
     u!.setData(aligned);          // recompute internals
-    restoreScales(keep);
+    restoreLimits(keep);
     bootstrapped = true;
     return;
   }
@@ -412,9 +435,9 @@ function redraw() {
   }
 
   if (zoomX || zoomY) {
-    const keep = captureScales();
+    const keep = captureLimits();
     u.setData(aligned);           // update data (let non-zoomed axis auto)
-    restoreScales(keep);          // restore user zoom
+    restoreLimits(keep);          // restore user zoom
   } else {
     u.setData(aligned);           // fully autoscale when not zoomed
   }
@@ -459,6 +482,22 @@ function redraw() {
         <input type="number" min="0.2" step="0.2" bind:value={rateHz} />
         <span>Hz</span>
       </label>
+
+      <label class="plot-scale">
+        <span>x</span>
+        <select bind:value={xScale}>
+          <option value="linear">linear</option>
+          <option value="log">log</option>
+        </select>
+      </label>
+
+      <label class="plot-scale">
+        <span>y</span>
+        <select bind:value={yScale}>
+          <option value="linear">linear</option>
+          <option value="log">log</option>
+        </select>
+      </label>
     </div>
   </div>
 
@@ -501,7 +540,9 @@ function redraw() {
   .plot-btn:hover{ background:#fafafa; } .plot-btn:disabled{ opacity:.5; cursor:not-allowed; }
   .plot-rate{ display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); }
   .plot-rate input{ width:68px; height:28px; line-height:28px; padding:0 8px; border:1px solid var(--border); border-radius:6px; }
-
+  .plot-scale { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); }
+  .plot-scale select { height:28px; border:1px solid var(--border); border-radius:6px; padding:0 6px; }
+  
   .plot-body{ padding:8px 10px 10px; }
   .uplot-wrap{ position:relative; width:100%; }
   .uplot-host :global(.uplot){ width:100%; }

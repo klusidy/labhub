@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Any, Dict, Callable, List, Union, Optional, Set, Tuple, Mapping, Awaitable, get_type_hints
+from typing import Any, Dict, Callable, List, Union, Optional, Set, Tuple, Mapping, Awaitable, get_type_hints, AsyncGenerator
 import inspect
 import asyncio
 import time
@@ -42,7 +42,7 @@ def api_property(api_name=None, *, min=None, max=None, default=None, step=None, 
 class api_data:
     def __init__(self, api_name:str | None=None, *, doc:str | None = None):
 
-        self._frame_fn: Optional[Callable] = None
+        self.generator: Optional[Callable] = None
         self._plot_fn: Optional[Callable] = None
         self._api_data_name: Optional[str] = api_name
         self._api_data_meta: Dict[str, Any] = {"doc": doc, "plots": []}
@@ -52,8 +52,8 @@ class api_data:
 
         self._instances: weakref.WeakKeyDictionary[object, DataSource] = weakref.WeakKeyDictionary()
 
-    def __call__(self, method: Callable):
-        self._frame_fn = method
+    def __call__(self, method: AsyncGenerator):
+        self.generator = method
         self._api_data_name = self._api_data_name or method.__name__
         self._api_data_meta["doc"] =  self._api_data_meta["doc"] or (method.__doc__ or "").strip()
         return self
@@ -80,15 +80,15 @@ class api_data:
     def __get__(self, obj, objtype=None):
         if obj is None:
             return self
-        if self._frame_fn is None:
-            raise AttributeError(f"Data function '{self._attr_name}' is not defined.")
+        if self.generator is None:
+            raise AttributeError(f"Async generator '{self._attr_name}' is not defined.")
 
         ds = self._instances.get(obj, None)
         if ds is None:
             # bind methods to instance
-            bound_frame = self._frame_fn.__get__(obj, objtype)
+            bound_generator = self.generator.__get__(obj, objtype)
             bound_plot = self._plot_fn.__get__(obj, objtype) if self._plot_fn else None
-            ds = DataSource(name=self._api_data_name, frame_fn=bound_frame, plot_fn=bound_plot, doc=self._api_data_meta["doc"])
+            ds = DataSource(name=self._api_data_name, generator=bound_generator, plot_fn=bound_plot, doc=self._api_data_meta["doc"])
             self._instances[obj] = ds
         return ds  
 

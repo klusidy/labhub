@@ -216,14 +216,20 @@ async def ws_stream(ws: WebSocket, dev_id: str, source: str):
     await ws.accept()
 
     # Optional rate limiting: ?rate=10  -> interval=0.1s
-    qps = ws.query_params.get("rate")
-    interval = None
-    if qps:
-        try:
-            hz = float(qps)
-            interval = (1.0 / hz) if hz > 0 else None
-        except Exception:
-            interval = None
+    qps = dict(ws.query_params)
+    # interval = None
+    # if qps:
+    #     try:
+    #         hz = float(qps)
+    #         interval = (1.0 / hz) if hz > 0 else None
+    #     except Exception:
+    #         interval = None
+
+    #send_hz = float(qps.get("rate", 10))
+    #send_period = (1.0 / send_hz) if send_hz > 0 else 0.1 # todo - use this somehow
+
+    prod_hz = float(qps.get("rate", 12.5)) # producer should be slighlty faster I guess
+    prod_interval = (1.0 / prod_hz) if prod_hz > 0 else 0.08
 
     # Subscribe
     if dev_id not in _manager.devices:
@@ -236,13 +242,14 @@ async def ws_stream(ws: WebSocket, dev_id: str, source: str):
         return
 
     # If caller provided a rate, start (hot) producer for this source
-    if interval is not None:
-        await _manager.start_stream(dev_id, source, interval=interval)
+    if prod_interval is not None:
+        await _manager.start_stream(dev_id, source, interval=prod_interval)
 
     try:
         while True:
             frame = await q.get()
             # Send as JSON; if you add msgpack later, branch on ?format=
+            # TODO THROTTLE SENDING STUFF
             await ws.send_json(frame)
     except WebSocketDisconnect:
         pass

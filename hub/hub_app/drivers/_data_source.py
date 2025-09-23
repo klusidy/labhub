@@ -29,12 +29,12 @@ class DataSource:
     def __init__(
         self,
         name: str,
-        frame_fn: Callable[[], Frame | Awaitable[Frame]],
+        generator: Callable[[], Frame | Awaitable[Frame]],
         plot_fn: Optional[Callable[[], Dict[str, Any]]] = None,
         doc: str = "",
     ):
         self.name = name
-        self._frame_fn = frame_fn
+        self.generator = generator
         self._plot_fn = plot_fn
         self.doc = doc
 
@@ -50,7 +50,7 @@ class DataSource:
         return self._task is not None and not self._task.done()
 
     async def once(self) -> Frame:
-        async with aclosing(self._frame_fn()) as frame_generator:
+        async with aclosing(self.generator()) as frame_generator:
             frame = await anext(frame_generator)
         return self._envelope(frame)
 
@@ -77,7 +77,7 @@ class DataSource:
             return
 
         async def _runner():
-            frame_generator = self._frame_fn() # should be async
+            frame_generator = self.generator() # should be async
             try:
                 async with aclosing(frame_generator): # ensure generator cleanup (finally in the driver function)
                     async for frame in frame_generator: #await next infinite iterator

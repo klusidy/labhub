@@ -152,7 +152,7 @@ class DeviceManager:
         ds = dev.get_datasource(source)
         return await ds.once()
     
-    async def subscribe_stream(self, dev_id: str, source: str, *, maxsize: int = 64):
+    async def subscribe_stream(self, dev_id: str, source: str, *, maxsize: int = 4):
         dev = self.devices[dev_id]
         ds = dev.get_datasource(source)
         return await ds.subscribe(maxsize=maxsize)
