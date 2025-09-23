@@ -14,4 +14,5 @@ numpy==2.3.2
 setuptools>=80.0.0
 matplotlib>=3.8.0 # for picoscope demo
 ipykernel>=6.28.0 # for notebook demo
+scipy>=1.14.0 # for picoscope FFT
 # picoscope SDK

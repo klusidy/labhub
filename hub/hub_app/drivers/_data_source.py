@@ -29,7 +29,7 @@ class DataSource:
     def __init__(
         self,
         name: str,
-        generator: Callable[[], Frame | Awaitable[Frame]],
+        generator: Optional[Callable[[], Frame | Awaitable[Frame]]] = None,
         plot_fn: Optional[Callable[[], Dict[str, Any]]] = None,
         doc: str = "",
     ):
@@ -74,10 +74,10 @@ class DataSource:
     async def start(self, interval: Optional[float] = None) -> None:
         """If interval is None, runs exactly one cycle and stops."""
         if self.running():
-            return
+            return #TODO - SHOULD UPDATE INTERVAL??
 
         async def _runner():
-            frame_generator = self.generator() # should be async
+            frame_generator = self.generator() # should be async iterator
             try:
                 async with aclosing(frame_generator): # ensure generator cleanup (finally in the driver function)
                     async for frame in frame_generator: #await next infinite iterator
@@ -151,7 +151,8 @@ class DataSource:
         if dead:
             async with self._lock:
                 for q in dead:
-                    self._subscribers.discard(q)
+                    self.unsubscribe(q) #better to unsubscribe, if all is dead I shall stop
+#                    self._subscribers.discard(q)
 
 # class Plot:
 #     def __init__(self, initialize_plot, generate_frame):

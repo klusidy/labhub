@@ -11,6 +11,8 @@
   export let getFrame!: (dev: string, src: string) => Promise<any>;
   export let openDataStream!: (dev: string, src: string, rate?: number) => WebSocket;
 
+  const EPS = 1e-100;          // for log mode
+
   // UI state
   let open = defaultOpen;
   let running = false;
@@ -39,6 +41,9 @@
   let yScale: 'linear' | 'log' = 'linear';
   let lastXScale: 'linear' | 'log' = 'linear';
   let lastYScale: 'linear' | 'log' = 'linear';
+
+  const distrFromScale = (m: 'linear' | 'log') => (m === 'linear' ? 1 : 3);
+
 
   // current unified data
   // uPlot expects [x, s1, s2, ...] all same length
@@ -240,7 +245,7 @@ function unifyLengths() {
   // ----- uPlot -----
   function buildOpts(): uPlot.Options {
     const width = Math.max(200, plotEl?.clientWidth || 600);
-    const height = Math.max(220, Math.floor(width * 0.1345));
+    const height = Math.max(220, Math.floor(width * 0.250));
 
     const axes: uPlot.Axis[] = [
       {
@@ -259,7 +264,10 @@ function unifyLengths() {
       width, height,
       title,
       legend: { show: true },
-      scales: { x: { time: false }, y: { auto: true } }, // wtf does this option do
+      scales: { x: { time: false, distr: distrFromScale(xScale)}, 
+                y: { auto: true,  
+                     distr: distrFromScale(yScale),
+                     range: (u, min, max) => yScale == 'log' ? [Math.max(min, EPS), max]: [min, max]} }, // wtf does this option do
       axes,
       series: [
         {}, // x
@@ -275,8 +283,8 @@ function unifyLengths() {
           (uu) => {
             // dblclick to reset
             uu.root.addEventListener("dblclick", () => {
-              uu.setScale("x", { min: 0, max: 1 });
-              uu.setScale("y", { min: 0, max: 1 });
+              uu.setScale("x", { min: null, max: null });
+              uu.setScale("y", { min: null, max: null });
             });
 
             // wheel zoom centered at cursor
@@ -322,7 +330,7 @@ function unifyLengths() {
     const ro = new ResizeObserver(() => {
       if (!u || !plotEl) return;
       const width = Math.max(200, plotEl.clientWidth);
-      const height = Math.max(220, Math.floor(width * 0.30));
+      const height = Math.max(220, Math.floor(width * 0.25));
       u.setSize({ width, height });
       updateAxisLabels();
     });
@@ -444,6 +452,7 @@ function redraw() {
 }
 
   function fmtTick(v: number) {
+    if (v == null || !Number.isFinite(v)) return "";
     const av = Math.abs(v);
     if (av >= 1e6 || (av && av < 1e-3)) return v.toExponential(2);
     const s = v.toFixed(6).replace(/\.?0+$/,'');

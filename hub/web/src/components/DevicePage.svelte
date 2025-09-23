@@ -2,7 +2,10 @@
   import { patchProperties, runCommand, openDataStream, getSpec, getPlotSpec, getFrame, startSource, stopSource } from '../api';
   import PropertyField from './PropertyField.svelte';
   import CommandBlock from './CommandBlock.svelte';
+  //import PlotBlock from './uPlot_PlotBlock.svelte';
+  //import PlotBlock from './failed_from_scratch_PlotBlock.svelte';
   import PlotBlock from './PlotBlock.svelte';
+
   import { loadWidget } from '../device_widgets';
   //import StreamPlot from './StreamPlot.svelte';
 

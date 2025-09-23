@@ -24,32 +24,29 @@ import time
 class PicoRawSource(DataSource):
     def __init__(self, driver):
         self.driver = driver
-
-    async def subscribe(self, mapper: callable = lambda x:x.tolist(), maxsize: int=8):
-        q: asyncio.Queue = asyncio.Queue(maxsize=maxsize)
-        q.mapper = mapper
-        async with self._lock:
-            self._subscribers.add(q)
-        return q
+        self.loop: asyncio.AbstractEventLoop | None = None
+        super().__init__("pico raw source")
     
     async def stop(self):
-        super().stop()
+        await super().stop()
         try:
-            self.status["stop"] = ps.ps5000aStop(self.chandle)
+            self.driver.status["stop"] = ps.ps5000aStop(self.driver.chandle)
         except Exception:
             pass #TODO HANDLE STOP EXCEPTION
 
-        
-    
-    async def start(self):
+    async def start(self, force_restart=False):
         # setup picoscope stuff
-        if self.running():
+        self.loop = asyncio.get_running_loop()   # <── store it here
+        if self.running() and not force_restart:
             return # 
+        
+        if force_restart:
+            await self.stop() # stop but keep the queue intact
         
         ################ setup picoscope stuff #####################
         
         post_trigger_samples = self.driver._cache.get("post_trigger_samples", 5000)
-        buffer_len = post_trigger_samples 
+        buffer_len = 2**15 # 32768  #post_trigger_samples 
         sample_interval = self.driver.sampling_time_ns
         sample_units_key = "PS5000A_NS"
         downsample_ratio = 1
@@ -68,7 +65,7 @@ class PicoRawSource(DataSource):
             buffers_raw[ch] = np.zeros(buffer_len, dtype=np.int16)
             source = ps.PS5000A_CHANNEL[f"PS5000A_CHANNEL_{ch}"]
 
-            self.status[f"setDataBuffers{ch}"] = ps.ps5000aSetDataBuffers(self.driver.chandle,
+            self.driver.status[f"setDataBuffers{ch}"] = ps.ps5000aSetDataBuffers(self.driver.chandle,
                                                                 source,
                                                                 buffers_raw[ch].ctypes.data_as(ctypes.POINTER(ctypes.c_int16)),
                                                                 None,  # min buffer not used
@@ -82,7 +79,7 @@ class PicoRawSource(DataSource):
 
         max_pre_trigger_samples, auto_stop_on, total_samples = 0,0,0
 
-        self.status["runStreaming"] = ps.ps5000aRunStreaming(self.driver.chandle,
+        self.driver.status["runStreaming"] = ps.ps5000aRunStreaming(self.driver.chandle,
                                                                 ctypes.byref(c_sample_interval),
                                                                 sample_units,
                                                                 max_pre_trigger_samples,
@@ -93,10 +90,12 @@ class PicoRawSource(DataSource):
                                                                 buffer_len,
                                                             )
         
-        actual_sample_interval = c_sample_interval.value
-        actual_sample_interval_ns = actual_sample_interval * 1000
+        self.driver._time_interval_ns = c_sample_interval.value # already in ns
+        self.driver._sampling_frequency = 1e9/self.driver._time_interval_ns
+        #self.driver._sample
+        #actual_sample_interval_ns = actual_sample_interval * 1000
 
-        print("Capturing at sample interval %s ns" % actual_sample_interval_ns)
+        print("Capturing at sample interval %s ns" % self.driver._time_interval_ns)
 
         # variables accessed by _callback
         frame_buffer = {ch: np.empty(frame_len, dtype=np.int16) for ch in channels_active}
@@ -114,6 +113,7 @@ class PicoRawSource(DataSource):
             
             remaining = frame_len - write_idx
             take = min(number_of_samples, remaining)
+            print(f" in callback {number_of_samples}, {start_index}")
 
             if take > 0:
                 for ch in channels_active:
@@ -127,8 +127,8 @@ class PicoRawSource(DataSource):
                 write_idx += take
                 if write_idx >= frame_len:
                     #frame = {c: mapper(frame_buffer[c]) for c in channels_active}
-                    frame = {frame_buffer[c] for c in channels_active}
-                    frames_ready.append(frame)
+                    frame = {c: frame_buffer[c].copy() for c in channels_active} # dict channel: np.array
+                    frames_ready.append(frame) # skip frames_ready and put it directly into all queues?
                     write_idx = 0
         
         func_ptr_callback = ps.StreamingReadyType(_callback)
@@ -139,11 +139,11 @@ class PicoRawSource(DataSource):
             should_run = True
             while should_run:
                 was_called_back = False
-                self.status["getStreamingLatestValues"] = ps.ps5000aGetStreamingLatestValues(self.chandle, 
+                self.driver.status["getStreamingLatestValues"] = ps.ps5000aGetStreamingLatestValues(self.driver.chandle, 
                                                                                           func_ptr_callback, 
                                                                                           None)
                 while frames_ready:
-                    self._fan_out(frames_ready.pop())
+                    await self._fan_out(frames_ready.popleft())
 
                 async with self._lock:
                     if (len(self._subscribers) == 0):
@@ -151,15 +151,17 @@ class PicoRawSource(DataSource):
                         break
                 # sleep only if not was_called_back?? TODO
                 # or sleep every time to allow context switch?
-                await asyncio.sleep(0.001) # minimal time to allow context switch (can it be too long? should I just yield or something?)
+                await asyncio.sleep(0.001) # minimal time to allow context switch? (can it be too long? should I just yield or something?)
             
+            self.driver.status["stop"] = ps.ps5000aStop(self.driver.chandle)
+
         self._task = asyncio.create_task(poller(), name=f"PicoscopeRawStream")
 
         def on_done(t: asyncio.Task):
             try:
                 e = t.exception()
                 if e and not isinstance(e, asyncio.CancelledError):
-                    print(f"Picoscope raw stream crasched \n {e}")
+                    print(f"Picoscope raw stream crashed \n {e}")
             except asyncio.CancelledError:
                 pass
 
@@ -168,6 +170,10 @@ class PicoRawSource(DataSource):
         
 
     async def once(self):
+        # TODO - what to do here?
+        # when doing Once, I start the actual generator (which starts this data source) and only when it reads out single frame, it finishes
+        # so probably dont implement once() at all here
+        # should keep it empty, because I dont have self.generator, so calling once() of parent0 DataSource class would fail
         pass
     
 
@@ -195,8 +201,9 @@ class PicoScope5000a(Device):
         self._timebase = 10 # todo seT default timebase in config.yaml
         self._max_samples = 0
         self._time_interval_ns = 32.0
+        self._sampling_frequency = 1e9/32
 
-        self._pico_raw_source = DataSource(self)
+        self._pico_raw_source = PicoRawSource(driver=self)
 
         super().__init__(dev_id, options)
         
@@ -207,7 +214,7 @@ class PicoScope5000a(Device):
 
         def _connect():
             self.started  = ctypes.c_int16(0)   # <-- status*, not handle
-            self.status["openunit"] = ps.ps5000aOpenUnitAsync(ctypes.byref(self.started), None, self.resolution)
+            self.status["openunit"] = ps.ps5000aOpenUnitAsync(ctypes.byref(self.started), None, self.resolution) #TODO - async opening may not be finished!!
             if self.status["openunit"] != 0 or self.started.value == 0:
                 raise RuntimeError(f"OpenUnitAsync failed/blocked: {self.status}, started={self.started.value}")
 
@@ -322,11 +329,16 @@ class PicoScope5000a(Device):
         return timebase
 
 
-    # channels may be good case-study for composite properties - but with no getter, its a command I guess...
+    #channels may be good case-study for composite properties - but with no getter, its a command I guess...
     @api_property()
     @property
     def sampling_frequency(self) -> float:
         """Current sampling frequency in Hz."""
+
+        return self._sampling_frequency
+
+        if self._pico_raw_source.running():
+            return self._sampling_frequency
         #print(" >>> inside sampling_frequency getter")
 
         timeIntervalns = ctypes.c_float()
@@ -341,16 +353,46 @@ class PicoScope5000a(Device):
                                                              ctypes.byref(returnedMaxSamples), 0)
         
         #print(f" >>> inside sampling_frequency getter: timeIntervalns = {timeIntervalns.value} ns, returnedMaxSamples = {returnedMaxSamples.value}")
+               
+        print(f" --- sampling interval.value = {timeIntervalns.value}, status = {self.status["getTimebase2"]}")
+
         if timeIntervalns.value > 0:
             return 1e9 / timeIntervalns.value
+        else:
+            print(f" --- ^^^ tis weird edge case")
         return 8 # just put something in there? TODO - how to handle this edge case?
+    # @api_property()
+    # @property
+    # def sampling_frequency(self) -> float:
+    #     return self._sampling_frequency
     
+    # @sampling_frequency.setter
+    # def sampling_frequency(self, value: float) -> None:
+    #     self._sampling_frequency = value
 
+    
+    # todo - should getter & setter be async???
     @sampling_frequency.setter
     def sampling_frequency(self, value: float) -> None:
 
-        print(" >>> inside sampling_frequency setter")
+        if self._pico_raw_source.running():
+            self._sampling_frequency = value
+            self._time_interval_ns = 1e9 / value # pico raw source will get restarted with these values
+            #await self._pico_raw_source.start(force_restart=True)
+            # try:
+            #     loop = asyncio.get_event_loop()
+            # except:
+            #     loop = asyncio.new_event_loop()
+            #     asyncio.set_event_loop(loop)
+            # loop.run_until_complete(self._pico_raw_source.start(force_restart=True))
+            
+            self._pico_raw_source.loop.call_soon_threadsafe(asyncio.create_task,self._pico_raw_source.start(force_restart=True))       
+        
+            return self._sampling_frequency # restart may modify requested values, return the true one...
 
+
+        # normal block acquisition
+            
         timeIntervalns = ctypes.c_float()
         returnedMaxSamples = ctypes.c_int32()
 
@@ -358,10 +400,10 @@ class PicoScope5000a(Device):
         # check that timebase is achievable given actual device settings
         for timebase_candidate in range(self._timebase, self._timebase + 5):
             self.status["getTimebase2"] = ps.ps5000aGetTimebase2(self.chandle, 
-                                                                 timebase_candidate, 
-                                                                 1, 
-                                                                 ctypes.byref(timeIntervalns), 
-                                                                 ctypes.byref(returnedMaxSamples), 0)
+                                                                timebase_candidate, 
+                                                                1, 
+                                                                ctypes.byref(timeIntervalns), 
+                                                                ctypes.byref(returnedMaxSamples), 0)
             if self.status["getTimebase2"] == 0:
                 break
         else:   # if not break
@@ -371,6 +413,7 @@ class PicoScope5000a(Device):
         self._max_samples = returnedMaxSamples.value
         self._time_interval_ns = timeIntervalns.value
         actual_frequency = 1e9 / timeIntervalns.value
+        self._sampling_frequency = actual_frequency
         return actual_frequency
     
     # read-only properties (slave of sampling_frequency)
@@ -469,7 +512,7 @@ class PicoScope5000a(Device):
         self.status["maximumValue"] = ps.ps5000aMaximumValue(self.chandle, ctypes.byref(maxADC))
         
         _channel_range = self._cache.get(f"channel_{source}", {}).get("range", ps.PS5000A_RANGE["PS5000A_1V"]) # assume default if it was not set previously...
-        _threshold = int(mV2adc(100,_channel_range, maxADC))
+        _threshold = int(mV2adc(threshold_mV,_channel_range, maxADC))
         _direction = ps.PS5000A_THRESHOLD_DIRECTION[f"PS5000A_{direction}"]
         _delay = delay
         _auto_trigger_ms = auto_trigger_ms
@@ -556,277 +599,51 @@ class PicoScope5000a(Device):
         return {"data": data_decoded.tolist()}
         #return {"data": np.random.rand(pre_trigger_samples + post_trigger_samples).tolist() }
 
-
-
-    async def _stream(self, mapper=lambda x: x.tolist()) -> AsyncIterator[Frame]: # TODO -ADD PARAMS HERE (INTERVAL?)
-        # Size of capture TODO - MAKE INTO PARAMETER
-        post_trigger_samples = self._cache.get("post_trigger_samples", 5000)
-        buffer_len = post_trigger_samples 
-        sample_interval = self.sampling_time_ns
-        sample_units_key = "PS5000A_NS"
-        downsample_ratio = 1
-        frame_len = post_trigger_samples
-
-        channels_active = []
-        for ch in ("A", "B", "C", "D"):
-            if self._cache.get(f"channel_{ch}", {}).get("enable", 0):
-                channels_active.append(ch)
-
-        if not channels_active: # nothing enabled # raise?
-            return
-        
-        buffers_raw = {}
-        for ch in channels_active:
-            buffers_raw[ch] = np.zeros(buffer_len, dtype=np.int16)
-            source = ps.PS5000A_CHANNEL[f"PS5000A_CHANNEL_{ch}"]
-
-            self.status[f"setDataBuffers{ch}"] = ps.ps5000aSetDataBuffers(self.chandle,
-                                                                source,
-                                                                buffers_raw[ch].ctypes.data_as(ctypes.POINTER(ctypes.c_int16)),
-                                                                None,  # min buffer not used
-                                                                buffer_len,
-                                                                0,  # segment index
-                                                                ps.PS5000A_RATIO_MODE["PS5000A_RATIO_MODE_NONE"],
-                                                            )
-
-       
-        #begin streaming
-        c_sample_interval = ctypes.c_int32(int(sample_interval))
-        sample_units = ps.PS5000A_TIME_UNITS[sample_units_key]
-
-        max_pre_trigger_samples, auto_stop_on, total_samples = 0,0,0
-
-        self.status["runStreaming"] = ps.ps5000aRunStreaming(self.chandle,
-                                                                ctypes.byref(c_sample_interval),
-                                                                sample_units,
-                                                                max_pre_trigger_samples,
-                                                                total_samples,
-                                                                auto_stop_on,
-                                                                int(downsample_ratio),
-                                                                ps.PS5000A_RATIO_MODE["PS5000A_RATIO_MODE_NONE"],
-                                                                buffer_len,
-                                                            )
-        
-        actual_sample_interval = c_sample_interval.value
-        actual_sample_interval_ns = actual_sample_interval * 1000
-
-        print("Capturing at sample interval %s ns" % actual_sample_interval_ns)
-
-        # variables accessed by _callback
-        frame_buffer = {ch: np.empty(frame_len, dtype=np.int16) for ch in channels_active}
-        frames_ready = deque(maxlen=5)
-        was_called_back = False
-        write_idx = 0
-
-        # The driver will invoke this *synchronously* during GetStreamingLatestValues.
-        def _callback(handle, number_of_samples, start_index, overflow, trigger_at, triggered, auto_stop, param):
-            nonlocal was_called_back, write_idx
-            was_called_back = True
-            if number_of_samples <= 0:
-                return
-            
-            remaining = frame_len - write_idx
-            take = min(number_of_samples, remaining)
-
-            if take > 0:
-                for ch in channels_active:
-                    end = start_index + take
-                    if end <= buffer_len:    
-                        frame_buffer[ch][write_idx:write_idx+take] = buffers_raw[ch][start_index:start_index+take]
-                    else:
-                        frame_buffer[ch][write_idx:write_idx+take] = np.concatenate((buffers_raw[ch][start_index:],
-                                                                                     buffers_raw[ch][:take - (buffer_len-start_index)]
-                                                                                    ))
-                write_idx += take
-                if write_idx >= frame_len:
-                    frame = {c: mapper(frame_buffer[c]) for c in channels_active}
-                    frames_ready.append(frame)
-                    write_idx = 0
-
-        func_ptr_callback = ps.StreamingReadyType(_callback)
-
-
-        try:
-            while True:
-                was_called_back = False
-                self.status["getStreamingLatestValues"] = ps.ps5000aGetStreamingLatestValues(self.chandle, 
-                                                                                          func_ptr_callback, 
-                                                                                          None)
-                while frames_ready:
-                    yield frames_ready.pop()
-                
-                if not was_called_back:
-                    await asyncio.sleep(0.002)
-        finally:
-            try:
-                self.status["stop"] = ps.ps5000aStop(self.chandle)
-            except Exception:
-                pass
-
-    
-
-    def ensure_stream_polling(self, mapper):
-        # check if poller task exists, if yes, return it, if no, create it
-        if hasattr(self, "should_run") and self.should_run > 0: # poller task exists, increase counter and return # TODO - DEFINE SHOULD_RUN FIRST  
-            self.should_run += 1
-            return 
-        # no poller task yet, create one
-        self.should_run = 1
-        my_queue = asyncio.Queue(maxsize=3) # each sub-stream will have its own queue
-
-        self._stream_queues.append(my_queue)
-        
-        
-        post_trigger_samples = self._cache.get("post_trigger_samples", 5000)
-        buffer_len = post_trigger_samples 
-        sample_interval = self.sampling_time_ns
-        sample_units_key = "PS5000A_NS"
-        downsample_ratio = 1
-        frame_len = post_trigger_samples
-
-        channels_active = []
-        for ch in ("A", "B", "C", "D"):
-            if self._cache.get(f"channel_{ch}", {}).get("enable", 0):
-                channels_active.append(ch)
-
-        if not channels_active: # nothing enabled # raise?
-            return
-        
-        buffers_raw = {}
-        for ch in channels_active:
-            buffers_raw[ch] = np.zeros(buffer_len, dtype=np.int16)
-            source = ps.PS5000A_CHANNEL[f"PS5000A_CHANNEL_{ch}"]
-
-            self.status[f"setDataBuffers{ch}"] = ps.ps5000aSetDataBuffers(self.chandle,
-                                                                source,
-                                                                buffers_raw[ch].ctypes.data_as(ctypes.POINTER(ctypes.c_int16)),
-                                                                None,  # min buffer not used
-                                                                buffer_len,
-                                                                0,  # segment index
-                                                                ps.PS5000A_RATIO_MODE["PS5000A_RATIO_MODE_NONE"],
-                                                            )
-
-        c_sample_interval = ctypes.c_int32(int(sample_interval))
-        sample_units = ps.PS5000A_TIME_UNITS[sample_units_key]
-
-        max_pre_trigger_samples, auto_stop_on, total_samples = 0,0,0
-
-        self.status["runStreaming"] = ps.ps5000aRunStreaming(self.chandle,
-                                                                ctypes.byref(c_sample_interval),
-                                                                sample_units,
-                                                                max_pre_trigger_samples,
-                                                                total_samples,
-                                                                auto_stop_on,
-                                                                int(downsample_ratio),
-                                                                ps.PS5000A_RATIO_MODE["PS5000A_RATIO_MODE_NONE"],
-                                                                buffer_len,
-                                                            )
-        
-        actual_sample_interval = c_sample_interval.value
-        actual_sample_interval_ns = actual_sample_interval * 1000
-
-        print("Capturing at sample interval %s ns" % actual_sample_interval_ns)
-
-        # variables accessed by _callback
-        frame_buffer = {ch: np.empty(frame_len, dtype=np.int16) for ch in channels_active}
-        frames_ready = deque(maxlen=5)
-        was_called_back = False
-        write_idx = 0
-
-        # The driver will invoke this *synchronously* during GetStreamingLatestValues.
-        def _callback(handle, number_of_samples, start_index, overflow, trigger_at, triggered, auto_stop, param):
-            nonlocal was_called_back, write_idx
-            was_called_back = True
-            if number_of_samples <= 0:
-                return
-            
-            remaining = frame_len - write_idx
-            take = min(number_of_samples, remaining)
-
-            if take > 0:
-                for ch in channels_active:
-                    end = start_index + take
-                    if end <= buffer_len:    
-                        frame_buffer[ch][write_idx:write_idx+take] = buffers_raw[ch][start_index:start_index+take]
-                    else:
-                        frame_buffer[ch][write_idx:write_idx+take] = np.concatenate((buffers_raw[ch][start_index:],
-                                                                                     buffers_raw[ch][:take - (buffer_len-start_index)]
-                                                                                    ))
-                write_idx += take
-                if write_idx >= frame_len:
-                    #frame = {c: mapper(frame_buffer[c]) for c in channels_active}
-                    frame = {frame_buffer[c] for c in channels_active}
-                    frames_ready.append(frame)
-                    write_idx = 0
-
-        func_ptr_callback = ps.StreamingReadyType(_callback)
-
-        async def poller():
-            while self.should_run > 0:
-                was_called_back = False
-
-                self.status["getStreamingLatestValues"] = ps.ps5000aGetStreamingLatestValues(self.chandle, 
-                                                                                          func_ptr_callback, 
-                                                                                          None)
-                while frames_ready:
-                    yield frames_ready.pop()
-
-                if not was_called_back:
-                    await asyncio.sleep(0.001)
-        
-
-        pass
-    
-    @api_data()
-    async def time_stream2(self) -> AsyncIterator[Frame]:
-
-        def mapper(x):
-            return x.tolist()
-
-        q = self._pico_raw_source.subscribe(mapper)
-        self._pico_raw_source.start() # make sure background poller is running todo - what interval??
-
-        try:
-            while True:
-                yield q.get()
-                asyncio.sleep(0.001) # to allow context change (is it necessary?)
-        finally:
-            self._pico_raw_source.unsubscribe()
-        
-
-
-
-        # 1) ensure that stream task is running, filling small queue with fresh data
-        # 2) read the data in async loop, transform them and return them
-        # 3) in finally, if there are no more "subscribers" left, decrease counter of active streams
-        pass
-        
-
-    @api_data()
-    async def psd_stream(self) -> AsyncIterator[Frame]:
-        """Returns PSD of the time series"""
-        print(">>>> creating async def psd stream")
-
-        def mapper(x):
-            N = x.size
-            dt = self.sampling_time_ns * 1e-9 #created at runtime - self can be fixed in definition time
-            fs = 1/dt
-
-            fft = np.fft.rfft(x)
-            Pxx = 1 +(np.abs(fft[1:])**2) / (fs*N) # normalize to density [unit^2 / Hz]
-            return Pxx.tolist()
-        
-        async for frame in self._stream(mapper):
-            yield frame
-        
-    
+   
     @api_data()
     async def time_stream(self) -> AsyncIterator[Frame]:
+
         def mapper(x):
             return x.tolist()
+
+        q = await self._pico_raw_source.subscribe()
+        await self._pico_raw_source.start() # ensure background poller is running todo - what interval?? - none interval, there is a minimal one so that data can be read out all the time
+
+        try:
+            while True:
+                frame = await q.get() # read out data from the queue, frame is {channel: np.array}
+                yield {ch: mapper(data) for ch, data in frame.items()}
+                # no need to sleep here, Im sleeping in the outer loop (async for time_stream())
+                #asyncio.sleep(0.001) # to allow context change (is it necessary?)
+        finally:
+            await self._pico_raw_source.unsubscribe(q)
+            
+
+    # @api_data()
+    # async def psd_stream(self) -> AsyncIterator[Frame]:
+    #     """Returns PSD of the time series"""
+    #     print(">>>> creating async def psd stream")
+
+    #     def mapper(x):
+    #         N = x.size
+    #         dt = self.sampling_time_ns * 1e-9 #created at runtime - self can be fixed in definition time
+    #         fs = 1/dt
+
+    #         fft = np.fft.rfft(x)
+    #         Pxx = 1 +(np.abs(fft[1:])**2) / (fs*N) # normalize to density [unit^2 / Hz]
+    #         return Pxx.tolist()
         
-        async for frame in self._stream(mapper):
-            yield frame
+    #     async for frame in self._stream(mapper):
+    #         yield frame
+        
+    
+    # @api_data()
+    # async def time_stream(self) -> AsyncIterator[Frame]:
+    #     def mapper(x):
+    #         return x.tolist()
+        
+    #     async for frame in self._stream(mapper):
+    #         yield frame
 
        
     
@@ -845,23 +662,23 @@ class PicoScope5000a(Device):
         
     
 
-    @psd_stream.plot()
-    def psd_stream_plot(self) -> Dict[str, Any]:
-        """PSD plot (function doc)"""
+    # @psd_stream.plot()
+    # def psd_stream_plot(self) -> Dict[str, Any]:
+    #     """PSD plot (function doc)"""
 
-        pre_trigger_samples = self._cache.get("pre_trigger_samples", 0)
-        post_trigger_samples = self._cache.get("post_trigger_samples", 5000)
-        total_samples = pre_trigger_samples + post_trigger_samples
+    #     pre_trigger_samples = self._cache.get("pre_trigger_samples", 0)
+    #     post_trigger_samples = self._cache.get("post_trigger_samples", 5000)
+    #     total_samples = pre_trigger_samples + post_trigger_samples
 
-        dt = self.sampling_time_ns * 1e-9 #created at runtime - self can be fixed in definition time
-        fs = 1/dt
+    #     dt = self.sampling_time_ns * 1e-9 #created at runtime - self can be fixed in definition time
+    #     fs = 1/dt
 
-        freqs = np.fft.rfftfreq(total_samples, d=dt)[1:]
+    #     freqs = np.fft.rfftfreq(total_samples, d=dt)[1:]
 
-        return {
-            "title":   self.psd_stream_plot.__doc__,
-            "x-label": "Frequency (Hz)",
-            # If you convert ADC->volts upstream, change to "Voltage (V)"
-            "y-label": "PSD [V^2 / Hz]",
-            "x-values": freqs.tolist(),
-        }
+    #     return {
+    #         "title":   self.psd_stream_plot.__doc__,
+    #         "x-label": "Frequency (Hz)",
+    #         # If you convert ADC->volts upstream, change to "Voltage (V)"
+    #         "y-label": "PSD [V^2 / Hz]",
+    #         "x-values": freqs.tolist(),
+    #     }
