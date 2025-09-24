@@ -14,6 +14,8 @@ from .._data_source import DataSource
 
 
 import ctypes
+import os
+import wave
 from picosdk.ps5000a import ps5000a as ps
 from picosdk.functions import adc2mV, assert_pico_ok, mV2adc
 
@@ -52,8 +54,8 @@ class PicoRawSource(DataSource):
             await self.stop()
 
         # Prepare block acquisition
-        pre_trigger_samples = self.driver._cache.get("pre_trigger_samples", 0)
-        post_trigger_samples = self.driver._cache.get("post_trigger_samples", 5000)
+        pre_trigger_samples = self.driver._pre_trigger_samples 
+        post_trigger_samples = self.driver._post_trigger_samples 
         total_samples = pre_trigger_samples + post_trigger_samples
         buffer_len = total_samples
 
@@ -63,7 +65,7 @@ class PicoRawSource(DataSource):
         # prepare buffers for active channels
         channels_active = []
         for ch in ("A", "B", "C", "D"):
-            if self.driver._cache.get(f"channel_{ch}", {}).get("enable", 0):
+            if getattr(self.driver, f"channel_{ch}", {}).get("enable", 0):
                 channels_active.append(ch)
 
         if not channels_active: 
@@ -150,12 +152,14 @@ class PicoScope5000a(Device):
             raise ValueError("resolution must be one of [8, 12, 14, 15, 16]")
         self.resolution = ps.PS5000A_DEVICE_RESOLUTION[f"PS5000A_DR_{self.requested_resolution}BIT"]
 
-        self._cache = {"pre_trigger_samples": 0,
-                       "post_trigger_samples": 5000,} 
         self._timebase = 10 # todo set default timebase in config.yaml
-        self._max_samples = 0
+        self._max_samples = 134217472  # TODO  - this should be initialized!!!
         self._time_interval_ns = 32.0
         self._sampling_frequency = 1e9/32
+
+        self._pre_trigger_samples = 0
+        self._post_trigger_samples = 5000
+        self._trigger = {}
 
         self._pico_raw_source = PicoRawSource(driver=self)
 
@@ -168,7 +172,7 @@ class PicoScope5000a(Device):
 
         def _connect():
             self.started  = ctypes.c_int16(0)   # <-- status*, not handle
-            self.status["openunit"] = ps.ps5000aOpenUnitAsync(ctypes.byref(self.started), None, self.resolution) #TODO - async opening may not be finished!!
+            self.status["openunit"] = ps.ps5000aOpenUnitAsync(ctypes.byref(self.started), None, self.resolution) 
             if self.status["openunit"] != 0 or self.started.value == 0:
                 raise RuntimeError(f"OpenUnitAsync failed/blocked: {self.status}, started={self.started.value}")
 
@@ -225,7 +229,6 @@ class PicoScope5000a(Device):
 
         await self._on_device(_disconnect)
 
-    
     def estimate_timebase(self, frequency_hz):
         """Convert frequency to a 'timebase'
         https://www.picotech.com/download/manuals/picoscope-5000-series-a-api-programmers-guide.pdf"""
@@ -336,31 +339,28 @@ class PicoScope5000a(Device):
     @property
     def pre_trigger_samples(self) -> int:
         """Number of pre-trigger samples in the current acquisition."""
-        return self._cache.get("pre_trigger_samples", 0)
+        return self._pre_trigger_samples
     
     @pre_trigger_samples.setter # TODO raw stream dependency
     def pre_trigger_samples(self, value: int) -> None:
         if not (0 <= value <= self._max_samples):
             raise ValueError(f"pre_trigger_samples must be between 0 and {self._max_samples}")
-        self._cache["pre_trigger_samples"] = value
+        self._pre_trigger_samples = value
         return value
     
     @api_property()
     @property
     def post_trigger_samples(self) -> int:  
         """Number of post-trigger samples in the current acquisition."""
-        return self._cache.get("post_trigger_samples", 0)
+        return self._post_trigger_samples
     
     @post_trigger_samples.setter
     def post_trigger_samples(self, value: int) -> None: # TODO RAW STREAM DEPENDENCY
         if not (0 <= value <= self._max_samples):
             raise ValueError(f"post_trigger_samples must be between 0 and {self._max_samples}")
-        self._cache["post_trigger_samples"] = value
+        self._post_trigger_samples = value
         return value
     
-
-
-
     @api_command() # todo - raw stream dependency
     async def set_channel(self,
                           channel: Literal["A", "B", "C", "D"], 
@@ -381,7 +381,7 @@ class PicoScope5000a(Device):
                 "enable": _enable,
                 "coupling_type": _coupling_type,
                 "range": _range}
-        self._cache[f"channel_{channel}"] = ret # this is extremeely stupid but there is no option to get the range once its set...
+        setattr(self, f"channel_{channel}", ret)
         return ret
     
     # raw stream dependency
@@ -400,7 +400,7 @@ class PicoScope5000a(Device):
         maxADC = ctypes.c_int16()
         self.status["maximumValue"] = ps.ps5000aMaximumValue(self.chandle, ctypes.byref(maxADC))
         
-        _channel_range = self._cache.get(f"channel_{source}", {}).get("range", ps.PS5000A_RANGE["PS5000A_1V"]) # assume default if it was not set previously...
+        _channel_range = getattr(self, f"channel_{source}", {}).get("range", ps.PS5000A_RANGE["PS5000A_1V"])
         _threshold = int(mV2adc(threshold_mV,_channel_range, maxADC))
         _direction = ps.PS5000A_THRESHOLD_DIRECTION[f"PS5000A_{direction}"]
         _delay = delay
@@ -417,9 +417,135 @@ class PicoScope5000a(Device):
                 "delay": _delay,
                 "auto_trigger_ms": _auto_trigger_ms}
         
-        self._cache["trigger"] = ret
+        self._trigger = ret
         return ret
+    
+    # stop streaming!!
+    @api_command()
+
+
+    @api_command()
+    async def acquire_to_file(self,
+                            folder: str,
+                            filename: str,
+                            acquisition_duration_s: Optional[float] = None):
         
+        sampling_frequency_hz = self._sampling_frequency
+
+        if acquisition_duration_s is None:
+            acquisition_duration_s = (self._pre_trigger_samples + self._post_trigger_samples) / float(sampling_frequency_hz)
+
+        # apply (this should set _timebase/_time_interval_ns in your driver)
+        acquisition_samples = min(self.max_data_samples,
+                                int(round(float(acquisition_duration_s) * sampling_frequency_hz)))
+
+        # ---- enabled channels & host buffers (int16) ----
+        channels_active = [ch for ch in ("A", "B", "C", "D")
+                        if getattr(self, f"channel_{ch}", {}).get("enable", 0)]
+        if not channels_active:
+            return {"ok": False, "error": "No channels enabled"}
+
+        # allocate numpy buffers that the driver fills in-place
+        raw = {ch: np.empty(acquisition_samples, dtype=np.int16) for ch in channels_active}
+
+        # set buffers (singular API for no-aggregation)
+        for ch in channels_active:
+            src = ps.PS5000A_CHANNEL[f"PS5000A_CHANNEL_{ch}"]
+            ptr = raw[ch].ctypes.data_as(ctypes.POINTER(ctypes.c_int16))
+            # ps5000aSetDataBuffer(handle, channel, bufferPtr, length, segmentIndex, ratioMode)
+            self.status[f"setDataBuffer{ch}"] = ps.ps5000aSetDataBuffer(
+                self.chandle, src, ptr, acquisition_samples, 0,
+                ps.PS5000A_RATIO_MODE["PS5000A_RATIO_MODE_NONE"]
+            )
+
+        # ---- run block with a tiny callback that only signals readiness ----
+        loop = asyncio.get_running_loop()
+        done_evt = asyncio.Event()
+
+        #def _block_ready_cb(handle, status, pParameter):
+        #    # keep callback minimal; hop back to asyncio loop
+        #    loop.call_soon_threadsafe(done_evt.set)
+
+        #lp_ready = ps.BlockReadyType(_block_ready_cb)
+
+        # pre = 0, post = acquisition_samples
+        time_indisposed_ms = None
+        segment_index = 0
+
+        self.status["runBlock"] = ps.ps5000aRunBlock(
+            self.chandle,
+            0,                        # pre-trigger
+            acquisition_samples,      # post-trigger
+            self._timebase,           # computed from sampling_frequency
+            None,
+            0,
+            None,
+            None
+        )
+
+        ready = ctypes.c_int16(0)
+        check = ctypes.c_int16(0)
+        while ready.value == check.value: # TODO - callback instead of polling
+            self.status["isReady"] = ps.ps5000aIsReady(self.chandle, ctypes.byref(ready))
+            await asyncio.sleep(0.01)
+
+        # wait for the device to finish acquisition
+        #await done_evt.wait()
+
+        # ---- pull the data out of the device into our numpy buffers ----
+        start_index = 0
+        c_no_of_samples = ctypes.c_int32(acquisition_samples)
+        downsample_ratio = 1
+        ratio_mode = ps.PS5000A_RATIO_MODE["PS5000A_RATIO_MODE_NONE"]
+        overflow = ctypes.c_int16(0)
+
+        # For ps5000a, GetValues is per device (not per channel). Since we already
+        # set per-channel buffers with SetDataBuffer above, this single call fills all.
+        self.status["getValues"] = ps.ps5000aGetValues(
+            self.chandle,
+            start_index,
+            ctypes.byref(c_no_of_samples),
+            downsample_ratio,
+            ratio_mode,
+            segment_index,
+            ctypes.byref(overflow),
+        )
+
+        ns = int(c_no_of_samples.value)  # actual samples retrieved
+        if ns <= 0:
+            return {"ok": False, "error": "No samples returned"}
+
+        # ---- write WAV (16-bit PCM, interleaved if multi-channel) ----
+        os.makedirs(folder, exist_ok=True)
+        if not filename.lower().endswith(".wav"):
+            filename += ".wav"
+        path = os.path.join(folder, filename)
+
+        nch = len(channels_active)
+        # stack to shape (ns, nch) and interleave
+        data16 = np.stack([raw[ch][:ns] for ch in channels_active], axis=1)  # int16
+        # Ensure little-endian bytes for WAV
+        if data16.dtype.byteorder not in ('<', '='):
+            data16 = data16.astype('<i2', copy=False)
+
+        with wave.open(path, "wb") as wf:
+            wf.setnchannels(nch)
+            wf.setsampwidth(2)  # int16
+            wf.setframerate(int(round(sampling_frequency_hz)))
+            wf.writeframes(data16.ravel(order="C").tobytes())
+
+        # optional: surface overflow/clipping info
+        clipped = bool(overflow.value)
+        return {
+            "ok": True,
+            "file": path,
+            "channels": channels_active,
+            "samples": ns,
+            "fs_hz": sampling_frequency_hz,
+            "clipped": clipped,
+        }
+
+    
     ## TODO - TURN THIS INTO LONG ACQUISITION TO A FILE
     # @api_command() 
     # def demo_wave(self) -> Frame:
@@ -511,8 +637,8 @@ class PicoScope5000a(Device):
     def time_stream_plot(self) -> Dict[str, Any]:
         """ Time series plot """
 
-        pre_trigger_samples = self._cache.get("pre_trigger_samples", 0)
-        post_trigger_samples = self._cache.get("post_trigger_samples", 5000)
+        pre_trigger_samples = self._pre_trigger_samples
+        post_trigger_samples = self._post_trigger_samples 
         total_samples = pre_trigger_samples + post_trigger_samples
 
         return {"title": "Time series plot", 
@@ -548,8 +674,8 @@ class PicoScope5000a(Device):
     def psd_stream_plot(self) -> Dict[str, Any]:
         """PSD plot (function doc)"""
 
-        pre_trigger_samples = self._cache.get("pre_trigger_samples", 0)
-        post_trigger_samples = self._cache.get("post_trigger_samples", 5000)
+        pre_trigger_samples = self._pre_trigger_samples
+        post_trigger_samples = self._post_trigger_samples 
         total_samples = pre_trigger_samples + post_trigger_samples
 
         dt = self.sampling_time_ns * 1e-9 #created at runtime - self can be fixed in definition time

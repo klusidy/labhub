@@ -76,12 +76,12 @@ export async function getFrame(id: string, source: string) {
   return r.json(); // { data: number[] }
 }
 
-export async function startSource(id: string, source: string) {
-  const r = await fetch(api(`/devices/${id}/data/${source}/start`), { method: "POST" });
-  if (!r.ok) throw new Error(`start ${r.status}`);
-}
+// export async function startSource(id: string, source: string) {
+//   const r = await fetch(api(`/devices/${id}/data/${source}/start`), { method: "POST" });
+//   if (!r.ok) throw new Error(`start ${r.status}`);
+// }
 
-export async function stopSource(id: string, source: string) {
-  const r = await fetch(api(`/devices/${id}/data/${source}/stop`), { method: "POST" });
-  if (!r.ok) throw new Error(`stop ${r.status}`);
-}
+// export async function stopSource(id: string, source: string) {
+//   const r = await fetch(api(`/devices/${id}/data/${source}/stop`), { method: "POST" });
+//   if (!r.ok) throw new Error(`stop ${r.status}`);
+// }
