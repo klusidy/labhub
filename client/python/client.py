@@ -451,7 +451,7 @@ class DataSourceProxy:
         lines = []
         lines.append(f"{self._name}: data source  {self.__doc__}")
         lines.append(f"  .get_one_frame()  returns single data frame")
-        lines.append(f"  .stream(limit, rate=0.01) returns iterator that will provide up to limit frames" )
+        lines.append(f"  .stream(limit, rate=10) returns iterator that will provide up to limit frames" )
         if self._spec.get("has_plot"):
             lines.append(f"  .get_plot_specs() returns plot metadata")
         return "\n".join(lines)
