@@ -220,26 +220,26 @@ class DeviceProxy:
         self.__dict__["_cmds"] = cmds
 
         # --- Data sources ---
-        data_specs = spec.get("data", []) or []
-        data_ns = types.SimpleNamespace()
+        data_specs = spec.get("data_sources", []) or []
+        #data_ns = types.SimpleNamespace()
         data_map: Dict[str, DataSourceProxy] = {}
         for ds in data_specs:
             dsp = DataSourceProxy(hub, dev_id, ds)
-            setattr(data_ns, ds["name"], dsp)
+            #setattr(data_ns, ds["name"], dsp)
             data_map[ds["name"]] = dsp
-        self.__dict__["data"] = data_ns
+        #self.__dict__["data_sources"] = data_ns
         self.__dict__["_data_sources"] = data_map
 
         # --- Plots (only for data with has_plot=True) ---
-        plots_ns = types.SimpleNamespace()
-        plots_map: Dict[str, PlotProxy] = {}
-        for name, dsp in data_map.items():
-            if dsp._spec.get("has_plot"):
-                pp = PlotProxy(dsp)
-                setattr(plots_ns, name, pp)
-                plots_map[name] = pp
-        self.__dict__["plots"] = plots_ns
-        self.__dict__["_plots"] = plots_map
+        #plots_ns = types.SimpleNamespace()
+        #plots_map: Dict[str, PlotProxy] = {}
+        #for name, dsp in data_map.items():
+        #    if dsp._spec.get("has_plot"):
+        #        pp = PlotProxy(dsp)
+        #        #setattr(plots_ns, name, pp)
+        #        plots_map[name] = pp
+        #self.__dict__["plots"] = plots_ns
+        #self.__dict__["_plots"] = plots_map
 
 
         # Device-level doc for help(...)
@@ -249,12 +249,14 @@ class DeviceProxy:
         lines = [f"{self._id}  [{self._spec.get('kind','?')}]"]
         if self._spec.get("doc"):
             lines.append(self._spec["doc"])
+
         # parameters with current values
         lines.append("\nParameters:")
         state = self._hub._ensure_state(self._id)
         for p in self._spec.get("properties", []):
             current = state["state"].get(p["name"])
             lines.append(_fmt_param_line(p, current))
+
         # commands with annotated properties
         if self._spec.get("commands"):
             lines.append("\nCommands:")
@@ -264,28 +266,33 @@ class DeviceProxy:
                 if len(doc) > 1 and doc[1].strip():
                     lines.append("    " + doc[1].strip())
 
-        # --- Data Sources ---
+        # data sources
         if getattr(self, "_data_sources", None):
             lines.append("")
             lines.append("Data Sources:")
-            for name, dsp in self._data_sources.items():
-                plot_hint = "  (plot)" if dsp._spec.get("has_plot") else ""
-                lines.append(f"  .{name}.once(**kwargs) -> dict{plot_hint}")
+            for name, ds in self._data_sources.items():
+                plot_hint = "  (plot)" if ds._spec.get("has_plot") else ""
+                doc = ds.__doc__.strip()
+                lines.append(f"  .{name} {plot_hint}")
+                lines.append("    " + doc)
 
         # --- Plots ---
-        if getattr(self, "_plots", None):
-            lines.append("")
-            lines.append("Plots:")
-            for name, pp in self._plots.items():
-                lines.append(f"  .{name}(**kwargs) -> dict")
+        # if getattr(self, "_plots", None):
+        #     lines.append("")
+        #     lines.append("Plots:")
+        #     for name, pp in self._plots.items():
+        #         lines.append(f"  .{name}(**kwargs) -> dict")
 
 
         return "\n".join(lines)
 
     # resolve commands as attributes
-    def __getattr__(self, name: str):
-        cmd = self.__dict__["_cmds"].get(name)
+    def __getattr__(self, name: str): # getattr is used only when the attribute does not exist
+        cmd = self.__dict__["_cmds"].get(name, None)
         if cmd: return cmd
+
+        ds = self.__dict__["_data_sources"].get(name, None)
+        if ds: return ds
         raise AttributeError(name)
 
     # route assignments to parameter proxies
@@ -361,34 +368,97 @@ class DeviceProxy:
 
 class DataSourceProxy:
     """
-    A data source proxy. Use .once(**kwargs) for one-shot retrieval.
-    If this source has a server-side plot, use .plot(**kwargs).
+    A data source proxy bound to a concrete device + source name.
+
+    Methods:
+      - get_one_frame() -> dict         # GET /devices/{id}/data/{source}/frame
+      - get_plot_specs() -> dict        # GET /devices/{id}/data/{source}/plot
+      - stream(limit=None, interval=None, rate=None, fmt='json') -> iterator of frames
+                                        # WS  /api/v1/streams/{id}/{source}
     """
     def __init__(self, hub: "Hub", dev_id: str, spec: Dict[str, Any]):
         self._hub = hub
         self._id = dev_id
-        self._name = spec["name"]
+        self._name = spec.get("name") or spec.get("id") or "data"
         self._spec = spec or {}
-        doc = (self._spec.get("doc") or "").strip()
-        has_plot = bool(self._spec.get("has_plot"))
-        plot_note = " (has plot)" if has_plot else ""
-        self.__doc__ = f"{self._name}: data source{plot_note}\n\n{doc}"
+        self.__doc__ = (self._spec.get("doc") or "").strip() or f"{self._id}.{self._name} data source"
 
-    def once(self, **kwargs) -> Any:
-        """Fetch a single data snapshot (JSON → Python)."""
-        return self._hub._get_data_once(self._id, self._name, kwargs)
+    # --- simple pulls ---------------------------------------------------------
+    def get_one_frame(self, **kwargs) -> Dict[str, Any]:
+        """Fetch a single frame (JSON->Python)."""
+        return self._hub._get_data_frame(self._id, self._name, kwargs)
 
-    def plot(self, **kwargs) -> Any:
-        """Fetch the associated plot payload (JSON → Python)."""
-        if not self._spec.get("has_plot"):
-            raise AttributeError(f"Data source '{self._name}' has no plot.")
-        return self._hub._get_plot(self._id, self._name, kwargs)
+    def get_plot_specs(self, **kwargs) -> Dict[str, Any]:
+        """Fetch plotting metadata/specs (JSON->Python)."""
+        return self._hub._get_plot_specs(self._id, self._name, kwargs)
+
+    # --- streaming (synchronous iterator) ------------------------------------
+    def stream(
+        self,
+        *,
+        limit: Optional[int] = None,
+        #interval: Optional[float] = None,
+        rate: Optional[float | int] = None,
+        fmt: str = "json",
+    ):
+        """
+        Yield frames from WS /api/v1/streams/{device_id}/{source}?format=&rate=.
+
+        Args:
+          limit: stop after yielding this many frames (None = infinite)
+          interval: client-side sleep between yields (seconds)
+          rate: server throttle Hz (maps to ?rate=)
+          fmt: 'json' or 'msgpack'
+        """
+        try:
+            import websocket  # websocket-client
+        except ImportError as e:
+            raise RuntimeError("Install 'websocket-client' to use DataSourceProxy.stream()") from e
+
+        url = self._hub._ws_url(
+            f"/api/v1/streams/{self._id}/{self._name}",
+            {"format": fmt, "rate": str(rate) if rate else None},
+        )
+        ws = websocket.create_connection(url)
+        # If msgpack, we’ll unpack bytes; else json text
+        unpack_msgpack = None
+        if fmt.lower() != "json":
+            try:
+                import msgpack  # type: ignore
+                unpack_msgpack = msgpack.unpackb
+            except ImportError as e:
+                ws.close()
+                raise RuntimeError("Install 'msgpack' or use stream(fmt='json')") from e
+
+        try:
+            n = 0
+            while True:
+                frame = ws.recv()
+                if not frame:
+                    break
+                chunk = json.loads(frame) if unpack_msgpack is None else unpack_msgpack(frame, raw=False)
+                if chunk:
+                    yield chunk
+                    n += 1
+                if limit is not None and n >= limit:
+                    break
+                #if interval:
+                #    time.sleep(interval)
+        finally:
+            ws.close()
 
     def __repr__(self) -> str:
-        tail = " (plot available)" if self._spec.get("has_plot") else ""
-        return f"<DataSource {self._id}.{self._name}: once(**kwargs){tail}>"
-
+        lines = []
+        lines.append(f"{self._name}: data source  {self.__doc__}")
+        lines.append(f"  .get_one_frame()  returns single data frame")
+        lines.append(f"  .stream(limit, rate=0.01) returns iterator that will provide up to limit frames" )
+        if self._spec.get("has_plot"):
+            lines.append(f"  .get_plot_specs() returns plot metadata")
+        return "\n".join(lines)
+    
     __str__ = __repr__
+
+
 
 
 class PlotProxy:
@@ -524,7 +594,7 @@ class Hub:
         finally:
             ws.close()
 
-    # NEW: helper to build ws:// URL with query params
+    # data source helpers
     def _ws_url(self, path: str, params: Dict[str, Any] | None = None) -> str:
         base = self._base.replace("http://", "ws://").replace("https://", "wss://")
         url = base + path
@@ -533,6 +603,18 @@ class Hub:
             if qp:
                 url += "?" + urllib.parse.urlencode(qp)
         return url
+    
+    def _get_data_frame(self, dev_id: str, source: str, params: Dict[str, Any] | None = None) -> Dict[str, Any]:
+        qp = ("?" + urllib.parse.urlencode(params)) if params else ""
+        r = self._http.get(f"/api/v1/devices/{dev_id}/data/{source}/frame{qp}")
+        r.raise_for_status()
+        return r.json()
+
+    def _get_plot_specs(self, dev_id: str, source: str, params: Dict[str, Any] | None = None) -> Dict[str, Any]:
+        qp = ("?" + urllib.parse.urlencode(params)) if params else ""
+        r = self._http.get(f"/api/v1/devices/{dev_id}/data/{source}/plot{qp}")
+        r.raise_for_status()
+        return r.json()
 
     def describe(self) -> str:
         lines = [f"labhub ({self._host_port()}) has the following devices:"]

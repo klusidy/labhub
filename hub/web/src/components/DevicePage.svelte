@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { patchProperties, runCommand, openDataStream, getSpec, getPlotSpec, getFrame, startSource, stopSource } from '../api';
+  import { patchProperties, runCommand, openDataStream, getSpec, getPlotSpec, getFrame} from '../api';
   import PropertyField from './PropertyField.svelte';
   import CommandBlock from './CommandBlock.svelte';
   //import PlotBlock from './uPlot_PlotBlock.svelte';
