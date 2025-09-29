@@ -23,6 +23,33 @@ def api_command(api_name=None, *, doc=None):
     def decorator(method: Callable):
         method._api_command_name = api_name or method.__name__
         method._api_command_meta = {"doc" : doc or (method.__doc__ or "").strip() }
+        method._api_subcommands  = {}  # event_name -> method name
+
+        # generic event factory: @jog.event("release")(...)
+        def event(event_name: str):
+            def factory(sub_api_name: Optional[str] = None, *, doc: Optional[str] = None):
+                def sub_decorator(sub_method: Callable):
+                    #sub_method._api_command_name = (
+                    #    sub_api_name or f"{method._api_command_name}...{event_name}"
+                    #)
+                    sub_method._api_command_name = sub_api_name or sub_method.__name__
+                    #sub_method._api_command_meta = {
+                    #    "doc": (doc or (sub_method.__doc__ or "")).strip(),
+                    #    "parent": method._api_command_name,
+                    #    "event": event_name,
+                    #}
+                    # remember the subcommand on the parent (by function name for later binding)
+                    method._api_subcommands[event_name] = sub_method.__name__
+                    return sub_method
+                return sub_decorator
+            return factory
+
+        # convenience aliases: @jog.release(), @jog.press()
+        method.event = event
+        #method.press = event("press")
+
+        method.release = event("release")
+        
         return method
     return decorator
 

@@ -38,27 +38,58 @@ class KinesisDevice(Device):
 
     @staticmethod
     def _load_dotnet_sync(kinesis_path: str):
-        if KinesisDevice._LOADED:
+        if KinesisDevice._LOADED: # here I import only once- but its not good design to have to have all dlls for all devices here...
             return
 
         import clr  # type: ignore
         base = Path(kinesis_path)
-        dm = base / "Thorlabs.MotionControl.DeviceManagerCLI.dll"
-        pz = base / "Thorlabs.MotionControl.KCube.PiezoCLI.dll"
-        if not (dm.exists() and pz.exists()):
-            raise RuntimeError(f"Kinesis DLLs not found under {base}")
 
-        clr.AddReference(str(dm))
-        clr.AddReference(str(pz))
+        dlls = ["Thorlabs.MotionControl.DeviceManagerCLI.dll",
+                "Thorlabs.MotionControl.KCube.PiezoCLI.dll", # kcube kpz101
+                "Thorlabs.MotionControl.GenericMotorCLI.dll", # inertial motor (generic)
+                "ThorLabs.MotionControl.KCube.InertialMotorCLI.dll", # kim101
+                ]
+
+        for dll_name in dlls:
+            p = base / dll_name
+            if not (p.exists):
+                raise RuntimeError(f"Kinesis DLL {dll_name} not found in {base}")
+            clr.AddReference(str(p))
 
         # Imports MUST happen after AddReference and on the same thread.
         from Thorlabs.MotionControl.DeviceManagerCLI import DeviceManagerCLI as _DMCLI  # type: ignore
-        from Thorlabs.MotionControl.KCube.PiezoCLI import KCubePiezo as _KCubePiezo    # type: ignore
-        from System import Decimal as _Decimal  # type: ignore
+        from System import (Decimal as _Decimal, # type: ignore
+                            Action as Action,
+                            UInt64 as UInt64)  
 
-        KinesisDevice.DeviceManagerCLI = _DMCLI
-        KinesisDevice.KCubePiezo = _KCubePiezo
+        from Thorlabs.MotionControl.KCube.PiezoCLI import KCubePiezo as _KCubePiezo    # type: ignore
+
+        from Thorlabs.MotionControl.GenericMotorCLI import GenericMotorCLI as _GenericMotorCLI # type: ignore
+        from Thorlabs.MotionControl.KCube.InertialMotorCLI import (   # type:ignore
+            KCubeInertialMotor as _KCubeInertialMotor, 
+            InertialMotorStatus as _InertialMotorStatus, 
+            ThorlabsInertialMotorSettings as _ThorlabsInertialMotorSettings,
+            InertialMotorJogMode as _InertialMotorJogMode,
+            InertialMotorJogDirection as _InertialMotorJogDirection,
+            DriveParams as _DriveParams)
+        
+        # common
         KinesisDevice.Decimal = _Decimal
+        KinesisDevice.Action = Action
+        KinesisDevice.UInt64 = UInt64
+        KinesisDevice.DeviceManagerCLI = _DMCLI
+        
+        # KPZ
+        KinesisDevice.KCubePiezo = _KCubePiezo
+
+        #KIM #TODO - REFACTOR AND KEEP THE CLI ONLY
+        KinesisDevice.GenericMotorCLI = _GenericMotorCLI
+        KinesisDevice.KCubeInertialMotor = _KCubeInertialMotor
+        KinesisDevice.InertialMotorStatus = _InertialMotorStatus
+        KinesisDevice.ThorlabsInertialMotorSettings = _ThorlabsInertialMotorSettings
+        KinesisDevice.InertialMotorJogMode = _InertialMotorJogMode
+        KinesisDevice.InertialMotorJogDirection = _InertialMotorJogDirection
+        KinesisDevice.DriveParams = _DriveParams
 
         KinesisDevice._THREAD_ID = threading.get_ident()
         KinesisDevice._LOADED = True

@@ -39,6 +39,9 @@ class Device:
                     }
                     for p in signature.parameters.values() if p.name != "self"
                     ]
+                
+                event_commands = getattr(attr, "_api_subcommands", {})
+                command["events"] = {event_name: sub_name for event_name, sub_name in event_commands.items()}
 
                 commands[attr._api_command_name] = command
         

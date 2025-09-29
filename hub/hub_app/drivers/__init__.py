@@ -19,8 +19,10 @@ from .example_device import ExampleDevice
 
 try:
     from .kinesis.kpz101 import KPZ101
+    from .kinesis.kim101 import KIM101
 except Exception as e:  # pythonnet missing or non-Windows
     KPZ101 = None  
+    KIM101 = None
 
 try:
     from .pico_technology.ps5000a import PicoScope5000a

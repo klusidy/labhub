@@ -30,6 +30,7 @@ class CommandSpec(BaseModel):
     name: str
     doc: Optional[str] = None
     args: List[ArgSpec] = Field(default_factory=list)
+    events: Optional[Dict[str,str]]
 
 class FieldSpec(BaseModel):
     """Sub-field spec for composite properties (e.g., PID.kp, PID.ki)."""
