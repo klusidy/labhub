@@ -18,6 +18,10 @@
   // Arg defs & values
   $: argDefs = Array.isArray(command?.args) ? command.args : [];
 
+  // Probe for release event
+  $: hasRelease = !!command?.events?.release;
+  $: releaseName = command?.events?.release;
+
   // keep user edits on spec refresh; fill sensible defaults
   function initValues(args: any[], prev: Record<string, any>) {
     const out: Record<string, any> = {};
@@ -80,6 +84,60 @@
     try { return JSON.stringify(x, null, 2); } catch { return String(x); }
   }
 
+
+  let pressed = false;
+
+  async function onPress(){
+    if (pressed) return;
+    pressed = true;
+    const args = buildArgs();
+
+    try {
+      const r = executor ? await executor(command?.name, args): null;
+      result = r;
+      dispatch("ran", {args, result: r})
+    } catch (e: any) {
+      error = e?.message ?? String(e);
+      dispatch("error", { args, error });
+    } finally {
+      running = false;
+    }
+  }
+
+  async function onRelease(){
+    if (!pressed) return;
+    pressed = false;
+    if (!hasRelease) return;
+
+    const args = buildArgs();
+
+    try{
+      const r = executor ? await executor(releaseName, args): null;
+      result = r;
+      dispatch("released", {args, result:r})
+    }catch (e: any) {
+      error = e?.message ?? String(e);
+      dispatch("error", { args, error });
+    } finally {
+      running = false;
+    }
+  }
+
+  // Event glue
+  function handlePointerDown(e: PointerEvent) {
+    e.preventDefault();
+    onPress();
+  }
+  function handlePointerUp(e: PointerEvent) {
+    e.preventDefault();
+    onRelease();
+  }
+
+  function handleBlur() {
+    // If the button loses focus while pressed (e.g., alt-tab), release safely
+    if (pressed) onRelease();
+  }
+
   async function onRun() {
     running = true; error = null; result = null;
     const args = buildArgs();
@@ -109,15 +167,38 @@
     </button>
 
     <div class="cmd-title">
-      <strong>{command?.name}()</strong>
+      <span>
+      <strong>{command?.name}</strong>(
+        {#each argDefs as a, i}
+         {#if i}, {/if} 
+         <span class="title-arg-type">{fmtType(a.type)}</span>
+         <span class="title-arg-name">{a.name}</span>
+         <!-- {#if a.default}
+         = {a.default}
+         {/if} -->
+        {/each}
+        )
+        </span>
       {#if command?.doc}
         <div class="cmd-doc">{command.doc}</div>
       {/if}
     </div>
 
     <div class="cmd-actions">
-      <button class="cmd-btn" on:click={onRun} disabled={running}>
+      <!-- <button class="cmd-btn" on:click={onRun} disabled={running}>
         {#if running}Running…{:else}Run{/if}
+      </button> -->
+      <button
+        class="btn"
+        aria-pressed={pressed}
+        on:pointerdown={hasRelease ? handlePointerDown : undefined}
+        on:pointerup={hasRelease ? handlePointerUp : undefined}
+        on:pointerleave={hasRelease ? handlePointerUp : undefined}
+        on:pointercancel={hasRelease ? handlePointerUp : undefined}
+        on:blur={hasRelease ? handleBlur : undefined}
+        on:click={!hasRelease ? onRun : undefined}
+      >
+        {#if running || pressed}In progress{:else}Run{/if}
       </button>
     </div>
   </div>
@@ -176,11 +257,11 @@
             </div>
           {/each}
 
-          <div class="arg-actions">
+          <!-- <div class="arg-actions">
             <button type="submit" class="cmd-btn" disabled={running}>
               {#if running}Running…{:else}Run{/if}
             </button>
-          </div>
+          </div> -->
         </form>
       {/if}
 
@@ -203,6 +284,8 @@
     line-height:16px; text-align:center; cursor:pointer; user-select:none; font-size:14px; margin-right:10px;
   }
   .cmd-title{ display:flex; flex-direction:column; gap:4px; }
+  .title-arg-type{color:#444; font-weight: 200;font-style: italic;}
+  .title-arg-name{font-weight:400; font-style: italic;}
   .cmd-doc{ color:var(--muted); font-size:12px; }
 
   .cmd-actions .cmd-btn{ height:32px; padding:0 12px; border:1px solid #d0d0d0; border-radius:6px; background:#fff; cursor:pointer; }
