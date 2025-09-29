@@ -2,8 +2,9 @@
 # 2. Activate correct python: close existing terminal, then Terminal -> New Terminal. Green (.venv) should appear at the start of the command line
 # (optional) open and modify config.yaml to set up default values for picoscope and other devices
 # 3. Make sure that neither kinesis nor picoscope SW nor picoscope labview is running (there may be only to use the libraries)
-# 4. Run `python .\hub\tray_app\tray.py` in the terminal. Labhub should -hopefully- start
-# 5. Run or modify the following script for automated data acquisition
+# 4. Run `python .\hub\tray_app\tray.py` in the terminal. Labhub should -hopefully- start, the labhub icon should appear
+# 5. Run or modify the following script for automated data acquisition 
+# (6. If you stop the server (from the tray icon), you should be able to run the standard kinesis/picoscope SW)
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -82,7 +83,7 @@ lhc.picoscope.acquire_to_file(folder="D:/tmp", filename="tst.wav", acquisition_d
 #  - must return a list (!!not numpy.array) - use the .tolist() just before return
 
 # Known issues
-# - conversion to V (not done consistently, especially when changing range on different channels)
+# - sloppy conversion to V (not done consistently, especially when changing range on different channels)
 # - resolution (bit depth) can only be changed on startup in config.yaml 
 # - throttle other than 10 Hz not supported
-# - active streaming may interfere with some commands (e.g. long acquisition) in weird ways
+# - active streaming may interfere with some commands (e.g. long acquisition) in unexpected ways
