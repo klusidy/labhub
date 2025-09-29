@@ -37,10 +37,14 @@ class DeviceManager:
         print("Adding device:", driver)  # Debugging line
         print(cls, dev_id, options)  # Debugging line
         
-        dev: drivers.Device = await cls.create(dev_id, options)
-        # TODO: dev.connect() and defaults are hanled in .create, but it may be here...?
+        try:
+            dev: drivers.Device = await cls.create(dev_id, options)
+            # TODO: dev.connect() and defaults are hanled in .create, but it may be here...?
 
-        self.devices[dev_id] = dev
+            self.devices[dev_id] = dev
+        except:
+            print(f"Failed to connect to device with dev_id={dev_id}")
+            pass
 
     async def remove_device(self, dev_id: str) -> None:        # <-- add (useful for reloads, tests)
         dev = self.devices.pop(dev_id, None)
@@ -213,7 +217,8 @@ class DeviceManager:
                     ))
                     print(f" --- type_str = {type_str}, choices = {args[-1].choices}")
                 print(f"  !!!!!!!!! --- command {cname} args = {args}")
-                cmds.append(CommandSpec(name=cname, args=args, doc=cinfo.get("doc", "")))
+                events = cinfo.get("events", {})
+                cmds.append(CommandSpec(name=cname, args=args, doc=cinfo.get("doc", ""), events=events))
         else:
             for cname in cmd_meta: #COMMANDS SHOULD BE DICTIONARY, THIS SHOULD NOT HAPPEN
                 cmds.append(CommandSpec(name=cname, args={}))
