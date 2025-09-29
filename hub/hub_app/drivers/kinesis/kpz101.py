@@ -22,7 +22,7 @@ class KPZ101(KinesisDevice):
         self.poll_ms: int = int(conn.get("poll_ms", 200))
         self.simulate: bool = bool(conn.get("simulate", False))
         self._dev = None  
-        print(f" -- init of kcube, dev_id = {dev_id}, options = {options}")
+        #print(f" -- init of kcube, dev_id = {dev_id}, options = {options}")
         super().__init__(dev_id, options)
 
 
@@ -96,12 +96,12 @@ class KPZ101(KinesisDevice):
     @voltage.setter
     def voltage(self, value: float) -> None:
         #breakpoint()
-        print(f"   -- voltage.setter called with value {value}")
+        #print(f"   -- voltage.setter called with value {value}")
         voltage_decimal = self._to_decimal(value)
-        print(f"   -- in decimal {voltage_decimal}")
+        #print(f"   -- in decimal {voltage_decimal}")
         self._dev.SetOutputVoltage(voltage_decimal)
         r = self._dev.GetOutputVoltage()
-        print(f"   -- what I get: {r} ")
+        #print(f"   -- what I get: {r} ")
 
 
     # --- API COMMANDS ---

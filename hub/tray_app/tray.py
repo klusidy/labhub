@@ -163,7 +163,7 @@ class TrayApp:
         except Exception:
             return False
 
-    def _wait_server_ready(self, timeout=6.0):
+    def _wait_server_ready(self, timeout=20.0):
         """Wait until server responds or process dies. Returns (ok, reason_str)."""
         t0 = time.monotonic()
         # try both API and docs (in case no devices route yet)
@@ -210,7 +210,7 @@ class TrayApp:
                 #start_new_session=True  # better signal handling on POSIX
             #)
 
-            ok, reason = self._wait_server_ready(timeout=6.0)
+            ok, reason = self._wait_server_ready(timeout=20.0)
             # todo - how do I check that it started correctly??
             if ok:
                 self.tray.setIcon(self.icon_green)

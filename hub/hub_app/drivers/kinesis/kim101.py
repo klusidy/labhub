@@ -21,7 +21,7 @@ class KIM101(KinesisDevice):
         self.poll_ms: int = int(conn.get("poll_ms", 200))
         self.simulate: bool = bool(conn.get("simulate", False))
         self._dev = None  
-        print(f" -- init of inertial motors, dev_id = {dev_id}, options = {options}")
+        #print(f" -- init of inertial motors, dev_id = {dev_id}, options = {options}")
         super().__init__(dev_id, options)
 
     async def _call(self, fn, *args, **kw): # to keep it fresh, run everything in a "kinesis" executor thread

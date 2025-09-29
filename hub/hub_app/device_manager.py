@@ -35,15 +35,15 @@ class DeviceManager:
             raise RuntimeError(f"Unknown driver '{driver}' or not available on this platform")
         
         print("Adding device:", driver)  # Debugging line
-        print(cls, dev_id, options)  # Debugging line
+        #print(cls, dev_id, options)  # Debugging line
         
         try:
             dev: drivers.Device = await cls.create(dev_id, options)
             # TODO: dev.connect() and defaults are hanled in .create, but it may be here...?
 
             self.devices[dev_id] = dev
-        except:
-            print(f"Failed to connect to device with dev_id={dev_id}")
+        except Exception as e:
+            print(f"Failed to connect to device with dev_id={dev_id} \n {e}")
             pass
 
     async def remove_device(self, dev_id: str) -> None:        # <-- add (useful for reloads, tests)
@@ -198,7 +198,7 @@ class DeviceManager:
             for cname, cinfo in cmd_meta.items():
                 args=[] # process args to match argspec format
                 raw_args = cinfo.get("args", [])
-                print(f"  !!!!!!!!! --- command {cname} raw args = {raw_args}")
+                #print(f"  !!!!!!!!! --- command {cname} raw args = {raw_args}")
                 for a in raw_args:
                     qualname = a.get("type", object).__qualname__
                     if qualname == "Literal":
@@ -216,7 +216,7 @@ class DeviceManager:
                         choices=choices
                     ))
                     print(f" --- type_str = {type_str}, choices = {args[-1].choices}")
-                print(f"  !!!!!!!!! --- command {cname} args = {args}")
+                #print(f"  !!!!!!!!! --- command {cname} args = {args}")
                 events = cinfo.get("events", {})
                 cmds.append(CommandSpec(name=cname, args=args, doc=cinfo.get("doc", ""), events=events))
         else:

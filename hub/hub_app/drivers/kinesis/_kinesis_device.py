@@ -48,6 +48,7 @@ class KinesisDevice(Device):
                 "Thorlabs.MotionControl.KCube.PiezoCLI.dll", # kcube kpz101
                 "Thorlabs.MotionControl.GenericMotorCLI.dll", # inertial motor (generic)
                 "ThorLabs.MotionControl.KCube.InertialMotorCLI.dll", # kim101
+                "ThorLabs.MotionControl.IntegratedStepperMotorsCLI.dll", # k10cr1
                 ]
 
         for dll_name in dlls:
@@ -73,6 +74,8 @@ class KinesisDevice(Device):
             InertialMotorJogDirection as _InertialMotorJogDirection,
             DriveParams as _DriveParams)
         
+        import Thorlabs.MotionControl.IntegratedStepperMotorsCLI as _IntegratedStepperMotorsCLI
+        
         # common
         KinesisDevice.Decimal = _Decimal
         KinesisDevice.Action = Action
@@ -90,6 +93,9 @@ class KinesisDevice(Device):
         KinesisDevice.InertialMotorJogMode = _InertialMotorJogMode
         KinesisDevice.InertialMotorJogDirection = _InertialMotorJogDirection
         KinesisDevice.DriveParams = _DriveParams
+
+        #k10cr1
+        KinesisDevice.IntegratedStepperMotorsCLI = _IntegratedStepperMotorsCLI # store the whole package, not one-by-one
 
         KinesisDevice._THREAD_ID = threading.get_ident()
         KinesisDevice._LOADED = True
