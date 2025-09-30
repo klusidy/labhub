@@ -65,7 +65,8 @@ class KinesisDevice(Device):
 
         from Thorlabs.MotionControl.KCube.PiezoCLI import KCubePiezo as _KCubePiezo    # type: ignore
 
-        from Thorlabs.MotionControl.GenericMotorCLI import GenericMotorCLI as _GenericMotorCLI # type: ignore
+        from Thorlabs.MotionControl.GenericMotorCLI import GenericMotorCLI as _GenericMotorCLI # type:ignore
+        from Thorlabs.MotionControl.GenericMotorCLI import MotorDirection as _MotorDirection   # type:ignore
         from Thorlabs.MotionControl.KCube.InertialMotorCLI import (   # type:ignore
             KCubeInertialMotor as _KCubeInertialMotor, 
             InertialMotorStatus as _InertialMotorStatus, 
@@ -74,7 +75,7 @@ class KinesisDevice(Device):
             InertialMotorJogDirection as _InertialMotorJogDirection,
             DriveParams as _DriveParams)
         
-        import Thorlabs.MotionControl.IntegratedStepperMotorsCLI as _IntegratedStepperMotorsCLI
+        import Thorlabs.MotionControl.IntegratedStepperMotorsCLI as _IntegratedStepperMotorsCLI # type:ignore
         
         # common
         KinesisDevice.Decimal = _Decimal
@@ -96,7 +97,7 @@ class KinesisDevice(Device):
 
         #k10cr1
         KinesisDevice.IntegratedStepperMotorsCLI = _IntegratedStepperMotorsCLI # store the whole package, not one-by-one
-
+        KinesisDevice.MotorDirection = _MotorDirection
         KinesisDevice._THREAD_ID = threading.get_ident()
         KinesisDevice._LOADED = True
 
