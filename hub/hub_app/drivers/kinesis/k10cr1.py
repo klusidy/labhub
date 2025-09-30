@@ -89,6 +89,15 @@ class K10CR1(KinesisDevice):
         value_decimal = self._to_decimal(value)
         self._dev.MoveTo(value_decimal, 60000) # TODO - should be async? (properties are not async...)
         return value  
+    
+    @api_command()
+    def move_to(self, value:float) -> None: # todo when value is dict, update min/max/default etc
+        conv = self._dev.UnitConverter
+        value_decimal = self._to_decimal(value)
+        self._dev.MoveTo(value_decimal, 60000) # TODO - should be async? (properties are not async...)
+        return value
+    
+
 
     #@api_property()
     #@property
