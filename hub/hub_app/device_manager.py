@@ -200,7 +200,11 @@ class DeviceManager:
                 raw_args = cinfo.get("args", [])
                 #print(f"  !!!!!!!!! --- command {cname} raw args = {raw_args}")
                 for a in raw_args:
-                    qualname = a.get("type", object).__qualname__
+                    a_type = a.get("type", object)
+                    if a_type is None:
+                        print(f"!! Command {cname} is missing type hint for argument {a}. Add proper type hint for correct API.")
+                        continue
+                    qualname = a_type.__qualname__
                     if qualname == "Literal":
                         choices = get_args(a["type"])
                         type_str = type(choices[0]).__qualname__
