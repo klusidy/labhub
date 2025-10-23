@@ -37,3 +37,15 @@ try:
 except Exception as e:
     TGF4000 = None
     print(f" - could not import TGF4000 driver: {e}")
+
+try:
+    from .analog_devices.eval9959 import EVAL9959
+except Exception as e:
+    EVAL9959 = None
+    print(f" - could not import EVAL9959 driver: {e}")
+
+try:
+    from .other.tpg import TPG
+except Exception as e:
+    TPG = None
+    print(f" - could not import TPG driver: {e}")
