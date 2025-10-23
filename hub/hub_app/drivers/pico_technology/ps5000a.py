@@ -23,6 +23,19 @@ import numpy as np
 import matplotlib.pyplot as plt
 import time
 
+RANGE_VALUES = {'10MV': 0.01, 
+                '20MV': 0.02, 
+                '50MV': 0.05, 
+                '100MV': 0.1,
+                '200MV': 0.2, 
+                '500MV': 0.5,
+                '1V': 1.0,
+                '2V': 2.0, 
+                '5V': 5.0, 
+                '10V': 10.0, 
+                '20V': 20.0, 
+                '50V': 50.0,
+                'MAX_RANGE': 50.0}
 
 class PicoRawSource(DataSource):
     """ Class that handles reading out time series data from Picoscope
@@ -372,6 +385,7 @@ class PicoScope5000a(Device):
         _enable = 1 if enable else 0
         _coupling_type = ps.PS5000A_COUPLING[f"PS5000A_{coupling_type}"]
         _range = ps.PS5000A_RANGE[f"PS5000A_{range}"]
+        multiplier = RANGE_VALUES[range] / 2**15 # at least I think its always 16bits...
 
         self.status[f"setCh{channel}"] = ps.ps5000aSetChannel(self.chandle, _channel, _enable, _coupling_type, _range, 0)
         assert_pico_ok(self.status[f"setCh{channel}"])
@@ -380,9 +394,19 @@ class PicoScope5000a(Device):
                 "channel": _channel,
                 "enable": _enable,
                 "coupling_type": _coupling_type,
-                "range": _range}
+                "range": _range,
+                "multiplier": multiplier,
+                "range_str": range,
+                "coupling_type_str": coupling_type}
         setattr(self, f"channel_{channel}", ret)
         return ret
+    
+    # Add channels settings to state to support the display in the UI 
+    # TODO - maybe add get_channels_settings as a command for scripting usage   
+    async def read_state(self) -> Dict[str, Any]:  # override
+        state = await super().read_state()
+        state["_channel_settings"] = {ch: getattr(self, f"channel_{ch}", {}) for ch in ("A", "B", "C", "D")}
+        return state
     
     # raw stream dependency
     @api_command()
@@ -421,7 +445,7 @@ class PicoScope5000a(Device):
         return ret
     
     # stop streaming!!
-    @api_command()
+    #@api_command()
 
 
     @api_command()
@@ -644,7 +668,9 @@ class PicoScope5000a(Device):
         return {"title": "Time series plot", 
                 "x-label": "us", 
                 "y-label": "V", 
-                "x-values": (np.arange(total_samples)*self._time_interval_ns*1e-3).tolist()}
+                "x-values": (np.arange(total_samples)*self._time_interval_ns*1e-3).tolist(),
+                "channel_settings": {ch: getattr(self, f"channel_{ch}", {}) for ch in ("A", "B", "C", "D")}
+                }
     
     @api_data()
     async def psd_stream(self) -> AsyncIterator[Frame]:
