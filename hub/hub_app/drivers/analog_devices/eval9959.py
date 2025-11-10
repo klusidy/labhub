@@ -77,7 +77,7 @@ class EVAL9959(Device):
         self.bridge.set_port_value(self.dev_id, command, 0x10)
         self.bridge.set_port_value(self.dev_id, command, 0x00)
 
-    @api_property(default=50_000_000, step=1) # TODO - review min/max
+    @api_property(default=50_000_000, step=1, unit="Hz") # TODO - review min/max
     @property
     def ref_clk(self) -> int:
         """Reference clock [Hz] (input to eval board from external source)"""
@@ -89,7 +89,7 @@ class EVAL9959(Device):
         self.sys_clk = self._sys_clk_hz # call the setter = keep old value of system clock on new ref clock
 
 
-    @api_property(default=500_000_000, step=1) # TODO - review min/max
+    @api_property(default=500_000_000, step=1, unit="Hz") # TODO - review min/max
     @property
     def sys_clk(self) -> int:
         """System clock [Hz] of the internal DDS
@@ -148,7 +148,7 @@ class EVAL9959(Device):
         self.io_update()
         return amp
 
-    @api_property()
+    @api_property(unit="Hz")
     @property
     def channel0_frequency(self) -> float:
         """Frequency [Hz] of single tone signal on channel 0"""
@@ -170,7 +170,7 @@ class EVAL9959(Device):
 
 
 
-    @api_property()
+    @api_property(unit="Hz")
     @property
     def channel1_frequency(self) -> float:
         """Frequency [Hz] of single tone signal on channel 1"""
@@ -192,7 +192,7 @@ class EVAL9959(Device):
 
 
 
-    @api_property()
+    @api_property(unit="Hz")
     @property
     def channel2_frequency(self) -> float:
         """Frequency [Hz] of single tone signal on channel 2"""
@@ -214,7 +214,7 @@ class EVAL9959(Device):
 
 
 
-    @api_property()
+    @api_property(unit="Hz")
     @property
     def channel3_frequency(self) -> float:
         """Frequency [Hz] of single tone signal on channel 3"""
