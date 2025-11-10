@@ -1,5 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher, onMount } from "svelte";
+  import { formatCurrent } from "../utils/formatter";
 
   export let property: any;   // spec for a single property
   export let value: any;   // current value from state
@@ -63,11 +64,11 @@
     if (hasMinMax(p)) return "float";
     return p?.type ?? "Any";
   }
-  function formatCurrent(v: any): string {
-    if (v == null) return "—";
-    if (typeof v === "object") return JSON.stringify(v);
-    return String(v);
-  }
+  // function formatCurrent(v: any): string {
+  //   if (v == null) return "—";
+  //   if (typeof v === "object") return JSON.stringify(v);
+  //   return String(v);
+  // }
 
   $: valid = !!property && typeof property.name === "string";
 
@@ -99,74 +100,78 @@
   {:else}
     {formatCurrent(value)}
   {/if}-->
-  {formatCurrent(value)}
+  {formatCurrent(value, property?.unit)} 
   </div>
 
   <div class="prop-cell prop-edit">
-    {#if property.fields}
-      <!-- composite -->
-      <div class="composite">
-        <details>
-          <summary>{property.name} fields</summary>
-          <div class="composite-body">
-            {#each fieldEntries(property.fields) as [fname, fmeta]}
-              <div class="composite-item">
-                <label for={property.name + "-" + fname}>{fname}</label>
-              </div>
-              <div class="composite-item">
-                {#if fmeta?.choices}
-                  <select id={property.name + "-" + fname} bind:value={edit[fname]}>
-                    {#each fmeta.choices as c}
-                      <option value={c}>{c}</option>
-                    {/each}
-                  </select>
-                {:else if fmeta?.type === 'bool'}
-                  <input id={property.name + "-" + fname} type="checkbox" bind:checked={edit[fname]} />
-                {:else if fmeta?.type === 'int' || fmeta?.type === 'float' || hasMinMax(fmeta)}
-                  <input
-                    id={property.name + "-" + fname}
-                    type="number"
-                    bind:value={edit[fname]}
-                    step={numStep(fmeta)}
-                    min={fmeta?.min}
-                    max={fmeta?.max}
-                  />
-                {:else}
-                  <input
-                    id={property.name + "-" + fname}
-                    type="text"
-                    bind:value={edit[fname]}
-                  />
-                {/if}
-              </div>
-            {/each}
-          </div>
-        </details>
-      </div>
-    {:else if hasChoices}
-      <select bind:value={edit} disabled={isRO}>
-        {#each property.choices as c}
-          <option value={c}>{c}</option>
-        {/each}
-      </select>
-    {:else if property?.type === 'bool'}
-      <input type="checkbox" bind:checked={edit} disabled={isRO} />
-    {:else if property?.type === 'int' || property?.type === 'float' || hasMinMax(property)}
-      <input
-        type="number"
-        bind:value={edit}
-        step={numStep(property)}
-        min={property?.min}
-        max={property?.max}
-        disabled={isRO}
-      />
-    {:else}
-      <input type="text" bind:value={edit} disabled={isRO} />
+    {#if !isRO}
+      {#if property.fields}
+        <!-- composite -->
+        <div class="composite">
+          <details>
+            <summary>{property.name} fields</summary>
+            <div class="composite-body">
+              {#each fieldEntries(property.fields) as [fname, fmeta]}
+                <div class="composite-item">
+                  <label for={property.name + "-" + fname}>{fname}</label>
+                </div>
+                <div class="composite-item">
+                  {#if fmeta?.choices}
+                    <select id={property.name + "-" + fname} bind:value={edit[fname]}>
+                      {#each fmeta.choices as c}
+                        <option value={c}>{c}</option>
+                      {/each}
+                    </select>
+                  {:else if fmeta?.type === 'bool'}
+                    <input id={property.name + "-" + fname} type="checkbox" bind:checked={edit[fname]} />
+                  {:else if fmeta?.type === 'int' || fmeta?.type === 'float' || hasMinMax(fmeta)}
+                    <input
+                      id={property.name + "-" + fname}
+                      type="number"
+                      bind:value={edit[fname]}
+                      step={numStep(fmeta)}
+                      min={fmeta?.min}
+                      max={fmeta?.max}
+                    />
+                  {:else}
+                    <input
+                      id={property.name + "-" + fname}
+                      type="text"
+                      bind:value={edit[fname]}
+                    />
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          </details>
+        </div>
+      {:else if hasChoices}
+        <select bind:value={edit} disabled={isRO}>
+          {#each property.choices as c}
+            <option value={c}>{c}</option>
+          {/each}
+        </select>
+      {:else if property?.type === 'bool'}
+        <input type="checkbox" bind:checked={edit} disabled={isRO} />
+      {:else if property?.type === 'int' || property?.type === 'float' || hasMinMax(property)}
+        <input
+          type="number"
+          bind:value={edit}
+          step={numStep(property)}
+          min={property?.min}
+          max={property?.max}
+          disabled={isRO}
+        />
+      {:else}
+        <input type="text" bind:value={edit} disabled={isRO} />
+      {/if}
     {/if}
   </div>
 
   <div class="prop-cell param-set-button">
-    <button on:click={propertySet} disabled={isRO}>Set</button>
+    {#if !isRO}
+      <button on:click={propertySet} disabled={isRO}>Set</button>
+    {/if}
   </div>
 </div>
 

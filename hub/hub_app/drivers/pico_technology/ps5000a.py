@@ -278,7 +278,7 @@ class PicoScope5000a(Device):
         
         return timebase
 
-    @api_property()
+    @api_property(unit="Hz")
     @property
     def sampling_frequency(self) -> float:
         """Current sampling frequency in Hz."""
@@ -322,9 +322,10 @@ class PicoScope5000a(Device):
         return actual_frequency
     
     # read-only properties (slave of sampling_frequency)
-    @api_property()
+    @api_property() # TODO - NON-BASIC UNITS DISPLAY WEIRDLY
     @property   
     def sampling_time_ns(self) -> float:
+        "Sampling interval in nanoseconds (controlled by sampling_frequency)"
         return self._time_interval_ns
          
     @api_property()
@@ -333,7 +334,7 @@ class PicoScope5000a(Device):
         """Maximum number of samples that can be captured in one acquisition."""
         return self._max_samples
     
-    @api_property()
+    @api_property(unit="s")
     @property
     def max_data_seconds(self) -> float:
         """Maximum number of samples that can be captured in one acquisition."""
@@ -359,11 +360,19 @@ class PicoScope5000a(Device):
         return self._post_trigger_samples
     
     @post_trigger_samples.setter
-    def post_trigger_samples(self, value: int) -> None: # TODO RAW STREAM DEPENDENCY
+    def post_trigger_samples(self, value: int) -> None: # TODO RAW STREAM DEPENDENCY (all properties that affect acquisition should somehow notify the raw source to resatart)
         if not (0 <= value <= self._max_samples):
             raise ValueError(f"post_trigger_samples must be between 0 and {self._max_samples}")
         self._post_trigger_samples = value
         return value
+
+    @api_property(unit="s")
+    @property
+    def post_trigger_samples_seconts(self) -> float:
+        """Number of post-trigger samples in the current acquisition."""
+        return self._post_trigger_samples * self._time_interval_ns * 1e-9
+
+        
     
     @api_command() # todo - raw stream dependency
     async def set_channel(self,
@@ -387,6 +396,14 @@ class PicoScope5000a(Device):
                 "range": _range}
         setattr(self, f"channel_{channel}", ret)
         return ret
+    
+
+    # Add channels settings to state to support the display in the UI 
+    # TODO - maybe add get_channels_settings as a command for scripting usage    
+    async def read_state(self) -> Dict[str, Any]:  # override
+        state = await super().read_state()
+        state["_channel_settings"] = {ch: getattr(self, f"channel_{ch}", {}) for ch in ("A", "B", "C", "D")}
+        return state
     
     # raw stream dependency
     @api_command()

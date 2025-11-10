@@ -53,7 +53,7 @@ def api_command(api_name=None, *, doc=None):
         return method
     return decorator
 
-def api_property(api_name=None, *, min=None, max=None, default=None, step=None, choices=None, doc=None):
+def api_property(api_name=None, *, min=None, max=None, default=None, step=None, choices=None, doc=None, unit=None):
     def decorator(property_obj):  # put this ABOVE @property todo - replace @property??
         fget = property_obj.fget
         fget._api_property_name = api_name or fget.__name__
@@ -62,6 +62,7 @@ def api_property(api_name=None, *, min=None, max=None, default=None, step=None, 
                                 "default": default,
                                 "step": step,
                                 "choices": choices,
+                                "unit": unit,
                                 "doc": doc or fget.__doc__}
         return property_obj
     return decorator
