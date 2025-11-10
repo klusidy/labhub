@@ -109,15 +109,15 @@ class KinesisDevice(Device):
         self._Decimal = None  # filled in after ensure_loaded()
         super().__init__(dev_id, options)
 
-    async def _on_device(self, fn): # TODO - THIS MAY BE STATICMETHOD
+    async def _run_blocking_in_thread(self, fn): # TODO - THIS MAY BE STATICMETHOD
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(KinesisDevice._EXEC, fn)
 
-    async def property_get_async(self, name: str):
-        return await self._on_device(lambda: self.property_get(name))
+    # async def property_get_async(self, name: str):
+    #     return await self._on_device(lambda: self.property_get(name))
 
-    async def property_set_async(self, name: str, value):
-        return await self._on_device(lambda: self.property_set(name, value))
+    # async def property_set_async(self, name: str, value):
+    #     return await self._on_device(lambda: self.property_set(name, value))
 
     async def _ensure_kinesis_loaded(self):
         return await self._on_device(lambda: self._load_dotnet_sync(self.kinesis_path))

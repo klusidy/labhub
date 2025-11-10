@@ -68,6 +68,7 @@ class Device:
                 prop["max"] = prop_meta.get("max", None)
                 prop["step"] = prop_meta.get("step", None)
                 prop["choices"] = prop_meta.get("choices", None)
+                prop["unit"] = prop_meta.get("unit", None)
                 
                 properties[fget._api_property_name] = prop
 
@@ -98,7 +99,9 @@ class Device:
         """Initialize device with ID and options from config.yaml."""
         self.id = dev_id
         self.options = options # whatever was in config.yaml
-        #self._state_lock = asyncio.Lock() # todo - maybe add later when multiple clients are connected to the same device?
+        self.LOCK = asyncio.Lock()
+        self.CACHE: Dict[str, Any] = {}  # cached property values
+        self.polling_interval = options.get("polling_interval", 1000)  # ms
         self._connected = False
 
 
@@ -112,9 +115,7 @@ class Device:
     async def _apply_config_defaults(self):
         for k, v in self.options.get("defaults", {}).items():
             if k in getattr(self, "PROPERTIES", {}):
-                await self.property_set_async(k, v)
-
-
+                await self.set_property(k, v)
 
 
     # --- lifecycle ---
@@ -124,37 +125,89 @@ class Device:
     async def disconnect(self) -> None:  # override
         self._connected = False
 
-    # --- core ops ---
-    async def read_state(self) -> Dict[str, Any]:  # override
-        keys = list(getattr(self, "PROPERTIES", {}).keys())
-        vals = await asyncio.gather(*(self.property_get_async(k) for k in keys))
-        state = dict(zip(keys, vals))
-        #state["connected"] = True
+    # --- core ops v2 ---
+    async def _run_blocking_in_thread(self, func, *args, **kwargs):
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(executor, lambda: func(*args, **kwargs))
+    
+    async def poll_property(self, name: str) -> Any:
+        """Read one property from device and update cache."""
+        async with self.LOCK:
+            value = await self._run_blocking_in_thread(lambda: getattr(self, name))
+            self.CACHE[name] = value #CachedValue(value=value, updated_at=asyncio.get_event_loop().time())
+            return value
+
+    async def set_property(self, name: str, value: Any) -> None:
+        """Set one property on device and update cache."""
+        meta = getattr(self, "PROPERTIES", {}).get(name, {})
+        clamped_value = self._coerce_clamp(meta, value)
+        async with self.LOCK:
+            await self._run_blocking_in_thread(lambda: setattr(self, name, clamped_value))
+            self.CACHE[name] = value 
+            # read-back (optional) - TODO decide if needed (probably not? - just trust it)
+            #new_value = await self._run_blocking_in_thread(lambda: self.property_get(name))
+            #self.cache[name] = new_value 
+
+    def get_cached(self, name: str) -> Any:
+        """Get cached property value."""
+        return self.CACHE.get(name, None)
+
+
+    async def read_state(self) -> Dict[str, Any]:
+        """ Reads all properties from cache."""
+        state = {}
+        for k in getattr(self, "PROPERTIES", {}).keys():
+            state[k] = self.get_cached(k)
         return state
     
-    
-
-    def property_get(self, name: str) -> Any:
-        return getattr(self, name)  
-    
-    async def property_get_async(self, name: str):
-        return await self._on_device(lambda: self.property_get(name))
-    
-
     async def apply_properties(self, properties: dict) -> dict:
         for k, v in properties.items():
-            await self.property_set_async(k, v)
+            if self.get_cached(k) == v:
+                continue
+            await self.set_property(k, v) 
 
         # read back concurrently (optional)
         return await self.read_state()
+        
+
+    # --- core ops ---
+    # async def read_state(self) -> Dict[str, Any]:  
+    #     keys = list(getattr(self, "PROPERTIES", {}).keys())
+    #     vals = await asyncio.gather(*(self.property_get_async(k) for k in keys))
+    #     state = dict(zip(keys, vals))
+    #     return state
+    
+    # async def read_state_sequential(self) -> Dict[str, Any]:  
+    #     keys = list(getattr(self, "PROPERTIES", {}).keys())
+    #     state = {}
+    #     for k in keys:
+    #         state[k] = await self.property_get_async(k)
+    #     return state
+    
+    
+
+    # def property_get(self, name: str) -> Any:
+    #     return getattr(self, name)  
+    
+    # async def property_get_async(self, name: str):
+    #     return await self._on_device(lambda: self.property_get(name))
+    
 
 
-    def property_set(self, name: str, value):
-        meta = getattr(self, "PROPERTIES", {}).get(name, {})
-        setattr(self, name, self._coerce_clamp(meta, value))
+    # async def apply_properties(self, properties: dict) -> dict:
+    #     for k, v in properties.items():
+    #         await self.property_set_async(k, v)
 
-    async def property_set_async(self, name: str, value):
-        return await self._on_device(lambda: self.property_set(name, value))
+    #     # read back concurrently (optional)
+    #     return await self.read_state()
+
+
+    # def property_set(self, name: str, value):
+    #     meta = getattr(self, "PROPERTIES", {}).get(name, {})
+    #     setattr(self, name, self._coerce_clamp(meta, value))
+
+    # async def property_set_async(self, name: str, value):
+    #     return await self._on_device(lambda: self.property_set(name, value))
     
     def _coerce_clamp(self, spec: Dict[str, Any], value: Any) -> Any:
         # best-effort type + bounds + choices enforcement
@@ -179,9 +232,9 @@ class Device:
     
     # Default marshaller: just offload to a thread so we don't block the loop.
     # Drivers that need strict thread affinity will override this (see KPZ).
-    async def _on_device(self, fn):
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, fn)
+    # async def _on_device(self, fn):
+    #     loop = asyncio.get_running_loop()
+    #     return await loop.run_in_executor(None, fn)
 
     
 
