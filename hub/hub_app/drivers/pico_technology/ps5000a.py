@@ -381,7 +381,7 @@ class PicoScope5000a(Device):
         return value
     @api_property(unit="s")
     @property
-    def post_trigger_samples_seconts(self) -> float:
+    def post_trigger_samples_seconds(self) -> float:
         """Number of post-trigger samples in the current acquisition."""
         return self._post_trigger_samples * self._time_interval_ns * 1e-9
     

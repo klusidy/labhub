@@ -112,6 +112,10 @@ class KinesisDevice(Device):
     async def _run_blocking_in_thread(self, fn): # TODO - THIS MAY BE STATICMETHOD
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(KinesisDevice._EXEC, fn)
+    
+    async def _on_device(self, fn): # TODO - THIS MAY BE STATICMETHOD
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(KinesisDevice._EXEC, fn)
 
     # async def property_get_async(self, name: str):
     #     return await self._on_device(lambda: self.property_get(name))
