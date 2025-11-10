@@ -1,11 +1,7 @@
-from nkt_tools import NKTP_DLL
-
-#rdResult, wvg_standard = NKTP_DLL.registerReadU32("COM4", 0x01, 0x32, -1)
-NKTP_DLL.openPorts("COM4",0,0)
-
 from __future__ import annotations
 from typing import Any, Dict
-from ._base import Device, api_device, api_command, api_property
+from .._base import Device, api_device, api_command, api_property
+from nkt_tools import NKTP_DLL
 import logging
 logger = logging.getLogger(__name__)
 
@@ -40,17 +36,42 @@ class X15(Device):
 
     # --- API PROPERTIES ---
 
+
+    @api_property()
+    @property
+    def emission(self) -> bool:
+        rdResult, value = NKTP_DLL.registerReadU8(self.port, 0x01, 0x30, -1)
+        """Emission on/off"""
+        if rdResult != 0:
+            logger.info(f"NKTP Read result: {NKTP_DLL.RegisterResultTypes(rdResult)}")
+        return bool(value)
     
+    @emission.setter
+    def emission(self, value: bool) -> None:
+        value_int = int(value)
+        wrResult = NKTP_DLL.registerWriteS16(self.port, 0x01, 0x2A, value_int, -1)
 
 
     @api_property()
+    @property
+    def wvg_actual(self) -> float:
+        rdResult, wvg_actual_int = NKTP_DLL.registerReadS32(self.port, 0x01, 0x72, -1)
+        """Wavelength setpoint in nm. Minimal step 0.0001."""
+        if rdResult != 0:
+            logger.info(f"NKTP Read result: {NKTP_DLL.RegisterResultTypes(rdResult)}")
+        wvg_actual = (wvg_actual_int + self.wvg_standard)/10000
+        return wvg_actual    
+
+
+
+    @api_property(min=1546.0, max=1554.0, step=0.0001)
     @property
     def wvg_setpoint(self) -> float:
         rdResult, wvg_setpoint_int = NKTP_DLL.registerReadS16(self.port, 0x01, 0x2A, -1)
         """Wavelength setpoint in nm. Minimal step 0.0001."""
         if rdResult != 0:
             logger.info(f"NKTP Read result: {NKTP_DLL.RegisterResultTypes(rdResult)}")
-        wvg_setpoint = wvg_setpoint_int + self.wvg_standard
+        wvg_setpoint = (wvg_setpoint_int + self.wvg_standard)/10000
         return wvg_setpoint
     
     @wvg_setpoint.setter
@@ -58,6 +79,16 @@ class X15(Device):
         value_int = int(round(value-self.wvg_standard))
         wrResult = NKTP_DLL.registerWriteS16(self.port, 0x01, 0x2A, value_int, -1)
 
+
+
+    @api_property()
+    @property
+    def power(self) -> float:
+        rdResult, power = NKTP_DLL.registerReadU16(self.port, 0x01, 0x17, -1)
+        """Output power in mW"""
+        if rdResult != 0:
+            logger.info(f"NKTP Read result: {NKTP_DLL.RegisterResultTypes(rdResult)}")
+        return power/100
 
 
     # --- API COMMANDS ---

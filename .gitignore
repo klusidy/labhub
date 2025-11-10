@@ -14,3 +14,4 @@ hub/hub_app/drivers/pico_technology/__pycache__/ps5000a.cpython-312.pyc
 hub/config.yaml
 hub/hub_app/drivers/pico_technology/__pycache__/__init__.cpython-313.pyc
 hub/hub_app/drivers/pico_technology/__pycache__/ps5000a.cpython-313.pyc
+*.pyc

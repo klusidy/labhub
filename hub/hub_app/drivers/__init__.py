@@ -49,3 +49,15 @@ try:
 except Exception as e:
     TPG = None
     print(f" - could not import TPG driver: {e}")
+
+try:
+    from .nkt.nkt_laser_X15 import X15
+except Exception as e:
+    X15 = None
+    print(f" - could not import NKTP X15 driver: {e}")
+
+try:
+    from .nkt.boostik import Boostik
+except Exception as e:
+    Boostik = None
+    print(f" - could not import NKT Boostik driver: {e}")

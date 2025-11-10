@@ -174,6 +174,8 @@ class PicoScope5000a(Device):
         self._post_trigger_samples = 5000
         self._trigger = {}
 
+        self._downsample_window = 10
+
         self._pico_raw_source = PicoRawSource(driver=self)
 
         super().__init__(dev_id, options)
@@ -372,6 +374,17 @@ class PicoScope5000a(Device):
         if not (0 <= value <= self._max_samples):
             raise ValueError(f"post_trigger_samples must be between 0 and {self._max_samples}")
         self._post_trigger_samples = value
+        return value
+    
+    @api_property()
+    @property
+    def downsample_window(self) -> int:
+        """Number of samples to average over in downsampled PSD"""
+        return self._downsample_window
+    
+    @downsample_window.setter
+    def downsample_window(self, value: int) -> None:
+        self._downsample_window = value
         return value
     
     @api_command() # todo - raw stream dependency
@@ -711,6 +724,71 @@ class PicoScope5000a(Device):
 
         return {
             "title":   self.psd_stream_plot.__doc__,
+            "x-label": "Frequency (Hz)",
+            "y-label": "PSD [V^2 / Hz]",
+            "x-values": freqs.tolist(),
+        }
+    
+    @api_data()
+    async def psd_stream_downsample(self) -> AsyncIterator[Frame]:
+        """Returns PSD of the time series"""
+        
+
+        def downsample_average(data: np.ndarray, window_size: int) -> np.ndarray:
+            n = data.size
+            num_windows = n // window_size
+            if num_windows == 0:
+                return np.empty(0, dtype=data.dtype)
+            return data[:num_windows * window_size].reshape(num_windows, window_size).mean(axis=1)
+
+        def mapper(x):
+            N = x.size
+            dt = self.sampling_time_ns * 1e-9 
+            fs = 1/dt
+
+            fft = np.fft.rfft(x)
+            Pxx = 1 +(np.abs(fft[1:])**2) / (fs*N) # normalize to density [unit^2 / Hz]
+            
+            # Apply frequency downsample averaging
+            window_size = self._downsample_window
+            if window_size > 1:
+                Pxx = downsample_average(Pxx, window_size)
+
+            return Pxx.tolist()
+        
+        q = await self._pico_raw_source.subscribe()
+        await self._pico_raw_source.start() 
+
+        try:
+            while True:
+                frame = await q.get() 
+                yield {ch: mapper(data) for ch, data in frame.items()}
+        finally:
+            await self._pico_raw_source.unsubscribe(q)        
+    
+
+    @psd_stream_downsample.plot()
+    def psd_stream_downsample_plot(self) -> Dict[str, Any]:
+        """PSD plot (function doc)"""
+
+        pre_trigger_samples = self._pre_trigger_samples
+        post_trigger_samples = self._post_trigger_samples 
+        total_samples = pre_trigger_samples + post_trigger_samples
+        window_size = self._downsample_window
+
+        dt = self.sampling_time_ns * 1e-9 #created at runtime - self can be fixed in definition time
+        fs = 1/dt
+
+        freqs = np.fft.rfftfreq(total_samples, d=dt)[1:]
+
+        # Apply downsample averaging for X axis
+        if window_size > 1:
+            n = freqs.size
+            num_windows = n // window_size
+            freqs = freqs[:num_windows * window_size].reshape(num_windows, window_size).mean(axis=1)
+
+        return {
+            "title":   self.psd_stream_downsample_plot.__doc__,
             "x-label": "Frequency (Hz)",
             "y-label": "PSD [V^2 / Hz]",
             "x-values": freqs.tolist(),
