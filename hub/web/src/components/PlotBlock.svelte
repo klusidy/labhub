@@ -42,6 +42,10 @@
   let lastXScale: 'linear' | 'log' = 'linear';
   let lastYScale: 'linear' | 'log' = 'linear';
 
+  // channel meta extracted from spec
+  let chanMeta: Record<string, { multiplier: number; label: string }> = {};
+
+
   const distrFromScale = (m: 'linear' | 'log') => (m === 'linear' ? 1 : 3);
 
 
@@ -75,6 +79,26 @@
       // If spec ships fixed x-values, keep them; otherwise we’ll build index-based
       const xv = spec?.["x-values"];
       xData = Array.isArray(xv) ? xv.slice() : [];
+
+      // Build per-channel metadata for scaling + labels
+      const cs = spec?.channel_settings ?? {};
+      chanMeta = {};
+      for (const [ch, info] of Object.entries(cs)) {
+        const mult = Number((info as any)?.multiplier ?? 1);
+        const rangeStr = String((info as any)?.range_str ?? "");
+        const coup = String((info as any)?.coupling_type_str ?? "");
+        const tag =
+          rangeStr && coup ? ` [${rangeStr}/${coup}]` :
+          rangeStr          ? ` [${rangeStr}]` :
+          coup              ? ` [${coup}]` :
+                              "";
+        chanMeta[ch] = {
+          multiplier: Number.isFinite(mult) ? mult : 1,
+          label: `${ch}${tag}`,
+        };
+      }
+
+
     } catch (e: any) {
       lastError = e?.message ?? String(e);
     } finally {
@@ -179,6 +203,17 @@
     if (ws) { try { ws.close(); } catch {} ws = null; }
   }
 
+  // scale with multiplier if it exists
+  function scaleSeries(name: string, arr: number[]): number[] {
+    const k = chanMeta[name]?.multiplier ?? 1;
+    if (k === 1) return arr;
+    // scale for display only
+    const out = new Array(arr.length);
+    for (let i = 0; i < arr.length; i++) out[i] = arr[i] * k;
+    return out;
+  }
+
+
   // ----- frame normalization -> xData + seriesNames + seriesData -----
   function applyIncoming(fr: any) {
     // Update x-values if provided
@@ -189,14 +224,18 @@
     if (Array.isArray(fr?.series) && fr.series.length) {
       const list = fr.series.filter((s: any) => Array.isArray(s?.data));
       seriesNames = list.map((s: any) => String(s.name ?? "series"));
-      seriesData  = list.map((s: any) => s.data as number[]);
+      //seriesData  = list.map((s: any) => s.data as number[]);
+      seriesData  = list.map((s: any) => scaleSeries(String(s.name ?? "series"), s.data as number[]));
       unifyLengths();
       return;
     }
     // 2) single: { data: [...] , name? }
     if (Array.isArray(fr?.data)) {
-      seriesNames = [String(fr?.name ?? "data")];
-      seriesData  = [fr.data as number[]];
+      //seriesNames = [String(fr?.name ?? "data")];
+      //seriesData  = [fr.data as number[]];
+      const nm = String(fr?.name ?? "data");
+      seriesNames = [nm];
+      seriesData  = [scaleSeries(nm, fr.data as number[])];
       unifyLengths();
       return;
     }
@@ -207,8 +246,10 @@
       for (const [k,v] of Object.entries(fr)) {
         if (k === "meta" || k === "x" || k === "x-values" || k === "name" || k === "series") continue;
         if (Array.isArray(v) && (v as any[]).every(n => typeof n === "number")) {
+          //names.push(k);
+          //arrays.push(v as number[]);
           names.push(k);
-          arrays.push(v as number[]);
+          arrays.push(scaleSeries(k, v as number[]));
         }
       }
       if (names.length) {
@@ -272,7 +313,7 @@ function unifyLengths() {
       series: [
         {}, // x
         ...seriesNames.map((name, i) => ({
-          label: name,
+          label: labelFor(name),
           stroke: palette[i % palette.length],
           width: 2,
         })),
@@ -388,6 +429,25 @@ async function refreshSpec(keepZoom = true) {
     lastXLen = xData.length;
 
     unifyLengths();            // with the new authoritative version
+
+    // Build per-channel metadata for scaling + labels
+    const cs = spec?.channel_settings ?? {};
+    chanMeta = {};
+    for (const [ch, info] of Object.entries(cs)) {
+      const mult = Number((info as any)?.multiplier ?? 1);
+      const rangeStr = String((info as any)?.range_str ?? "");
+      const coup = String((info as any)?.coupling_type_str ?? "");
+      const tag =
+        rangeStr && coup ? ` [${rangeStr}/${coup}]` :
+        rangeStr          ? ` [${rangeStr}]` :
+        coup              ? ` [${coup}]` :
+                            "";
+      chanMeta[ch] = {
+        multiplier: Number.isFinite(mult) ? mult : 1,
+        label: `${ch}${tag}`,
+      };
+    }
+
   } catch (e: any) {
     lastError = e?.message ?? String(e);
   }
@@ -408,6 +468,10 @@ async function refreshSpec(keepZoom = true) {
     updateAxisLabels();
     bootstrapped = true;
   }
+}
+
+function labelFor(name: string) {
+  return chanMeta[name]?.label ?? name;
 }
 
 

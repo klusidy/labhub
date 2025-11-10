@@ -15,4 +15,7 @@ setuptools>=80.0.0
 matplotlib>=3.8.0 # for picoscope demo
 ipykernel>=6.28.0 # for notebook demo
 scipy>=1.14.0 # for picoscope FFT
+nkt_tools>=0.0.8 # NKT Photonics lasers
+pyserial>=3.5
 # picoscope SDK
+# python -m pip install -r .\requirements.txt

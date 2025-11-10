@@ -38,6 +38,9 @@ try:
     from .aimtt.tgf4000 import TGF4000
 except Exception as e:
     TGF4000 = None
+<<<<<<< HEAD
+    logger.warning("Could not import TGF4000 driver: %s", e)
+=======
     print(f" - could not import TGF4000 driver: {e}")
 
 try:
@@ -63,3 +66,4 @@ try:
 except Exception as e:
     Boostik = None
     print(f" - could not import NKT Boostik driver: {e}")
+>>>>>>> origin/dds_on_tool

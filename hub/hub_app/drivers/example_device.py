@@ -67,13 +67,19 @@ class ExampleDevice(Device):
 
     def __init__(self, dev_id: str, default_values: Dict[str, Any]):
         super().__init__(dev_id, default_values)
+        # must initialize private variables (if there are any)
+        self._time_step = 0
+        self._number_of_time_steps = 0
+        self._noise = False
+        self._wave_type = "sin"
         
 
 
     # --- lifecycle -----------------------------------------------------------
 
     async def connect(self) -> None:
-        self._connected = True
+        #self._connected = True
+        return True
 
     async def disconnect(self) -> None:
         await self.stop()
