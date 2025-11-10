@@ -3,6 +3,7 @@ from contextlib import aclosing
 import time
 import asyncio
 import inspect
+import logging
 
 Frame = Dict[str, Any]
 
@@ -102,7 +103,8 @@ class DataSource:
             try:
                 exc = t.exception()
                 if exc and not isinstance(exc, asyncio.CancelledError):
-                    print(f"DataSource crashed  \n {exc}")
+                    logger = logging.getLogger(__name__)
+                    logger.exception("DataSource crashed")
             except asyncio.CancelledError:
                 pass
 

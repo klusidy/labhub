@@ -18,7 +18,10 @@ from .drivers._base import Device
 #     "kcube_piezo": ThorlabsKCubePiezo,
 # }
 
+
 from . import drivers
+import logging
+logger = logging.getLogger("labhub.device_manager")
 
 
 class DeviceManager:
@@ -34,17 +37,17 @@ class DeviceManager:
         if cls is None:
             raise RuntimeError(f"Unknown driver '{driver}' or not available on this platform")
         
-        print("Adding device:", driver)  # Debugging line
-        #print(cls, dev_id, options)  # Debugging line
+
+        logger.info("Adding device: %s", driver)
+        #logger.debug("Class: %r, dev_id: %r, options: %r", cls, dev_id, options)
         
+
         try:
             dev: drivers.Device = await cls.create(dev_id, options)
-            # TODO: dev.connect() and defaults are hanled in .create, but it may be here...?
-
+            # TODO: dev.connect() and defaults are handled in .create, but it may be here...?
             self.devices[dev_id] = dev
         except Exception as e:
-            print(f"Failed to connect to device with dev_id={dev_id} \n {e}")
-            pass
+            logger.exception("Failed to connect to device with dev_id=%r", dev_id)
 
     async def remove_device(self, dev_id: str) -> None:        # <-- add (useful for reloads, tests)
         dev = self.devices.pop(dev_id, None)
@@ -215,7 +218,7 @@ class DeviceManager:
                         required=a.get("default", None) is None,
                         choices=choices
                     ))
-                    print(f" --- type_str = {type_str}, choices = {args[-1].choices}")
+                    logger.debug("type_str = %s, choices = %s", type_str, args[-1].choices)
                 #print(f"  !!!!!!!!! --- command {cname} args = {args}")
                 events = cinfo.get("events", {})
                 cmds.append(CommandSpec(name=cname, args=args, doc=cinfo.get("doc", ""), events=events))

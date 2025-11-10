@@ -3,7 +3,7 @@
 # https://github.com/picotech/picosdk-python-wrappers
 
 from __future__ import annotations
-import asyncio, math, random
+import asyncio, math, random, logging
 from typing import Any, Dict, Optional, List, Literal, AsyncIterator
 import numpy as np
 from collections import deque
@@ -22,6 +22,8 @@ from picosdk.functions import adc2mV, assert_pico_ok, mV2adc
 import numpy as np
 import matplotlib.pyplot as plt
 import time
+
+logger = logging.getLogger(__name__)
 
 
 class PicoRawSource(DataSource):
@@ -130,7 +132,7 @@ class PicoRawSource(DataSource):
             try:
                 e = t.exception()
                 if e and not isinstance(e, asyncio.CancelledError):
-                    print(f"Picoscope raw stream crashed \n {e}")
+                    logger.exception("Picoscope raw stream crashed")
             except asyncio.CancelledError:
                 pass
 
@@ -141,6 +143,8 @@ class PicoRawSource(DataSource):
 class PicoScope5000a(Device):
     """PicoScope 5000a series driver.
     This driver requires the PicoSDK to be installed."""
+
+    kind = "ps5000a" # to properly load device widget?? TODO -use driver name isntead
 
     def __init__(self, dev_id: str, options: Dict[str, Any]):
         self.chandle = ctypes.c_int16()

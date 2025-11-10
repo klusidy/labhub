@@ -13,11 +13,20 @@ import msgpack
 import pdb # for live debugging
 
 
+
 from .schemas import DeviceInfo, PatchRequest, DeviceSpec, CommandRequest
 from .device_manager import DeviceManager
 from .events import EventBus
+from ._logging import init_logging
+import logging
+from ._logging import set_level as set_logging_level, get_level as get_logging_level
 
 
+
+
+# ---- Logging ----
+init_logging()
+logger = logging.getLogger("labhub.main")
 
 # ---- Config helpers ----
 def get_config_path() -> str:
@@ -65,16 +74,18 @@ async def lifespan(app: FastAPI):
         raise RuntimeError(f"Another LabHub instance is already running for config: {cfg_path}")
 
     cfg = load_config()
+
     add_tasks = [asyncio.create_task(_manager.add_device(d.id, d.driver, d.options)) for d in cfg.devices]
     results = await asyncio.gather(*add_tasks, return_exceptions=True)
 
     for d, res in zip(cfg.devices, results):
         if isinstance(res, Exception):
+            logger.error("Device '%s' failed to add: %r", d.id, res)
             raise res
-            print(f"Device '{d.id}' failed to add: {res!r}")
+
 
     #for d in cfg.devices:
-    #    print("-------- adding device based on config ---------------")
+    #    logger.debug("-------- adding device based on config ---------------")
     #    await _manager.add_device(d.id, d.driver, d.options)
     #for d in cfg.devices:
     #    asyncio.create_task(_manager.add_device(d.id, d.driver, d.options))
@@ -143,11 +154,27 @@ async def admin_reload():
     await _manager.stop_polling()
     await _manager.remove_all()
     cfg = load_config()
-    for d in cfg.devices:
+    for d in cfg.devices: # TODO - CHANGE TO ASYNC GATHER
         await _manager.add_device(d.id, d.driver, d.options)
     await _manager.start_polling(500)
     devices = [d.model_dump() for d in await _manager.list_devices()]
     return {"ok": True, "devices": devices}
+
+
+@app.get("/api/v1/admin/loglevel")
+async def admin_get_loglevel():
+    """Get current root logging level."""
+    return {"level": get_logging_level()}
+
+
+@app.post("/api/v1/admin/loglevel")
+async def admin_set_loglevel(level: str):
+    """Set root logging level. Accepts names like DEBUG, INFO or numeric values."""
+    try:
+        res = set_logging_level(level)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return res
 
 from time import monotonic
 

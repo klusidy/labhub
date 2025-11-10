@@ -22,7 +22,8 @@ class K10CR1(KinesisDevice):
         self.poll_ms: int = int(conn.get("poll_ms", 200))
         self.simulate: bool = bool(conn.get("simulate", False))
         self._dev = None  
-        #print(f" -- init of halfplate, dev_id = {dev_id}, options = {options}")
+        # debug: init info
+        logger.debug("init of K10CR1 dev_id=%s options=%s", dev_id, options)
         super().__init__(dev_id, options)
 
     async def _call(self, fn, *args, **kw): # to keep it fresh, run everything in a "kinesis" executor thread
@@ -77,8 +78,7 @@ class K10CR1(KinesisDevice):
         conv = self._dev.UnitConverter
         pos = self._dev.GetPositionCounter()
         pos_dec = self._to_decimal(pos)
-        #print(f"position is {pos}")
-        #print(f"position is {pos_dec}")
+        logger.debug("raw position=%s converted=%s", pos, pos_dec)
         real = conv.DeviceUnitToReal(pos_dec, conv.UnitType.Length)
         return float(self.Decimal.ToDouble(real))
     
@@ -157,7 +157,7 @@ class K10CR1(KinesisDevice):
                            acceleration: float = 15,
                            max_velocity: float = 15)-> dict:
                            #min_velocity: float = 5)-> dict :#step_mode: str, max_velocity:int, acc:int) -> dict:
-        print("iinsde step parameters")
+        logger.debug("inside set_jog_parameters")
         jog_params = self._dev.GetJogParams()
         if step_size:
             jog_params.StepSize = self._to_decimal(step_size)

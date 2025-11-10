@@ -30,10 +30,12 @@ try:
     from .pico_technology.ps5000a import PicoScope5000a
 except Exception as e:
     PicoScope5000a = None
-    print(f" - could not import PicoScope5000a driver: {e}")
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.warning("Could not import PicoScope5000a driver: %s", e)
 
 try:
     from .aimtt.tgf4000 import TGF4000
 except Exception as e:
     TGF4000 = None
-    print(f" - could not import TGF4000 driver: {e}")
+    logger.warning("Could not import TGF4000 driver: %s", e)

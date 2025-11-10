@@ -1,9 +1,11 @@
 # hub_app/drivers/example_device.py
 from __future__ import annotations
-import asyncio, math, random
+import asyncio, math, random, logging
 from typing import Any, Dict, Optional, List, AsyncIterator
 import numpy as np
 from ._base import Device, api_device, api_command, api_property, api_data, Frame
+
+logger = logging.getLogger(__name__)
 
 @api_device("example_device")
 class ExampleDevice(Device):
@@ -179,7 +181,7 @@ class ExampleDevice(Device):
                 await asyncio.sleep(0.05) # 
 
         finally:
-            print("demo_wave generator exiting") # teardown
+            logger.debug("demo_wave generator exiting") # teardown
 
     
     # simple payload: { data: [...] }

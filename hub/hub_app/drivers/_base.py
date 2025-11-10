@@ -1,9 +1,14 @@
 from __future__ import annotations
 import asyncio
+import logging
 from typing import Any, Dict, Callable, Optional, Mapping, get_type_hints
 import inspect
+from concurrent.futures import ThreadPoolExecutor
 from ._decorators import api_device, api_command, api_property, ALIASES, api_data, Frame
 
+executor = ThreadPoolExecutor(max_workers=8) # todo - get this from above somehow? also make this configurable
+
+logger = logging.getLogger(__name__)
 
 # --- base class for a device driver --------------------------------
 class Device:
@@ -100,8 +105,8 @@ class Device:
     async def _apply_driver_defaults(self):
         for property_name, metadata in getattr(self, "PROPERTIES", {}).items():
             if "default" in metadata and metadata["default"] is not None: 
-                #print(f" - base init, prop_name = {property_name}, metadata = {metadata}")
-                await self.property_set_async(property_name, metadata["default"])
+                logger.debug("- base init, prop_name=%s, metadata=%s", property_name, metadata)
+                await self.set_property(property_name, metadata["default"])
 
 
     async def _apply_config_defaults(self):
