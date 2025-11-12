@@ -1,53 +1,51 @@
 <template>
-  <q-card flat bordered>
-    <q-card-section class="text-subtitle2">Channels</q-card-section>
-    <q-separator />
+  <q-card flat bordered class="q-pa-sm q-ma-md">
+  <q-card-section class="text-subtitle2 q-py-xs q-px-sm">Channels</q-card-section>
+  <q-separator />
 
-    <div class="q-pa-md">
-      <!-- header row -->
-      <div class="row items-center text-grey-7 q-pb-sm q-mb-sm"
-           style="border-bottom: 1px solid rgba(0,0,0,.06);">
-        <div class="col-3 col-sm-2 text-caption">Channel</div>
-        <div class="col-3 col-sm-2 text-caption">Enabled</div>
-        <div class="col-3 col-sm-3 text-caption">Coupling</div>
-        <div class="col-3 col-sm-5 text-caption">Range</div>
-      </div>
-
+    <div class="q-pa-xs">
+    
       <!-- rows -->
-      <div v-for="ch in channels" :key="ch.id" class="row items-center q-col-gutter-sm q-py-sm">
-        <div class="col-3 col-sm-2">
-          <div class="text-body2 text-weight-medium">{{ ch.id }}</div>
+      <div v-for="ch in channels" :key="ch.id" class="row items-center q-col-gutter-sm q-py-xs  q-pa-xs">
+        <div class="col-1 col-sm-1">
+          <div class="text-body4 text-weight-medium">{{ ch.id }}</div>
         </div>
 
-        <div class="col-3 col-sm-2">
+        <div class="col-2 col-sm-2">
           <q-toggle
             v-model="ch.enabled"
             :color="channelColor(ch.id)"
             dense
+            options-dense
             keep-color
             checked-icon="check"
             unchecked-icon="clear"
+            size="xl"
           />
         </div>
 
-        <div class="col-3 col-sm-3">
+        <div class="col-4 col-sm-4">
           <q-select
             v-model="ch.coupling"
             :options="couplingOptions"
-            dense outlined
+            dense 
+            options-dense
+            outlined
             emit-value map-options
-            aria-label="Coupling"
-          />
+            filled 
+            label="Coupling" 
+            stack-label />
         </div>
 
-        <div class="col-3 col-sm-5">
+        <div class="col-5 col-sm-5">
           <q-select
             v-model="ch.range"
             :options="rangeOptions"
             dense outlined
             emit-value map-options
             use-input
-            aria-label="Range"
+            filled
+            label="Range"
           />
         </div>
       </div>

@@ -10,11 +10,12 @@
       </q-toolbar>
     </q-header>
 
-    <q-drawer v-model="leftDrawerOpen" show-if-above bordered>
+    <q-drawer v-model="leftDrawerOpen" show-if-above bordered :width="450" class="bg-grey-2">
       <q-list>
         <!-- <q-item-label header> Essential Links </q-item-label> -->
         <ChannelsCard />
-
+        <PropertiesCard />
+      
       </q-list>
     </q-drawer>
 
@@ -27,6 +28,7 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import ChannelsCard from 'components/ChannelsCard.vue'
+import PropertiesCard from 'components/PropertiesCard.vue'
 
 
 
