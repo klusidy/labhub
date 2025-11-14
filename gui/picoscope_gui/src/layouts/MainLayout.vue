@@ -15,13 +15,23 @@
         <!-- <q-item-label header> Essential Links </q-item-label> -->
         <ChannelsCard />
         <PropertiesCard />
+        <FileAcquisitionCard />
+        <TriggerCard />
+
       
       </q-list>
     </q-drawer>
 
     <q-page-container>
-      <router-view />
+      <q-page class="q-pa-0">
+
+          <PlotTabs title="Plot A" subtitle="top" style="height:calc(50vh - 25px); border:0px solid navy;"/>
+          <PlotTabs title="Plot B" subtitle="bottom" style="height:calc(50vh - 25px); border:0px solid navy"/>
+    
+      </q-page>
     </q-page-container>
+
+
   </q-layout>
 </template>
 
@@ -29,8 +39,19 @@
 import { ref } from 'vue';
 import ChannelsCard from 'components/ChannelsCard.vue'
 import PropertiesCard from 'components/PropertiesCard.vue'
+import FileAcquisitionCard from 'components/FileAcquisitionCard.vue'
+import TriggerCard from 'components/TriggerCard.vue'
 
+import PlotTabs from 'components/PlotTabs.vue'
 
+import { onMounted } from 'vue'
+import { usePicoscopeStore } from 'stores/picoscope'
+
+const ps = usePicoscopeStore()
+
+onMounted(() => {
+  ps.init().catch(err => console.error('picoscope init failed', err))
+})
 
 const leftDrawerOpen = ref(false);
 

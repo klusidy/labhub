@@ -427,6 +427,7 @@ class PicoScope5000a(Device):
     async def read_state(self) -> Dict[str, Any]:  # override
         state = await super().read_state()
         state["_channel_settings"] = {ch: getattr(self, f"channel_{ch}", {}) for ch in ("A", "B", "C", "D")}
+        state["_trigger_settings"] = self._trigger # dict of last values for set_simple_trigger
         return state
     
     # raw stream dependency

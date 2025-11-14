@@ -45,11 +45,11 @@ type NumberRow = {
 const rows = reactive<NumberRow[]>([
   { key: 'fs',   label: 'Sampling frequency', unit: 'Hz',     requested: 1_000_000 , readonly: false, hint: 'Current sampling frequency in Hz.'},
   { key: 'ts',   label: 'Sampling time',      unit: 'ns',     requested: 10, readonly: true },
-  { key: 'preN', label: 'Pre-trigger',        unit: 'samples',requested: 1024, readonly: false },
-  { key: 'preT', label: 'Pre-trigger',        unit: 'seconds',requested: 0.01, readonly: true },
+  { key: 'preN', label: 'Pre-trigger',        unit: '#',requested: 1024, readonly: false },
+  { key: 'preT', label: 'Pre-trigger',        unit: 's',requested: 0.01, readonly: true },
 
-  { key: 'postN',label: 'Post-trigger',       unit: 'samples',requested: 4096, readonly: false },
-  { key: 'postT',label: 'Post-trigger',       unit: 'seconds',requested: 0.1 , readonly: true},
+  { key: 'postN',label: 'Post-trigger',       unit: '#',requested: 4096, readonly: false },
+  { key: 'postT',label: 'Post-trigger',       unit: 's',requested: 0.1 , readonly: true},
   { key: 'down', label: 'Downsample window',                    requested: 10, readonly: false },
 ])
 </script>

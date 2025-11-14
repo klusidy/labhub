@@ -80,6 +80,14 @@ export default defineConfig((/* ctx */) => {
     // Full list of options: https://v2.quasar.dev/quasar-cli-vite/quasar-config-file#devserver
     devServer: {
       // https: true,
+      proxy: {
+        '/api': {
+          target: 'http://localhost:8212', // your FastAPI server
+          changeOrigin: true,
+          secure: false,
+          ws: true,        // important for /api/v1/events websocket
+        },
+      },
       open: true, // opens browser window automatically
     },
 
