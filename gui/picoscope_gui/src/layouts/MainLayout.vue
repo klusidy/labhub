@@ -10,7 +10,7 @@
       </q-toolbar>
     </q-header>
 
-    <q-drawer v-model="leftDrawerOpen" show-if-above bordered :width="500" class="bg-grey-2">
+    <q-drawer v-model="leftDrawerOpen" show-if-above bordered :width="450" class="bg-grey-2">
       <q-list>
         <!-- <q-item-label header> Essential Links </q-item-label> -->
         <ChannelsCard />
@@ -25,12 +25,12 @@
         <PlotTabs
           title="Plot A"
           subtitle="top"
-          style="height: calc(50vh - 25px); border: 0px solid navy"
+          style="height: calc(50vh - 26px); border: 0px solid navy"
         />
         <PlotTabs
           title="Plot B"
           subtitle="bottom"
-          style="height: calc(50vh - 25px); border: 0px solid navy"
+          style="height: calc(50vh - 26px); border: 0px solid navy"
         />
       </q-page>
     </q-page-container>

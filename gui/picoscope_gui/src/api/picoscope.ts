@@ -133,6 +133,13 @@ export interface PicoscopeSpec {
   data_sources: DataSourceSpec[]
 }
 
+export interface PlotSpec {
+  title: string
+  'x-label': string
+  'y-label': string
+  'x-values': number[]
+}
+
 //
 // ─────────────────────────────────────────────────────────────────────────────
 //  HTTP Helpers
@@ -162,6 +169,15 @@ export async function getPicoscopeSpec(signal?: AbortSignal): Promise<PicoscopeS
   const init: RequestInit = signal ? { signal } : {}
   const r = await fetch(api('/devices/picoscope/spec'), init)
   return parseJSON<PicoscopeSpec>(r)
+}
+
+// GET /devices/picoscope/data/{name}/plot
+export async function getPicoscopePlotSpec(name: string): Promise<PlotSpec> {
+  const r = await fetch(api(`/devices/picoscope/data/${name}/plot`))
+  if (!r.ok) {
+    throw new Error(`failed to fetch plot spec for ${name}: ${r.status}`)
+  }
+  return r.json()
 }
 
 // POST /devices/picoscope { properties: ... }
@@ -255,4 +271,13 @@ export function openEventsSocket(dev_id: string = 'picoscope'): WebSocket {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
   const url = `${proto}://${location.host}/api/v1/events?ids=${dev_id}`
   return new WebSocket(url)
+}
+
+/// ───────────────────────────────────────────
+// stuff for data streams
+/// ───────────────────────────────────────────
+export async function getFrame(dev_id: string = 'picoscope', source: string) {
+  const r = await fetch(api(`/devices/${dev_id}/data/${source}/frame`))
+  if (!r.ok) throw new Error(`frame ${r.status}`)
+  return r.json() // { data: number[] }
 }

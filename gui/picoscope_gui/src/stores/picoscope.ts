@@ -6,11 +6,13 @@ import { ref } from 'vue'
 import {
   getPicoscope,
   getPicoscopeSpec,
+  getPicoscopePlotSpec,
   patchPicoscopeProperties,
   sendPicoscopeCommand,
   openEventsSocket,
   type PicoscopeDevice,
   type PicoscopeSpec,
+  type PlotSpec,
   type PicoscopePropertiesPatch,
   type SetChannelArgs,
   type SetSimpleTriggerArgs,
@@ -31,6 +33,7 @@ export const usePicoscopeStore = defineStore('picoscope', () => {
 
   const spec = ref<PicoscopeSpec | null>(null)
   const device = ref<PicoscopeDevice | null>(null)
+  const plotSpecs = ref<Record<string, PlotSpec>>({})
 
   const ws = ref<WebSocket | null>(null)
   //const lastEvent = ref<any>(null)
@@ -61,6 +64,9 @@ export const usePicoscopeStore = defineStore('picoscope', () => {
       device.value = await getPicoscope()
       connected.value = true
 
+      const ds = spec.value?.data_sources ?? []
+      await Promise.all(ds.filter((s) => s.has_plot).map((s) => fetchPlotSpec(s.name)))
+
       openWS() // TODO - make this configurable somehow? (so that it works with more picoscopes eventually)
     } catch (e) {
       console.error('Picoscope init failed:', e)
@@ -77,6 +83,15 @@ export const usePicoscopeStore = defineStore('picoscope', () => {
     } catch (e) {
       console.warn('refresh failed:', e)
     }
+  }
+
+  async function fetchPlotSpec(name: string): Promise<PlotSpec> {
+    //const cached = plotSpecs.value[name]
+    //if (cached) return cached
+
+    const spec = await getPicoscopePlotSpec(name)
+    plotSpecs.value[name] = spec
+    return spec
   }
 
   /** PATCH /devices/picoscope */
@@ -182,6 +197,7 @@ export const usePicoscopeStore = defineStore('picoscope', () => {
     device,
     ws,
     lastEvent,
+    plotSpecs,
 
     // getters
     state,

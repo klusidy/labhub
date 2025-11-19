@@ -736,7 +736,7 @@ class PicoScope5000a(Device):
         freqs = np.fft.rfftfreq(total_samples, d=dt)[1:]
 
         return {
-            "title":   self.psd_stream_plot.__doc__,
+            "title":   "PSD", #self.psd_stream_plot.__doc__,
             "x-label": "Frequency (Hz)",
             "y-label": "PSD [V^2 / Hz]",
             "x-values": freqs.tolist(),
@@ -801,7 +801,7 @@ class PicoScope5000a(Device):
             freqs = freqs[:num_windows * window_size].reshape(num_windows, window_size).mean(axis=1)
 
         return {
-            "title":   self.psd_stream_downsample_plot.__doc__,
+            "title":   "PSD (downsampled)", #self.psd_stream_downsample_plot.__doc__,
             "x-label": "Frequency (Hz)",
             "y-label": "PSD [V^2 / Hz]",
             "x-values": freqs.tolist(),
