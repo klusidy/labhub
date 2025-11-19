@@ -47,6 +47,7 @@ def api_command(api_name=None, *, doc=None):
         # convenience aliases: @jog.release(), @jog.press()
         method.event = event
         #method.press = event("press")
+        # TODO - document how this works!!!
 
         method.release = event("release")
         

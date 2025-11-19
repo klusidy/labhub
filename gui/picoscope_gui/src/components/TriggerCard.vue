@@ -1,90 +1,120 @@
 <!-- src/components/TriggerCard.vue -->
 <template>
   <q-card flat bordered class="q-pa-sm q-ma-md">
-    <q-card-section class="text-subtitle2 q-py-xs q-px-sm">
-      Trigger settings
+    <q-card-section class="text-subtitle2 q-py-xs q-px-sm row items-center">
+      Trigger
+
+      <q-toggle
+        v-model="trigger.enable"
+        dense
+        checked-icon="check"
+        unchecked-icon="clear"
+        size="xl"
+        class="q-ml-auto"
+        @update:model-value="applyTriggerUpdate()"
+      >
+        <q-tooltip> Enable/disable trigger </q-tooltip>
+      </q-toggle>
     </q-card-section>
     <q-separator />
 
     <div class="q-pa-sm">
       <!-- Row 1: enable, channel, threshold, edge -->
       <div class="row q-col-gutter-sm q-pb-sm items-center">
-        
-
-        <div class="col-4 col-sm-4">
-          <q-select
+        <div class="col-5 col-sm-5">
+          <q-btn-toggle
             v-model="trigger.channel"
-            :options="channelOptions"
-            label="Channel"
-            stack-label
-            dense outlined filled
-            emit-value map-options
-          />
+            :options="
+              channelOptions.map((ch) => ({
+                label: ch,
+                value: ch,
+              }))
+            "
+            :toggle-color="
+              trigger.channel == 'A'
+                ? 'blue'
+                : trigger.channel == 'B'
+                  ? 'red'
+                  : trigger.channel == 'C'
+                    ? 'green'
+                    : trigger.channel == 'D'
+                      ? 'amber'
+                      : 'grey'
+            "
+            dense
+            outlined
+            filled
+            spread
+            @update:model-value="applyTriggerUpdate()"
+          >
+            <q-tooltip> Source channel for trigger </q-tooltip>
+          </q-btn-toggle>
         </div>
-
-        
 
         <div class="col-3 col-sm-3">
-          <q-select
+          <q-btn-toggle
             v-model="trigger.edge"
             :options="edgeOptions"
-            label="Edge"
-            stack-label
-            dense outlined filled
-            emit-value map-options
-          />
-        </div>
-        <div class="col-5 col-sm-5">
-          <q-input
-            v-model.number="trigger.thresholdMv"
-            label="Threshold"
-            stack-label
-            dense outlined filled
-            type="number"
-            inputmode="decimal"
-            suffix="mV"
-            :debounce="150"
-          />
-        </div>
-      </div>
-
-      <!-- Row 2: delay, auto trigger -->
-     
-      <div class="row q-col-gutter-sm q-pt-xs">
-        <div class="col-2 col-sm-2">
-          <q-toggle
-            v-model="trigger.enabled"
-            color="primary"
             dense
-            checked-icon="check"
-            unchecked-icon="clear"
-            size="xl"
-          />
+            outlined
+            filled
+            spread
+            padding:5px
+            @update:model-value="applyTriggerUpdate()"
+          >
+            <q-tooltip> Edge type: Rising, Falling, or Both </q-tooltip>
+          </q-btn-toggle>
         </div>
 
-        <div class="col-6 col-sm-5">
+        <div class="col-4 col-sm-4">
           <q-input
             v-model.number="trigger.delaySamples"
             label="Delay"
             suffix="#"
             stack-label
-            dense outlined filled
+            dense
+            outlined
+            filled
             type="number"
             inputmode="decimal"
             :debounce="150"
+            @update:model-value="applyTriggerUpdate()"
+          />
+        </div>
+      </div>
+
+      <!-- Row 2 -->
+
+      <div class="row q-col-gutter-sm q-pt-xs">
+        <div class="col-6 col-sm-6">
+          <q-input
+            v-model.number="trigger.thresholdMv"
+            label="Threshold"
+            stack-label
+            dense
+            outlined
+            filled
+            type="number"
+            inputmode="decimal"
+            suffix="mV"
+            :debounce="150"
+            @update:model-value="applyTriggerUpdate()"
           />
         </div>
 
-        <div class="col-6 col-sm-5">
+        <div class="col-6 col-sm-6">
           <q-input
-            v-model.number="trigger.autoTriggerSamples"
+            v-model.number="trigger.autoTriggerMs"
             label="Auto trigger"
-            suffix="#"
+            suffix="ms"
             stack-label
-            dense outlined filled
+            dense
+            outlined
+            filled
             type="number"
             inputmode="decimal"
             :debounce="150"
+            @update:model-value="applyTriggerUpdate()"
           />
         </div>
       </div>
@@ -93,32 +123,71 @@
 </template>
 
 <script setup lang="ts">
-import { reactive } from 'vue'
+  import { computed, reactive, watch } from 'vue'
+  import { debounce } from 'lodash-es'
+  import { usePicoscopeStore } from 'stores/picoscope'
+  import type { ChannelId } from 'src/api/picoscope'
 
-type Edge = 'rising' | 'falling'
+  type Edge = 'RISING' | 'FALLING' | 'RISING_OR_FALLING'
 
-interface TriggerState {
-  enabled: boolean
-  channel: string
-  thresholdMv: number
-  edge: Edge
-  delaySamples: number
-  autoTriggerSamples: number
-}
+  interface TriggerState {
+    enable: boolean
+    channel: string
+    thresholdMv: number
+    edge: Edge
+    delaySamples: number
+    autoTriggerMs: number
+  }
 
-const trigger = reactive<TriggerState>({
-  enabled: false,
-  channel: 'A',
-  thresholdMv: 500,
-  edge: 'falling',
-  delaySamples: 0,
-  autoTriggerSamples: 0,
-})
+  const trigger = reactive<TriggerState>({
+    enable: false,
+    channel: 'A',
+    thresholdMv: 500,
+    edge: 'FALLING',
+    delaySamples: 0,
+    autoTriggerMs: 0,
+  })
 
-const channelOptions = ['A', 'B', 'C', 'D']
+  const channelOptions = ['A', 'B', 'C', 'D']
 
-const edgeOptions = [
-  { label: '↗',  value: 'rising'  as Edge },
-  { label: '↘', value: 'falling' as Edge },
-]
+  const edgeOptions = [
+    { label: '↗', value: 'RISING' as Edge },
+    { label: '⤮', value: 'RISING_OR_FALLING' as Edge },
+    { label: '↘', value: 'FALLING' as Edge },
+  ]
+
+  // synchronize backend -> local UI state
+
+  const ps = usePicoscopeStore()
+
+  watch(
+    () => ps.trigger(),
+    (raw) => {
+      if (!raw) return
+      trigger.enable = 1 === raw.enable
+      trigger.channel = raw.source_str
+      trigger.thresholdMv = raw.threshold_mV
+      trigger.edge = raw.direction_str as Edge
+      trigger.delaySamples = raw.delay
+      trigger.autoTriggerMs = raw.auto_trigger_ms
+    },
+    { immediate: true }
+  )
+
+  import { toRaw } from 'vue'
+  function applyTriggerUpdate() {
+    // snapshot current UI state
+    void debouncedTriggerUpdate({ ...toRaw(trigger) })
+  }
+
+  const debouncedTriggerUpdate = debounce(async (v: typeof trigger) => {
+    await ps.setTriggerSimple({
+      enable: v.enable,
+      source: v.channel as ChannelId,
+      threshold_mV: v.thresholdMv,
+      direction: v.edge,
+      delay: v.delaySamples,
+      auto_trigger_ms: v.autoTriggerMs,
+    })
+  }, 200)
 </script>

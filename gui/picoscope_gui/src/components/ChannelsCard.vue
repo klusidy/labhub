@@ -122,7 +122,12 @@ watch(
 )
 
 // debounced update to backend
-const applyChannelUpdate = debounce(async (id: ChannelId) => {
+import { toRaw } from 'vue'
+function applyChannelUpdate(id: ChannelId) {
+  void debouncedChannelUpdate(id, { ...toRaw(local[id]) }) // snapshot current UI state
+}
+
+const debouncedChannelUpdate = debounce(async (id: ChannelId, ch: LocalChannel) => {
   const v = local[id]
 
   await ps.setChannel({
@@ -133,7 +138,9 @@ const applyChannelUpdate = debounce(async (id: ChannelId) => {
   })
 }, 200)
 
-function channelColor(id: string): string {
+
+
+function channelColor(id: string): string { // todo - refactor channel color elsewhere
   switch (id) {
     case 'A': return 'blue'
     case 'B': return 'red'

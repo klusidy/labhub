@@ -130,6 +130,10 @@ class Device:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(executor, lambda: func(*args, **kwargs))
     
+    async def _on_device(self, func, *args, **kwargs): #TODO - REFACTOR TO ^^^^ 
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(executor, lambda: func(*args, **kwargs))
+    
     async def poll_property(self, name: str) -> Any:
         """Read one property from device and update cache."""
         async with self.LOCK:

@@ -9,7 +9,6 @@ import {
   patchPicoscopeProperties,
   sendPicoscopeCommand,
   openEventsSocket,
-
   type PicoscopeDevice,
   type PicoscopeSpec,
   type PicoscopePropertiesPatch,
@@ -20,10 +19,7 @@ import {
   ChannelIdFromIndex,
 } from 'src/api/picoscope'
 
-
-
 export const usePicoscopeStore = defineStore('picoscope', () => {
-
   //
   // ───────────────────────────────────────────
   // State
@@ -40,8 +36,6 @@ export const usePicoscopeStore = defineStore('picoscope', () => {
   //const lastEvent = ref<any>(null)
   const lastEvent = ref<unknown>(null)
 
-
-
   //
   // ───────────────────────────────────────────
   // Getters (simple function getters are fine)
@@ -51,8 +45,6 @@ export const usePicoscopeStore = defineStore('picoscope', () => {
   const state = () => device.value?.state
   const channels = () => device.value?.state?._channel_settings
   const trigger = () => device.value?.state?._trigger_settings
-
-
 
   //
   // ───────────────────────────────────────────
@@ -69,7 +61,7 @@ export const usePicoscopeStore = defineStore('picoscope', () => {
       device.value = await getPicoscope()
       connected.value = true
 
-      openWS()
+      openWS() // TODO - make this configurable somehow? (so that it works with more picoscopes eventually)
     } catch (e) {
       console.error('Picoscope init failed:', e)
       connected.value = false
@@ -77,7 +69,6 @@ export const usePicoscopeStore = defineStore('picoscope', () => {
       loading.value = false
     }
   }
-
 
   /** GET fresh /devices/picoscope */
   async function refresh() {
@@ -88,7 +79,6 @@ export const usePicoscopeStore = defineStore('picoscope', () => {
     }
   }
 
-
   /** PATCH /devices/picoscope */
   async function patchProps(props: PicoscopePropertiesPatch) {
     try {
@@ -97,7 +87,6 @@ export const usePicoscopeStore = defineStore('picoscope', () => {
       console.error('patchProps failed:', e)
     }
   }
-
 
   /** set_channel command */
   async function setChannel(args: SetChannelArgs) {
@@ -109,7 +98,6 @@ export const usePicoscopeStore = defineStore('picoscope', () => {
     }
   }
 
-
   /** set_simple_trigger command */
   async function setTriggerSimple(args: SetSimpleTriggerArgs) {
     try {
@@ -120,16 +108,17 @@ export const usePicoscopeStore = defineStore('picoscope', () => {
     }
   }
 
-
   /** acquire_to_file command */
   async function acquireToFile(args: AcquireToFileArgs) {
     try {
-      await sendPicoscopeCommand('acquire_to_file', args)
+      const r = await sendPicoscopeCommand('acquire_to_file', args)
+      return r
     } catch (e) {
       console.error('acquireToFile failed:', e)
+      const r = 'error (look in the consocle for details)'
+      return r
     }
   }
-
 
   //
   // ───────────────────────────────────────────
@@ -137,52 +126,47 @@ export const usePicoscopeStore = defineStore('picoscope', () => {
   // ───────────────────────────────────────────
   //
 
-  function openWS() {
+  function openWS(dev_id: string = 'picoscope') {
     if (ws.value) {
       ws.value.close()
       ws.value = null
     }
 
-    const socket = openEventsSocket()
+    const socket = openEventsSocket(dev_id)
     ws.value = socket
 
     socket.onopen = () => console.log('event WS opened')
 
     socket.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data)
+        lastEvent.value = msg
+        console.log('WS msg:', msg) // temporary debug log
 
-  try {
-    const msg = JSON.parse(ev.data)
-    lastEvent.value = msg
-    console.log('WS msg:', msg) // temporary debug log
+        // tolerate both shapes: { id: "picoscope", ... } or { device: "picoscope", ... }
+        const id = msg.id ?? msg.device
 
-
-    // tolerate both shapes: { id: "picoscope", ... } or { device: "picoscope", ... }
-    const id = msg.id ?? msg.device
-
-    if (id === 'picoscope') {
-      // if it looks like a full device object
-      if (msg.state) {
-        // full device update
-        device.value = {
-          id: 'picoscope',
-          kind: msg.kind ?? device.value?.kind ?? '',
-          status: msg.status ?? device.value?.status ?? '',
-          locked_by: msg.locked_by ?? device.value?.locked_by ?? null,
-          state: msg.state,
+        if (id === 'picoscope') {
+          // if it looks like a full device object
+          if (msg.state) {
+            // full device update
+            device.value = {
+              id: 'picoscope',
+              kind: msg.kind ?? device.value?.kind ?? '',
+              status: msg.status ?? device.value?.status ?? '',
+              locked_by: msg.locked_by ?? device.value?.locked_by ?? null,
+              state: msg.state,
+            }
+          }
         }
+      } catch (err) {
+        console.warn('bad WS packet', err)
       }
     }
-  } catch (err) {
-    console.warn('bad WS packet', err)
-  }
-}
-
 
     socket.onerror = (e) => console.error('WS error', e)
     socket.onclose = () => console.warn('WS closed')
   }
-
-
 
   //
   // ───────────────────────────────────────────

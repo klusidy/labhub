@@ -1,7 +1,24 @@
 <!-- src/components/AcquisitionCard.vue -->
 <template>
   <q-card flat bordered class="q-pa-sm q-ma-md">
-    <q-card-section class="text-subtitle2 q-py-xs q-px-sm">File acquisition</q-card-section>
+    <q-card-section class="text-subtitle2 q-py-xs q-px-sm row items-center">
+      <div>File acquisition</div>
+
+      <q-space />
+
+      <q-btn
+        color="primary"
+        :disable="in_progress"
+        :loading="in_progress"
+        @click="startAcquisition"
+        style="width: 180px"
+        dense
+      >
+        <!--//:percentage="in_progress" to indicate progress-->
+        Start acquisition
+      </q-btn>
+    </q-card-section>
+
     <q-separator />
 
     <div class="q-pa-sm">
@@ -11,110 +28,95 @@
             v-model="form.folder"
             label="Folder"
             stack-label
-            dense outlined filled
+            dense
+            outlined
+            filled
+            :disable="in_progress"
           />
         </div>
 
-        <div class="col-12">
+        <div class="col-7 col-sm-7">
           <q-input
             v-model="form.filename"
+            :disable="in_progress"
             label="Filename"
             stack-label
-            dense outlined filled
+            dense
+            outlined
+            filled
           />
         </div>
 
-        <div class="col-6 col-sm-6">
+        <div class="col-5 col-sm-5">
           <q-input
             v-model.number="form.durationSec"
+            :disable="in_progress"
             label="Duration"
             stack-label
-            dense outlined filled
-            type="number" inputmode="decimal" suffix="s" :debounce="150"
+            dense
+            outlined
+            filled
+            type="number"
+            inputmode="decimal"
+            suffix="s"
+            :debounce="150"
           />
-        </div>
-
-        <div class="col-6 flex items-center q-gutter-sm">
-          <q-btn
-            color="primary"
-            :disable="progress.loading"
-            :loading="progress.loading"
-            :percentage="progress.percentage"
-            @click="startAcquisition"
-            style="width: 180px"
-          >
-            Start acquisition
-            <!-- <template #loading>
-              <q-spinner-gears class="on-left" />
-              Acquiring…
-            </template> -->
-          </q-btn>
-
-          <q-linear-progress
-            v-if="progress.loading || progress.percentage > 0"
-            :value="progress.percentage / 100"
-            track-color="grey-3"
-            class="col grow"
-            rounded
-          />
-
-          <!-- <div class="text-caption text-grey-7">
-            {{ progress.status }}
-          </div> -->
         </div>
       </div>
     </div>
+
+    <q-separator class="q-mt-sm q-mb-sm" />
+
+    <pre
+      class="cmd-result"
+      style="
+        background: #fafafa;
+        border: 1px solid #eee;
+        border-radius: 6px;
+        padding: 8px;
+        margin-top: 8px;
+        max-height: 240px;
+        overflow: auto;
+      "
+      >{{ resultText }}</pre
+    >
   </q-card>
 </template>
 
 <script setup lang="ts">
-import { reactive } from 'vue'
+  import { reactive, ref } from 'vue'
+  import { usePicoscopeStore } from 'stores/picoscope'
 
-type FormState = {
-  folder: string | null   // directory selection returns files; fine as placeholder
-  filename: string
-  durationSec: number
-}
-type ProgressState = {
-  loading: boolean
-  percentage: number   // 0..100
-  status: string
-}
+  const ps = usePicoscopeStore()
 
-const form = reactive<FormState>({
-  folder: null,
-  filename: 'capture',
-  durationSec: 10,
-})
+  type FormState = {
+    folder: string
+    filename: string
+    durationSec: number
+  }
 
-const progress = reactive<ProgressState>({
-  loading: false,
-  percentage: 0,
-  status: 'Idle',
-})
+  const form = reactive<FormState>({
+    folder: 'C:/Users/jankl/Downloads',
+    filename: 'capture',
+    durationSec: 1,
+  })
 
-// Placeholder simulation of a long task with progress
-function startAcquisition() {
-  if (progress.loading) return
-  progress.loading = true
-  progress.percentage = 0
-  progress.status = 'Preparing…'
+  const in_progress = ref<boolean>(false)
+  const resultText = ref<string>('{}') // TODO figure out a better way to show results
 
-  let step = 0
-  const timer = setInterval(() => {
-    step += 1
-    progress.percentage = Math.min(100, step * 5)
-    progress.status = progress.percentage < 100 ? 'Acquiring…' : 'Finalizing…'
+  async function startAcquisition() {
+    if (in_progress.value) return
 
-    if (progress.percentage >= 100) {
-      clearInterval(timer)
-      setTimeout(() => {
-        progress.loading = false
-        progress.status = 'Done'
-        // keep bar at 100% briefly; reset if you prefer:
-        // progress.percentage = 0; progress.status = 'Idle'
-      }, 400)
+    in_progress.value = true
+    resultText.value = ''
+
+    const args = {
+      folder: form.folder,
+      filename: form.filename,
+      acquisition_duration_s: form.durationSec,
     }
-  }, 200)
-}
+    const r = await ps.acquireToFile(args)
+    resultText.value = JSON.stringify(r, null, 2)
+    in_progress.value = false
+  }
 </script>

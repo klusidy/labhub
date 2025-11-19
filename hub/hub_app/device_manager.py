@@ -71,9 +71,14 @@ class DeviceManager:
             state = {}
             try:
                 while not self._stop_evt.is_set():
+                    #for k in keys:
+                    #    state[k] = await dev.poll_property(k)
+                    #await self.event_bus.publish({"type": "device.state", "id": dev_id, "state": state})
                     for k in keys:
-                        state[k] = await dev.poll_property(k)
-                    await self.event_bus.publish({"type": "device.state", "id": dev_id, "state": state})
+                        _ = await dev.poll_property(k) # read actual values to cache
+                    st = await dev.read_state() # read cached values (incl. extra info)
+                    await self.event_bus.publish({"type":"device.state","id":dev_id,"state":st})
+                    
                     await asyncio.sleep(dev.polling_interval / 1000)
             except asyncio.CancelledError:
                 pass
@@ -135,7 +140,7 @@ class DeviceManager:
     async def apply_properties(self, dev_id: str, properties: dict) -> DeviceInfo:
         dev = self.devices[dev_id]
         #t0=time.perf_counter();
-        st = await dev.apply_properties(properties)
+        st = await dev.apply_properties(properties) # should not read back state - use read_state explicitely TODO 
         #t1=time.perf_counter();
         await self.event_bus.publish({"type": "device.state", "id": dev_id, "state": st})
         #t2=time.perf_counter(); print(f"set={(t1-t0)*1000:.1f}ms publish={(t2-t1)*1000:.1f}ms")

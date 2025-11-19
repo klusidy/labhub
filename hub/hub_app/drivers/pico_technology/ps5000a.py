@@ -353,20 +353,7 @@ class PicoScope5000a(Device):
     def max_data_seconds(self) -> float:
         """Maximum number of samples that can be captured in one acquisition."""
         return self._max_samples * self._time_interval_ns * 1e-9
-    
-    @api_property()
-    @property
-    def pre_trigger_samples(self) -> int:
-        """Number of pre-trigger samples in the current acquisition."""
-        return self._pre_trigger_samples
-    
-    @pre_trigger_samples.setter # TODO raw stream dependency
-    def pre_trigger_samples(self, value: int) -> None:
-        if not (0 <= value <= self._max_samples):
-            raise ValueError(f"pre_trigger_samples must be between 0 and {self._max_samples}")
-        self._pre_trigger_samples = value
-        return value
-    
+     
     @api_property()
     @property
     def post_trigger_samples(self) -> int:  
@@ -381,9 +368,22 @@ class PicoScope5000a(Device):
         return value
     @api_property(unit="s")
     @property
-    def post_trigger_samples_seconts(self) -> float:
+    def post_trigger_samples_seconds(self) -> float: # TODO link different units to the same property
         """Number of post-trigger samples in the current acquisition."""
         return self._post_trigger_samples * self._time_interval_ns * 1e-9
+
+    @api_property()
+    @property
+    def pre_trigger_samples(self) -> int:
+        """Number of pre-trigger samples in the current acquisition."""
+        return self._pre_trigger_samples
+    
+    @pre_trigger_samples.setter # TODO raw stream dependency
+    def pre_trigger_samples(self, value: int) -> None:
+        if not (0 <= value <= self._max_samples):
+            raise ValueError(f"pre_trigger_samples must be between 0 and {self._max_samples}")
+        self._pre_trigger_samples = value
+        return value
     
     @api_property()
     @property
@@ -458,8 +458,11 @@ class PicoScope5000a(Device):
         ret = {"status": self.status["trigger"],
                 "enable": _enable,
                 "source": _source,
+                "source_str": source,
                 "threshold": _threshold,
+                "threshold_mV": threshold_mV,
                 "direction": _direction,
+                "direction_str": direction,
                 "delay": _delay,
                 "auto_trigger_ms": _auto_trigger_ms}
         
@@ -585,6 +588,7 @@ class PicoScope5000a(Device):
         return {
             "ok": True,
             "file": path,
+            "duration_s": acquisition_duration_s,
             "channels": channels_active,
             "samples": ns,
             "fs_hz": sampling_frequency_hz,
