@@ -96,7 +96,7 @@
   }
 
   const form = reactive<FormState>({
-    folder: 'C:/Users/jankl/Downloads',
+    folder: '%USERPROFILE%/Downloads',
     filename: 'capture',
     durationSec: 1,
   })

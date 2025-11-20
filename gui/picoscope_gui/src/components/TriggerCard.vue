@@ -143,9 +143,9 @@
     enable: false,
     channel: 'A',
     thresholdMv: 500,
-    edge: 'FALLING',
+    edge: 'RISING',
     delaySamples: 0,
-    autoTriggerMs: 0,
+    autoTriggerMs: 1000,
   })
 
   const channelOptions = ['A', 'B', 'C', 'D']
@@ -163,13 +163,21 @@
   watch(
     () => ps.trigger(),
     (raw) => {
-      if (!raw) return
-      trigger.enable = 1 === raw.enable
-      trigger.channel = raw.source_str
-      trigger.thresholdMv = raw.threshold_mV
-      trigger.edge = raw.direction_str as Edge
-      trigger.delaySamples = raw.delay
-      trigger.autoTriggerMs = raw.auto_trigger_ms
+      if (!raw || Object.keys(raw).length === 0) {
+        trigger.enable = false
+        trigger.channel = 'A'
+        trigger.thresholdMv = 0.0
+        trigger.edge = 'RISING_OR_FALLING'
+        trigger.delaySamples = 0
+        trigger.autoTriggerMs = 1000
+      } else {
+        trigger.enable = 1 === raw.enable
+        trigger.channel = raw.source_str
+        trigger.thresholdMv = raw.threshold_mV
+        trigger.edge = raw.direction_str as Edge
+        trigger.delaySamples = raw.delay
+        trigger.autoTriggerMs = raw.auto_trigger_ms
+      }
     },
     { immediate: true }
   )
