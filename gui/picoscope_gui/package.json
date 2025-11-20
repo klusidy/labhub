@@ -2,7 +2,7 @@
   "name": "picoscope-gui",
   "version": "0.0.1",
   "description": "Simple GUI for labhub/picoscope",
-  "productName": "picoscope_gui",
+  "productName": "LabHub v1: Picoscope",
   "author": "Jan Klusacek <klusacek.j@gmail.com>",
   "type": "module",
   "private": true,

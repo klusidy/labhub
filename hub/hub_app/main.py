@@ -114,6 +114,11 @@ WEB_DIST = Path(__file__).parent.parent / "web" / "dist"
 if WEB_DIST.exists():
     app.mount("/ui", staticfiles.StaticFiles(directory=str(WEB_DIST), html=True), name="ui")
 
+GUI_PICOSCOPE_DIST = Path(__file__).parent.parent.parent / "gui" / "picoscope_gui" / "dist" / "spa"
+if GUI_PICOSCOPE_DIST.exists():
+    app.mount("/picoscope", staticfiles.StaticFiles(directory=str(GUI_PICOSCOPE_DIST), html=True), name="picoscope")
+
+
 # ---- API ----
 @app.get("/api/v1/devices", response_model=list[DeviceInfo])
 async def list_devices():

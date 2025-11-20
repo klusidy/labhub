@@ -1,7 +1,7 @@
 // Configuration for your app
 // https://v2.quasar.dev/quasar-cli-vite/quasar-config-file
 
-import { defineConfig } from '#q-app/wrappers';
+import { defineConfig } from '#q-app/wrappers'
 
 export default defineConfig((/* ctx */) => {
   return {
@@ -32,6 +32,9 @@ export default defineConfig((/* ctx */) => {
 
     // Full list of options: https://v2.quasar.dev/quasar-cli-vite/quasar-config-file#build
     build: {
+      distDir: 'dist/spa', // default
+      publicPath: '/picoscope/',
+
       target: {
         browser: ['es2022', 'firefox115', 'chrome115', 'safari14'],
         node: 'node20',
@@ -75,6 +78,16 @@ export default defineConfig((/* ctx */) => {
           { server: false },
         ],
       ],
+
+      extendViteConf(viteConf) {
+        viteConf.build = viteConf.build || {}
+        viteConf.build.rollupOptions = viteConf.build.rollupOptions || {}
+        viteConf.build.rollupOptions.output = {
+          entryFileNames: `assets/[name].js`,
+          chunkFileNames: `assets/[name].js`,
+          assetFileNames: `assets/[name].[ext]`,
+        }
+      },
     },
 
     // Full list of options: https://v2.quasar.dev/quasar-cli-vite/quasar-config-file#devserver
@@ -85,7 +98,7 @@ export default defineConfig((/* ctx */) => {
           target: 'http://localhost:8212', // your FastAPI server
           changeOrigin: true,
           secure: false,
-          ws: true,        // important for /api/v1/events websocket
+          ws: true, // important for /api/v1/events websocket
         },
       },
       open: true, // opens browser window automatically
@@ -221,5 +234,5 @@ export default defineConfig((/* ctx */) => {
        */
       extraScripts: [],
     },
-  };
-});
+  }
+})
