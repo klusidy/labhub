@@ -80,6 +80,13 @@ export interface PicoscopeDevice {
   state: PicoscopeState
 }
 
+export type Frame = {
+  source: string
+  seq: number
+  ts: number
+  multiplier?: number
+} & Partial<Record<ChannelId, number[]>>
+
 //
 // ─────────────────────────────────────────────────────────────────────────────
 //  Spec Types
@@ -138,6 +145,7 @@ export interface PlotSpec {
   'x-label': string
   'y-label': string
   'x-values': number[]
+  channel_settings?: Record<ChannelId, ChannelSettings>
 }
 
 //
@@ -251,6 +259,16 @@ export async function sendPicoscopeCommand<K extends PicoscopeCommandName>(
   return await r.json()
 }
 
+export async function restartPicoscope(): Promise<string> {
+  const r = await fetch(api('/admin/reload/picoscope'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '',
+  })
+  if (!r.ok) throw new Error(`picoscope restart failed ${r.status}`)
+  return await r.json()
+}
+
 // export async function runPicoscopeCommand(name: string, args: Record<string, any> = {}) {
 //   const r = await fetch(api(`/devices/picoscope/commands`), {
 //     method:'POST', headers:{'Content-Type':'application/json'},
@@ -276,8 +294,24 @@ export function openEventsSocket(dev_id: string = 'picoscope'): WebSocket {
 /// ───────────────────────────────────────────
 // stuff for data streams
 /// ───────────────────────────────────────────
-export async function getFrame(dev_id: string = 'picoscope', source: string) {
+export async function getFrame(source: string): Promise<Frame> {
+  const dev_id = 'picoscope' // TODO - make into parameter
   const r = await fetch(api(`/devices/${dev_id}/data/${source}/frame`))
   if (!r.ok) throw new Error(`frame ${r.status}`)
   return r.json() // { data: number[] }
+}
+
+export function openDataStream(
+  source: string,
+  rate?: number,
+  format: 'json' | 'msgpack' = 'json'
+): WebSocket {
+  const dev_id = 'picoscope' // TODO - make into parameter
+  const qs = new URLSearchParams()
+  if (rate) qs.set('rate', String(rate))
+  qs.set('format', format)
+  const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/v1/streams/${dev_id}/${source}?${qs}`
+  const ws = new WebSocket(url)
+  if (format === 'msgpack') ws.binaryType = 'arraybuffer'
+  return ws
 }

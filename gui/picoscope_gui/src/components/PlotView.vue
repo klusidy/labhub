@@ -15,7 +15,8 @@
           label="Once"
           color="green"
           icon="refresh"
-          @click="onOnce"
+          :disable="running"
+          @click="fetchAndUpdateOnce"
         />
 
         <q-btn
@@ -26,9 +27,9 @@
           rounded
           size="md"
           :label="running ? 'Stop' : 'Start'"
-          color="green"
+          :color="running ? 'red' : 'green'"
           class="full-width"
-          icon="play_circle"
+          :icon="running ? 'stop_circle' : 'play_circle'"
           @click="onStartStop"
         />
 
@@ -41,6 +42,7 @@
           filled
           type="number"
           inputmode="decimal"
+          :disable="running"
           :min="0.1"
           :step="0.1"
         />
@@ -89,20 +91,28 @@
 <script setup lang="ts">
   import { onMounted, onBeforeUnmount, ref, watch } from 'vue'
   import Plotly from 'plotly.js-dist-min'
-  import type { Data } from 'plotly.js'
+  import type { Data, PlotlyHTMLElement, Layout } from 'plotly.js'
   import { usePicoscopeStore } from 'stores/picoscope'
-  import { getFrame } from 'src/api/picoscope' // adjust path
+  import { getFrame, openDataStream } from 'src/api/picoscope' // adjust path
+  import type { Frame, ChannelId, PlotSpec } from 'src/api/picoscope'
+  import { last } from 'lodash-es'
+
+  const ps = usePicoscopeStore()
+
+  const spec = ref<PlotSpec | null>(null)
+
+  let ws: WebSocket | null = null
+
+  const lastFrame = ref<Frame | null>(null)
 
   const props = defineProps<{
-    kind: string
+    name: string
     title?: string
-    xLabel?: string
-    yLabel?: string
     xScale: 'linear' | 'log'
     yScale: 'linear' | 'log'
   }>()
 
-  const el = ref<HTMLDivElement | null>(null)
+  const el = ref<PlotlyHTMLElement | null>(null)
   let plotted = false
 
   const running = ref(false)
@@ -110,6 +120,13 @@
 
   const xScaleLocal = ref<'linear' | 'log'>(props.xScale)
   const yScaleLocal = ref<'linear' | 'log'>(props.yScale)
+
+  const CHANNEL_COLORS: Record<ChannelId, string> = {
+    A: '#2196f3', // blue
+    B: '#f44336', // red
+    C: '#4caf50', // green
+    D: '#ffc107', // amber/orange
+  }
 
   watch(
     () => props.xScale,
@@ -120,26 +137,42 @@
     (v) => (yScaleLocal.value = v)
   )
 
-  let timer: number | null = null
+  watch(
+    () => ps.plotSpecs?.[props.name],
+    (newSpec) => {
+      if (newSpec) {
+        spec.value = newSpec
+        // If we already plotted a frame, redraw using new spec
+        if (plotted && lastFrame.value) {
+          void updatePlotFromFrame(lastFrame.value)
+        }
+      }
+    },
+    { immediate: true } // so first spec loads instantly
+  )
 
-  // --- placeholder data, just to see something --- //
-  function buildDummyData(kind: typeof props.kind): Data[] {
-    const n = 500
-    const x = Array.from({ length: n }, (_, i) => i * 0.1)
-    const y = x.map((t) => {
-      if (kind === 'psd') return 1 / Math.sqrt(t + 1) + 0.05 * Math.random()
-      if (kind === 'psd_avg') return 1 / (t + 1) + 0.02 * Math.random()
-      return 0.01 * Math.sin(t) + 0.005 * (Math.random() - 0.5)
-    })
-    return [
-      {
+  // frame is whatever I get from frame API/WS
+  // data is what plotly needs
+  function buildDataFromFrame(frame: Frame): Data[] {
+    const xVals = spec.value?.['x-values']
+    const chanKeys: ChannelId[] = (['A', 'B', 'C', 'D'] as ChannelId[])
+      .filter((ch) => ps.channels()?.[ch].enable === 1) // only enabled channels
+      .filter((ch) => Array.isArray(frame[ch])) // only those present in frame
+
+    return chanKeys.map((ch) => {
+      const multiplier = spec.value?.channel_settings?.[ch]?.multiplier || 1 // apply multiplier if present
+      const y = (frame[ch] as number[]).map((v) => v * multiplier)
+      const x = xVals || y.map((_, i) => i) // default to simple index on X
+
+      return {
         x,
         y,
         mode: 'lines',
-        type: 'scattergl', // WebGL, good for many points
-        name: kind,
-      },
-    ]
+        type: 'scattergl',
+        name: ch,
+        line: { color: CHANNEL_COLORS[ch] },
+      }
+    })
   }
 
   function buildLayout(): Record<string, unknown> {
@@ -147,90 +180,199 @@
       title: props.title ?? '',
       margin: { t: 40, l: 60, r: 10, b: 40 },
       xaxis: {
-        title: props.xLabel ?? '',
+        title: {
+          text: spec.value?.['x-label'] ?? '',
+          standoff: 10,
+        },
         type: xScaleLocal.value,
       },
       yaxis: {
-        title: props.yLabel ?? '',
+        title: {
+          text: spec.value?.['y-label'] ?? '',
+          standoff: 10,
+        },
         type: yScaleLocal.value,
       },
+      showlegend: true,
       uirevision: 'keep-zoom',
     }
   }
 
-  async function drawInitial() {
+  async function updatePlotFromFrame(frame: Frame) {
     if (!el.value) return
-    const data = buildDummyData(props.kind)
-    await Plotly.newPlot(el.value, data, buildLayout(), {
-      responsive: true,
-      displaylogo: false,
-      scrollZoom: true,
-    })
-    plotted = true
-  }
 
-  function updatePlot() {
-    if (!el.value || !plotted) return
-    const data = buildDummyData(props.kind)
-    void Plotly.react(el.value, data, buildLayout())
-  }
+    const data = buildDataFromFrame(frame)
+    const layout = buildLayout()
 
-  function onOnce() {
-    updatePlot()
-  }
-
-  function clearTimer() {
-    if (timer !== null) {
-      clearInterval(timer)
-      timer = null
+    if (!plotted) {
+      await Plotly.newPlot(el.value, data, layout, {
+        responsive: true,
+        displaylogo: false,
+        scrollZoom: true,
+      })
+      plotted = true
+    } else {
+      void Plotly.react(el.value, data, layout)
     }
   }
 
-  function startTimer() {
-    clearTimer()
-    const intervalMs = Math.max(10, Math.round(1000 / Math.max(rateHz.value, 0.1)))
-    timer = window.setInterval(() => {
-      updatePlot()
-    }, intervalMs)
+  async function fetchAndUpdateOnce() {
+    const frame: Frame = await getFrame(props.name)
+    lastFrame.value = frame
+    await updatePlotFromFrame(frame)
   }
 
   function onStartStop() {
     if (running.value) {
-      running.value = false
-      clearTimer()
+      //running.value = false
+      stopStream()
     } else {
-      running.value = true
-      startTimer()
+      // running.value = true
+      startStream()
     }
   }
 
-  watch(rateHz, () => {
-    if (running.value) startTimer()
-  })
-
   watch(
-    () =>
-      [
-        props.kind,
-        props.title,
-        props.xLabel,
-        props.yLabel,
-        xScaleLocal.value,
-        yScaleLocal.value,
-      ] as const,
+    () => [props.name, props.title] as const, //, xScaleLocal.value, yScaleLocal.value
     () => {
       if (!plotted) return
-      updatePlot()
+      if (!lastFrame.value) return
+      void updatePlotFromFrame(lastFrame.value)
     }
   )
 
+  watch(xScaleLocal, (newScale, oldScale) => {
+    if (!plotted || !el.value) return
+    const gd = el.value
+    const full = gd.layout.xaxis
+    const oldRange = full?.range as [number, number] | undefined
+
+    const update: Partial<Layout> = {}
+
+    if (!oldRange || oldRange[0] === oldRange[1]) {
+      // no useful range → just flip type and autorange
+      update['xaxis.type'] = newScale
+      update['xaxis.autorange'] = true
+      void Plotly.relayout(gd, update)
+      return
+    }
+
+    const [r0, r1] = oldRange
+
+    if (oldScale === 'linear' && newScale === 'log') {
+      // r0, r1 are in data units
+      if (r0 > 0 && r1 > 0) {
+        update['xaxis.type'] = 'log'
+        update['xaxis.range'] = [Math.log10(r0), Math.log10(r1)]
+      } else {
+        update['xaxis.type'] = 'log'
+        update['xaxis.autorange'] = true
+      }
+    } else if (oldScale === 'log' && newScale === 'linear') {
+      // r0, r1 are log10(data)
+      update['xaxis.type'] = 'linear'
+      update['xaxis.range'] = [Math.pow(10, r0), Math.pow(10, r1)]
+    } else {
+      // same scale? or unexpected combo
+      update['xaxis.type'] = newScale
+      update['xaxis.autorange'] = true
+    }
+
+    void Plotly.relayout(gd, update)
+  })
+
+  watch(yScaleLocal, (newScale, oldScale) => {
+    if (!plotted || !el.value) return
+    const gd = el.value
+    const full = gd.layout?.yaxis
+    const oldRange = full?.range as [number, number] | undefined
+
+    const update: Partial<Layout> = {}
+
+    if (!oldRange || oldRange[0] === oldRange[1]) {
+      update['yaxis.type'] = newScale
+      update['yaxis.autorange'] = true
+      void Plotly.relayout(gd, update)
+      return
+    }
+
+    const [r0, r1] = oldRange
+
+    if (oldScale === 'linear' && newScale === 'log') {
+      if (r0 > 0 && r1 > 0) {
+        update['yaxis.type'] = 'log'
+        update['yaxis.range'] = [Math.log10(r0), Math.log10(r1)]
+      } else {
+        update['yaxis.type'] = 'log'
+        update['yaxis.autorange'] = true
+      }
+    } else if (oldScale === 'log' && newScale === 'linear') {
+      update['yaxis.type'] = 'linear'
+      update['yaxis.range'] = [Math.pow(10, r0), Math.pow(10, r1)]
+    } else {
+      update['yaxis.type'] = newScale
+      update['yaxis.autorange'] = true
+    }
+
+    void Plotly.relayout(gd, update)
+  })
+
+  function stopStream() {
+    if (ws) {
+      try {
+        ws.close()
+      } catch (e) {
+        console.error('error closing WS', e)
+      }
+      ws = null
+    }
+    running.value = false
+  }
+
+  function startStream() {
+    // close any existing stream first
+    stopStream()
+
+    try {
+      ws = openDataStream(props.name, rateHz.value, 'json')
+      running.value = true
+
+      ws.onmessage = (ev: MessageEvent) => {
+        try {
+          const raw =
+            typeof ev.data === 'string' ? ev.data : new TextDecoder().decode(ev.data as ArrayBuffer)
+
+          const frame = JSON.parse(raw) as Frame
+          lastFrame.value = frame
+          void updatePlotFromFrame(frame)
+        } catch (e) {
+          console.error('failed to parse stream frame', e)
+        }
+      }
+
+      ws.onerror = (ev) => {
+        console.error('stream error', ev)
+      }
+
+      ws.onclose = () => {
+        // freeze on last frame
+        ws = null
+        running.value = false
+      }
+    } catch (e) {
+      console.error('openDataStream failed', e)
+      running.value = false
+      ws = null
+    }
+  }
+
   onMounted(async () => {
-    await drawInitial()
+    if (lastFrame.value) await updatePlotFromFrame(lastFrame.value)
   })
 
   onBeforeUnmount(() => {
-    clearTimer()
     if (el.value) Plotly.purge(el.value)
+    stopStream()
   })
 </script>
 
@@ -238,18 +380,17 @@
   .plot-root {
     display: flex;
     height: 100%;
-    overflow: hidden; /* kill scrollbars here */
+    overflow: hidden;
   }
 
   .plot-controls {
-    width: 170px; /* tune to taste */
+    width: 170px;
     min-width: 160px;
     max-width: 220px;
     height: 100%;
     display: flex;
     flex-direction: column;
     box-sizing: border-box;
-    /* background-color: lime;  // keep only if debugging */
   }
 
   .plot-area {

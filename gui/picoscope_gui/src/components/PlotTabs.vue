@@ -17,20 +17,14 @@
       animated
       swipeable
       vertical
+      keep-alive
       transition-prev="jump-up"
       transition-next="jump-up"
       class="q-pa-0 q-ma-0"
       style="width: 100%; height: calc(100% - 35px)"
     >
       <q-tab-panel v-for="s in sources" :key="s.key" :name="s.key" class="q-pa-none q-ma-none fit">
-        <PlotView
-          :kind="s.key"
-          x-scale="linear"
-          y-scale="linear"
-          :title="s.title"
-          x-label="t"
-          y-label="V"
-        />
+        <PlotView :name="s.key" x-scale="linear" y-scale="linear" :title="s.title" />
       </q-tab-panel>
 
       <!-- <q-tab-panel name="time_stream" class="q-pa-none q-ma-none fit">
