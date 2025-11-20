@@ -28,7 +28,7 @@ class DeviceManager:
     def __init__(self, event_bus: EventBus):
         self.event_bus = event_bus
         self.devices: Dict[str, drivers.Device] = {}
-        self._poll_tasks: List[asyncio.Task] = []
+        self._poll_tasks: Dict[str, asyncio.Task] = {}
         self._stop_evt = asyncio.Event()
         
 
@@ -64,16 +64,14 @@ class DeviceManager:
             except Exception:
                 pass
         self.devices.clear()
-    
-    async def start_polling(self, state_ms: int = 200, data_ms: int = 50) -> None:
+
+    async def start_polling_device(self, dev_id:str, state_ms: int = 200, data_ms: int = 50) -> None:
+        
         async def polling_task(dev_id: str, dev: Device) -> None:
             keys = list(getattr(dev, "PROPERTIES", {}).keys())
             state = {}
             try:
                 while not self._stop_evt.is_set():
-                    #for k in keys:
-                    #    state[k] = await dev.poll_property(k)
-                    #await self.event_bus.publish({"type": "device.state", "id": dev_id, "state": state})
                     for k in keys:
                         _ = await dev.poll_property(k) # read actual values to cache
                     st = await dev.read_state() # read cached values (incl. extra info)
@@ -82,35 +80,26 @@ class DeviceManager:
                     await asyncio.sleep(dev.polling_interval / 1000)
             except asyncio.CancelledError:
                 pass
-
-        # async def _poll_state(dev_id: str, dev: Device):
-        #     try:
-        #         while not self._stop_evt.is_set():
-        #             state = await dev.read_state()
-        #             await self.event_bus.publish({"type": "device.state", "id": dev_id, "state": state})
-        #             await asyncio.sleep(state_ms / 1000)
-        #     except asyncio.CancelledError:
-        #         pass
-
-        # async def _poll_data(dev_id: str, dev: Device):
-        #     try:
-        #         while not self._stop_evt.is_set():
-        #             chunk = await dev.read_stream_chunk()
-        #             if chunk:
-        #                 await self.event_bus.publish({"type": "device.data", "id": dev_id, "stream": chunk})
-        #             await asyncio.sleep(data_ms / 1000)
-        #     except asyncio.CancelledError:
-        #         pass
-
+        
+        self._poll_tasks[dev_id] = asyncio.create_task(polling_task(dev_id, self.devices[dev_id]))
+        return 
+    
+    async def start_polling(self, state_ms: int = 200, data_ms: int = 50) -> None:
         for dev_id, dev in self.devices.items():
-            #self._poll_tasks.append(asyncio.create_task(dev.polling_task(self.event_bus)))
-            self._poll_tasks.append(asyncio.create_task(polling_task(dev_id, dev)))
-            #self._poll_tasks.append(asyncio.create_task(_poll_data(dev_id, dev)))
+            await self.start_polling_device(dev_id, state_ms, data_ms)
+
+    async def stop_polling_device(self, dev_id: str) -> None:
+        if dev_id not in self._poll_tasks:
+            return 
+        task = self._poll_tasks.pop(dev_id)
+        if task:
+            task.cancel()
+    
 
     async def stop_polling(self) -> None:
         self._stop_evt.set()
-        for t in self._poll_tasks: t.cancel()
-        await asyncio.gather(*self._poll_tasks, return_exceptions=True)
+        for dev_id, t in self._poll_tasks.items(): t.cancel()
+        await asyncio.gather(*self._poll_tasks.values(), return_exceptions=True)
         self._poll_tasks.clear()
         self._stop_evt = asyncio.Event()  # allow restart
 

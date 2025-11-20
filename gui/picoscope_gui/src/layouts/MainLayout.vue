@@ -2,11 +2,26 @@
   <q-layout view="lHh Lpr lFf">
     <q-header elevated>
       <q-toolbar>
-        <q-btn flat dense round icon="menu" aria-label="Menu" @click="toggleLeftDrawer" />
+        <!-- <q-btn flat dense round icon="menu" aria-label="Menu" @click="toggleLeftDrawer" /> -->
 
-        <q-toolbar-title> Picoscope </q-toolbar-title>
+        <q-toolbar-title> ～ Picoscope ～ </q-toolbar-title>
 
-        <div>Quasar v{{ $q.version }}</div>
+        <div>
+          <q-btn
+            dense
+            outlined
+            filled
+            spread
+            class="full-width q-px-md"
+            label="Restart"
+            color="blue-8"
+            icon="restart_alt"
+            size="md"
+            :disable="reloading"
+            :loading="reloading"
+            @click="onRestartClick"
+          />
+        </div>
       </q-toolbar>
     </q-header>
 
@@ -48,8 +63,11 @@
 
   import { onMounted } from 'vue'
   import { usePicoscopeStore } from 'stores/picoscope'
+  import { restartPicoscope } from 'src/api/picoscope'
 
   const ps = usePicoscopeStore()
+
+  const reloading = ref(false)
 
   onMounted(() => {
     ps.init().catch((err) => console.error('picoscope init failed', err))
@@ -59,5 +77,18 @@
 
   function toggleLeftDrawer() {
     leftDrawerOpen.value = !leftDrawerOpen.value
+  }
+
+  async function onRestartClick() {
+    if (reloading.value) return
+
+    reloading.value = true
+    try {
+      await restartPicoscope() // wait for server
+    } catch (e) {
+      console.error('reload failed:', e)
+    } finally {
+      reloading.value = false
+    }
   }
 </script>

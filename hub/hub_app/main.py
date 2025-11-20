@@ -149,14 +149,29 @@ async def run_command(dev_id: str, req: CommandRequest):
     return res
 
 @app.post("/api/v1/admin/reload")
-async def admin_reload():
+async def reload_all():
     """Reload config.yaml without restarting the process."""
     await _manager.stop_polling()
     await _manager.remove_all()
     cfg = load_config()
     for d in cfg.devices: # TODO - CHANGE TO ASYNC GATHER
         await _manager.add_device(d.id, d.driver, d.options)
-    await _manager.start_polling(500)
+    await _manager.start_polling(500) #TODO - make param of each device
+    devices = [d.model_dump() for d in await _manager.list_devices()]
+    return {"ok": True, "devices": devices}
+
+@app.post("/api/v1/admin/reload/{dev_id}")
+async def reload_device(dev_id: str):
+    """Remove and add a (presumably) faulty device"""
+    if dev_id in _manager.devices:
+        await _manager.stop_polling_device(dev_id)
+        await _manager.remove_device(dev_id)
+    
+    cfg = load_config()
+    for d in cfg.devices: # TODO - CHANGE TO ASYNC GATHER
+        if d.id == dev_id:
+            await _manager.add_device(d.id, d.driver, d.options)
+            await _manager.start_polling_device(d.id, 500)
     devices = [d.model_dump() for d in await _manager.list_devices()]
     return {"ok": True, "devices": devices}
 

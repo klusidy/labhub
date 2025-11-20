@@ -323,7 +323,9 @@ class PicoScope5000a(Device):
             if self.status["getTimebase2"] == 0:
                 break
         else:   # if not break
-            raise RuntimeError(f"Could not set timebase for requested frequency {value}Hz")
+            #raise RuntimeError(f"Could not set timebase for requested frequency {value}Hz")
+            print(f"Could not set timebase for requested frequency {value}Hz")
+            return 
         
         self._timebase = timebase_candidate
         self._max_samples = returnedMaxSamples.value
