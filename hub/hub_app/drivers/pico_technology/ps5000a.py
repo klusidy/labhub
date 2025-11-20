@@ -323,7 +323,7 @@ class PicoScope5000a(Device):
             if self.status["getTimebase2"] == 0:
                 break
         else:   # if not break
-            #raise RuntimeError(f"Could not set timebase for requested frequency {value}Hz")
+            raise RuntimeError(f"Could not set timebase for requested frequency {value}Hz")
             print(f"Could not set timebase for requested frequency {value}Hz")
             return 
         
@@ -355,7 +355,19 @@ class PicoScope5000a(Device):
     def max_data_seconds(self) -> float:
         """Maximum number of samples that can be captured in one acquisition."""
         return self._max_samples * self._time_interval_ns * 1e-9
-     
+    
+    @property
+    def pre_trigger_samples(self) -> int:
+        """Number of pre-trigger samples in the current acquisition."""
+        return self._pre_trigger_samples
+    
+    @pre_trigger_samples.setter # TODO raw stream dependency
+    def pre_trigger_samples(self, value: int) -> None:
+        if not (0 <= value <= self._max_samples):
+            raise ValueError(f"pre_trigger_samples must be between 0 and {self._max_samples}")
+        self._pre_trigger_samples = value
+        return value
+    
     @api_property()
     @property
     def post_trigger_samples(self) -> int:  

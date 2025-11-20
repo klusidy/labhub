@@ -323,7 +323,9 @@ class PicoScope5000a(Device):
             if self.status["getTimebase2"] == 0:
                 break
         else:   # if not break
-            raise RuntimeError(f"Could not set timebase for requested frequency {value}Hz")
+            #raise RuntimeError(f"Could not set timebase for requested frequency {value}Hz")
+            print(f"Could not set timebase for requested frequency {value}Hz")
+            return 
         
         self._timebase = timebase_candidate
         self._max_samples = returnedMaxSamples.value
@@ -353,20 +355,7 @@ class PicoScope5000a(Device):
     def max_data_seconds(self) -> float:
         """Maximum number of samples that can be captured in one acquisition."""
         return self._max_samples * self._time_interval_ns * 1e-9
-    
-    @api_property()
-    @property
-    def pre_trigger_samples(self) -> int:
-        """Number of pre-trigger samples in the current acquisition."""
-        return self._pre_trigger_samples
-    
-    @pre_trigger_samples.setter # TODO raw stream dependency
-    def pre_trigger_samples(self, value: int) -> None:
-        if not (0 <= value <= self._max_samples):
-            raise ValueError(f"pre_trigger_samples must be between 0 and {self._max_samples}")
-        self._pre_trigger_samples = value
-        return value
-    
+     
     @api_property()
     @property
     def post_trigger_samples(self) -> int:  
@@ -381,9 +370,26 @@ class PicoScope5000a(Device):
         return value
     @api_property(unit="s")
     @property
-    def post_trigger_samples_seconts(self) -> float:
+<<<<<<< HEAD
+    def post_trigger_samples_seconds(self) -> float: # TODO link different units to the same property
+=======
+    def post_trigger_samples_seconds(self) -> float:
+>>>>>>> origin/main
         """Number of post-trigger samples in the current acquisition."""
         return self._post_trigger_samples * self._time_interval_ns * 1e-9
+
+    @api_property()
+    @property
+    def pre_trigger_samples(self) -> int:
+        """Number of pre-trigger samples in the current acquisition."""
+        return self._pre_trigger_samples
+    
+    @pre_trigger_samples.setter # TODO raw stream dependency
+    def pre_trigger_samples(self, value: int) -> None:
+        if not (0 <= value <= self._max_samples):
+            raise ValueError(f"pre_trigger_samples must be between 0 and {self._max_samples}")
+        self._pre_trigger_samples = value
+        return value
     
     @api_property()
     @property
@@ -422,6 +428,14 @@ class PicoScope5000a(Device):
         setattr(self, f"channel_{channel}", ret)
         return ret
     
+    # Add channels settings to state to support the display in the UI 
+    # TODO - maybe add get_channels_settings as a command for scripting usage   
+    async def read_state(self) -> Dict[str, Any]:  # override
+        state = await super().read_state()
+        state["_channel_settings"] = {ch: getattr(self, f"channel_{ch}", {}) for ch in ("A", "B", "C", "D")}
+        state["_trigger_settings"] = self._trigger # dict of last values for set_simple_trigger
+        return state
+    
     # raw stream dependency
     @api_command()
     async def set_simple_trigger(self,
@@ -450,8 +464,11 @@ class PicoScope5000a(Device):
         ret = {"status": self.status["trigger"],
                 "enable": _enable,
                 "source": _source,
+                "source_str": source,
                 "threshold": _threshold,
+                "threshold_mV": threshold_mV,
                 "direction": _direction,
+                "direction_str": direction,
                 "delay": _delay,
                 "auto_trigger_ms": _auto_trigger_ms}
         
@@ -459,7 +476,7 @@ class PicoScope5000a(Device):
         return ret
     
     # stop streaming!!
-    @api_command()
+    #@api_command()
 
 
     @api_command()
@@ -577,6 +594,7 @@ class PicoScope5000a(Device):
         return {
             "ok": True,
             "file": path,
+            "duration_s": acquisition_duration_s,
             "channels": channels_active,
             "samples": ns,
             "fs_hz": sampling_frequency_hz,
@@ -682,7 +700,9 @@ class PicoScope5000a(Device):
         return {"title": "Time series plot", 
                 "x-label": "us", 
                 "y-label": "V", 
-                "x-values": (np.arange(total_samples)*self._time_interval_ns*1e-3).tolist()}
+                "x-values": (np.arange(total_samples)*self._time_interval_ns*1e-3).tolist(),
+                "channel_settings": {ch: getattr(self, f"channel_{ch}", {}) for ch in ("A", "B", "C", "D")}
+                }
     
     @api_data()
     async def psd_stream(self) -> AsyncIterator[Frame]:
@@ -722,7 +742,72 @@ class PicoScope5000a(Device):
         freqs = np.fft.rfftfreq(total_samples, d=dt)[1:]
 
         return {
-            "title":   self.psd_stream_plot.__doc__,
+            "title":   "PSD", #self.psd_stream_plot.__doc__,
+            "x-label": "Frequency (Hz)",
+            "y-label": "PSD [V^2 / Hz]",
+            "x-values": freqs.tolist(),
+        }
+    
+    @api_data()
+    async def psd_stream_downsample(self) -> AsyncIterator[Frame]:
+        """Returns PSD of the time series"""
+        
+
+        def downsample_average(data: np.ndarray, window_size: int) -> np.ndarray:
+            n = data.size
+            num_windows = n // window_size
+            if num_windows == 0:
+                return np.empty(0, dtype=data.dtype)
+            return data[:num_windows * window_size].reshape(num_windows, window_size).mean(axis=1)
+
+        def mapper(x):
+            N = x.size
+            dt = self.sampling_time_ns * 1e-9 
+            fs = 1/dt
+
+            fft = np.fft.rfft(x)
+            Pxx = 1 +(np.abs(fft[1:])**2) / (fs*N) # normalize to density [unit^2 / Hz]
+            
+            # Apply frequency downsample averaging
+            window_size = self._downsample_window
+            if window_size > 1:
+                Pxx = downsample_average(Pxx, window_size)
+
+            return Pxx.tolist()
+        
+        q = await self._pico_raw_source.subscribe()
+        await self._pico_raw_source.start() 
+
+        try:
+            while True:
+                frame = await q.get() 
+                yield {ch: mapper(data) for ch, data in frame.items()}
+        finally:
+            await self._pico_raw_source.unsubscribe(q)        
+    
+
+    @psd_stream_downsample.plot()
+    def psd_stream_downsample_plot(self) -> Dict[str, Any]:
+        """PSD plot (function doc)"""
+
+        pre_trigger_samples = self._pre_trigger_samples
+        post_trigger_samples = self._post_trigger_samples 
+        total_samples = pre_trigger_samples + post_trigger_samples
+        window_size = self._downsample_window
+
+        dt = self.sampling_time_ns * 1e-9 #created at runtime - self can be fixed in definition time
+        fs = 1/dt
+
+        freqs = np.fft.rfftfreq(total_samples, d=dt)[1:]
+
+        # Apply downsample averaging for X axis
+        if window_size > 1:
+            n = freqs.size
+            num_windows = n // window_size
+            freqs = freqs[:num_windows * window_size].reshape(num_windows, window_size).mean(axis=1)
+
+        return {
+            "title":   "PSD (downsampled)", #self.psd_stream_downsample_plot.__doc__,
             "x-label": "Frequency (Hz)",
             "y-label": "PSD [V^2 / Hz]",
             "x-values": freqs.tolist(),
