@@ -143,9 +143,9 @@
       if (newSpec) {
         spec.value = newSpec
         // If we already plotted a frame, redraw using new spec
-        if (plotted && lastFrame.value) {
-          void updatePlotFromFrame(lastFrame.value)
-        }
+        // if (plotted && lastFrame.value) { // avoid double redraw?
+        //   void updatePlotFromFrame(lastFrame.value)
+        // }
       }
     },
     { immediate: true } // so first spec loads instantly
@@ -217,6 +217,8 @@
   }
 
   async function fetchAndUpdateOnce() {
+    // getPlot specs as well!!!
+    const spec: PlotSpec = await ps.fetchPlotSpec(props.name)
     const frame: Frame = await getFrame(props.name)
     lastFrame.value = frame
     await updatePlotFromFrame(frame)

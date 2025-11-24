@@ -211,5 +211,6 @@ export const usePicoscopeStore = defineStore('picoscope', () => {
     setChannel,
     setTriggerSimple,
     acquireToFile,
+    fetchPlotSpec,
   }
 })
