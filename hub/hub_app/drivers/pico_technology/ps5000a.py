@@ -722,7 +722,7 @@ class PicoScope5000a(Device):
             fs = 1/dt
 
             fft = np.fft.rfft(x)
-            Pxx = 1 +(np.abs(fft[1:])**2) / (fs*N) # normalize to density [unit^2 / Hz]
+            Pxx = (np.abs(fft[1:])**2) / (fs*N) # normalize to density [unit^2 / Hz]
             return Pxx.tolist()
         
         q = await self._pico_raw_source.subscribe()
@@ -774,7 +774,7 @@ class PicoScope5000a(Device):
             fs = 1/dt
 
             fft = np.fft.rfft(x)
-            Pxx = 1 +(np.abs(fft[1:])**2) / (fs*N) # normalize to density [unit^2 / Hz]
+            Pxx = (np.abs(fft[1:])**2) / (fs*N) # normalize to density [unit^2 / Hz]
             
             # Apply frequency downsample averaging
             window_size = self._downsample_window
