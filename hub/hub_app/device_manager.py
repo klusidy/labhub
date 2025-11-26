@@ -187,6 +187,9 @@ class DeviceManager:
         # PROPERTIES: expect a dict meta; tolerate missing keys
         properties: List[PropertySpec] = []
         for name, meta in getattr(dev, "PROPERTIES", {}).items():
+            if meta.get("type", 'Any') == 'Any':
+                logger.warning(f"Property {dev.options["driver"]}.{name} has not return type specified! Add type hint to the property getter")
+                continue
             properties.append(PropertySpec(
                 name=name,
                 read_only=bool(meta.get("read_only", False)),
