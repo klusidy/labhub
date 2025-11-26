@@ -4,8 +4,11 @@ import httpx
 from urllib.parse import urlparse
 import time
 import json
+import yaml
 import urllib
 import types 
+from pathlib import Path
+from datetime import datetime
 
 
 # ------------------------- Formatting helpers -------------------------
@@ -500,6 +503,52 @@ class Hub:
     @property
     def base(self) -> str:
         return self._base
+
+
+    def snapshot(self, folder: str = None, name="snapshot_{now:%y%m%d_%H%M%S}",filetype: str = "json") -> str:
+        """
+    Fetch a snapshot of all currently connected devices from the server.
+
+    The function returns python data structure optionally saves it as JSON/YAML.
+
+    Parameters
+    ----------
+    folder : str, optional
+        Target directory where the snapshot file should be written.
+        If None or not a valid directory, only the python structure is returned.
+    name : str, optional
+        Filename template (without extension). Supports Python datetime
+        formatting via `{now}`, default "snapshot_{now:%y%m%d_%H%M%S}".
+    type : str, optional
+        Output file format ("json"/"yaml")
+
+    Returns
+    -------
+    list
+        The python structure of full device list.
+    """
+        devs = self._http.get("/api/v1/devices").json()
+
+        now = datetime.now()
+        filename = f"{name.format(now=now)}.{filetype.lower()}"
+
+        if folder:
+            path = Path(folder)
+            if path.is_dir():
+                full = path / filename
+
+                if filetype == "json":
+                    with open(full, "w", encoding="utf-8") as f:
+                        json.dump(devs, f, indent=2)
+
+                if filetype in ("yaml", "yml"):
+                    with open(full, "w", encoding="utf-8") as f:
+                        yaml.safe_dump(devs, f, sort_keys=False)
+
+        return devs
+
+
+
 
     def refresh(self) -> "Hub":
         #print(" - inside refresh")

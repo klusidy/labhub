@@ -38,6 +38,8 @@ def __getattr__(name: str):
     devs = _HUB.devices()
     if name in devs:
         return devs[name]
+    if name == "snapshot":
+        return _HUB.snapshot
     raise AttributeError(name)
 
 
