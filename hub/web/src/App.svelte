@@ -10,6 +10,55 @@
 
   function setActive(id){ activeId = id; }
 
+  // snapshot form state
+  let snapshotName   = 'snapshot_{now:%y%m%d_%H%M%S}';
+  let snapshotBusy   = false;
+
+  function formatNowInTemplate(template, now) {
+    // support: snapshot_{now:%y%m%d_%H%M%S}
+    const pad2 = (n) => String(n).padStart(2, '0');
+    const yy = pad2(now.getFullYear() % 100);
+    const MM = pad2(now.getMonth() + 1);
+    const dd = pad2(now.getDate());
+    const HH = pad2(now.getHours());
+    const mm = pad2(now.getMinutes());
+    const ss = pad2(now.getSeconds());
+
+    const formatted = `${yy}${MM}${dd}_${HH}${mm}${ss}`;
+    return template.replace(/{now:%y%m%d_%H%M%S}/g, formatted);
+  }
+
+
+  async function onSnapshot() {
+    if (snapshotBusy) return;
+    snapshotBusy = true;
+    try {
+      const devices = await listDevices();
+      const now = new Date();
+      const baseName = formatNowInTemplate(snapshotName, now) || 'snapshot';
+      const filename = `${baseName}.json`;
+
+      const blob = new Blob([JSON.stringify(devices, null, 2)], {
+        type: 'application/json',
+      });
+      const url = URL.createObjectURL(blob);
+
+      const a = document.createElement('a');
+      a.href = url;
+      // browsers ignore directories here; user picks actual folder
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Snapshot failed', err);
+    } finally {
+      snapshotBusy = false;
+    }
+  }
+
+
   onMount(async () => {
     devices = await listDevices();
     if (!activeId && devices.length) activeId = devices[0].id;
@@ -60,6 +109,33 @@
         {/if}
       </div>
     {/each}
+
+    <div class="snapshot">
+      <div class="muted snapshot-title">Snapshot</div>
+
+      
+
+      <div class="row">
+        <input
+          class="snapshot-name"
+          type="text"
+          bind:value={snapshotName}
+        />
+        <!-- <select bind:value={snapshotType}>
+          <option value="json">json</option>
+          <option value="yaml">yaml</option>
+        </select> -->
+     
+       
+        <button on:click={onSnapshot} disabled={snapshotBusy}>
+          📸 save 
+        </button>
+        
+      </div>
+      
+    </div>
+
+
   </div>
 
 <div class="content">
