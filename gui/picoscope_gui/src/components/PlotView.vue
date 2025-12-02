@@ -93,11 +93,14 @@
   import Plotly from 'plotly.js-dist-min'
   import type { Data, PlotlyHTMLElement, Layout } from 'plotly.js'
   import { usePicoscopeStore } from 'stores/picoscope'
+  import { usePlotSettingsStore } from 'stores/plotSettings'
+  import type { PlotSettings } from 'src/types/plotSettings'
   import { getFrame, openDataStream } from 'src/api/picoscope' // adjust path
   import type { Frame, ChannelId, PlotSpec } from 'src/api/picoscope'
   import { last } from 'lodash-es'
 
   const ps = usePicoscopeStore()
+  const plotSettingsStore = usePlotSettingsStore()
 
   const spec = ref<PlotSpec | null>(null)
 
@@ -108,8 +111,7 @@
   const props = defineProps<{
     name: string
     title?: string
-    xScale: 'linear' | 'log'
-    yScale: 'linear' | 'log'
+    plotArea: string
   }>()
 
   const el = ref<PlotlyHTMLElement | null>(null)
@@ -118,8 +120,10 @@
   const running = ref(false)
   const rateHz = ref(10)
 
-  const xScaleLocal = ref<'linear' | 'log'>(props.xScale)
-  const yScaleLocal = ref<'linear' | 'log'>(props.yScale)
+  // Load initial scale settings from store
+  const settings = plotSettingsStore.getSettings(props.plotArea, props.name)
+  const xScaleLocal = ref<'linear' | 'log'>(settings.xScale)
+  const yScaleLocal = ref<'linear' | 'log'>(settings.yScale)
 
   const CHANNEL_COLORS: Record<ChannelId, string> = {
     A: '#2196f3', // blue
@@ -127,15 +131,6 @@
     C: '#4caf50', // green
     D: '#ffc107', // amber/orange
   }
-
-  watch(
-    () => props.xScale,
-    (v) => (xScaleLocal.value = v)
-  )
-  watch(
-    () => props.yScale,
-    (v) => (yScaleLocal.value = v)
-  )
 
   watch(
     () => ps.plotSpecs?.[props.name],
@@ -176,6 +171,8 @@
   }
 
   function buildLayout(): Record<string, unknown> {
+    const settings = plotSettingsStore.getSettings(props.plotArea, props.name)
+
     return {
       title: props.title ?? '',
       margin: { t: 40, l: 60, r: 10, b: 40 },
@@ -185,6 +182,7 @@
           standoff: 10,
         },
         type: xScaleLocal.value,
+        autorange: !settings.zoom.active || !settings.zoom.xRange,
       },
       yaxis: {
         title: {
@@ -192,9 +190,79 @@
           standoff: 10,
         },
         type: yScaleLocal.value,
+        autorange: !settings.zoom.active || !settings.zoom.yRange,
       },
       showlegend: true,
       uirevision: 'keep-zoom',
+    }
+  }
+
+  /**
+   * Capture current zoom state from Plotly and persist to store
+   */
+  function captureZoomState() {
+    if (!el.value || !plotted) return
+
+    const layout = el.value.layout
+    const xaxis = layout.xaxis
+    const yaxis = layout.yaxis
+
+    const zoomState: PlotSettings['zoom'] = {
+      active: !xaxis.autorange || !yaxis.autorange,
+      xType: xaxis.type as 'linear' | 'log',
+      yType: yaxis.type as 'linear' | 'log',
+    }
+
+    // Only add ranges if they exist
+    if (!xaxis.autorange && xaxis.range) {
+      zoomState.xRange = xaxis.range as [number, number]
+    }
+    if (!yaxis.autorange && yaxis.range) {
+      zoomState.yRange = yaxis.range as [number, number]
+    }
+
+    plotSettingsStore.updateZoom(props.plotArea, props.name, zoomState)
+  }
+
+  /**
+   * Restore saved zoom state to Plotly after initial plot creation
+   */
+  function restoreZoomState() {
+    if (!el.value || !plotted) return
+
+    const settings = plotSettingsStore.getSettings(props.plotArea, props.name)
+
+    if (!settings.zoom.active) return // User wants autoscale
+
+    const update: Partial<Layout> = {}
+
+    // Only restore X range if scale types match (handle scale switch edge case)
+    if (settings.zoom.xRange && settings.zoom.xType === xScaleLocal.value) {
+      const [r0, r1] = settings.zoom.xRange
+
+      // Validate log scale ranges (must be positive)
+      if (xScaleLocal.value === 'log' && (r0 <= 0 || r1 <= 0)) {
+        update['xaxis.autorange'] = true
+      } else {
+        update['xaxis.range'] = settings.zoom.xRange
+        update['xaxis.autorange'] = false
+      }
+    }
+
+    // Same for Y axis
+    if (settings.zoom.yRange && settings.zoom.yType === yScaleLocal.value) {
+      const [r0, r1] = settings.zoom.yRange
+
+      if (yScaleLocal.value === 'log' && (r0 <= 0 || r1 <= 0)) {
+        update['yaxis.autorange'] = true
+      } else {
+        update['yaxis.range'] = settings.zoom.yRange
+        update['yaxis.autorange'] = false
+      }
+    }
+
+    if (Object.keys(update).length > 0) {
+      void Plotly.relayout(el.value, update)
     }
   }
 
@@ -211,6 +279,28 @@
         scrollZoom: true,
       })
       plotted = true
+
+      // Attach relayout event listener to capture zoom changes
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(el.value as any).on('plotly_relayout', (eventData: Record<string, unknown>) => {
+        // Ignore programmatic scale changes (from our own watchers)
+        if (eventData['xaxis.type'] || eventData['yaxis.type']) {
+          return
+        }
+
+        // Detect zoom/pan/autoscale events
+        const hasXZoom = 'xaxis.range[0]' in eventData && 'xaxis.range[1]' in eventData
+        const hasYZoom = 'yaxis.range[0]' in eventData && 'yaxis.range[1]' in eventData
+        const isAutoscale = eventData['xaxis.autorange'] || eventData['yaxis.autorange']
+
+        if (hasXZoom || hasYZoom || isAutoscale) {
+          // Use setTimeout to ensure layout is fully updated
+          setTimeout(captureZoomState, 0)
+        }
+      })
+
+      // Restore saved zoom state after initial plot
+      setTimeout(restoreZoomState, 100)
     } else {
       void Plotly.react(el.value, data, layout)
     }
@@ -244,6 +334,9 @@
   )
 
   watch(xScaleLocal, (newScale, oldScale) => {
+    // Persist scale change to store
+    plotSettingsStore.updateScale(props.plotArea, props.name, 'x', newScale)
+
     if (!plotted || !el.value) return
     const gd = el.value
     const full = gd.layout.xaxis
@@ -284,6 +377,9 @@
   })
 
   watch(yScaleLocal, (newScale, oldScale) => {
+    // Persist scale change to store
+    plotSettingsStore.updateScale(props.plotArea, props.name, 'y', newScale)
+
     if (!plotted || !el.value) return
     const gd = el.value
     const full = gd.layout?.yaxis

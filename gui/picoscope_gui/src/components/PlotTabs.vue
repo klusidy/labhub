@@ -24,7 +24,7 @@
       style="width: 100%; height: calc(100% - 35px)"
     >
       <q-tab-panel v-for="s in sources" :key="s.key" :name="s.key" class="q-pa-none q-ma-none fit">
-        <PlotView :name="s.key" x-scale="linear" y-scale="linear" :title="s.title" />
+        <PlotView :name="s.key" :plot-area="props.plotArea" :title="s.title" />
       </q-tab-panel>
 
       <!-- <q-tab-panel name="time_stream" class="q-pa-none q-ma-none fit">
@@ -67,6 +67,12 @@
   import { ref, computed, watch } from 'vue'
   import { usePicoscopeStore } from 'stores/picoscope'
   import PlotView from 'components/PlotView.vue'
+
+  const props = defineProps<{
+    title?: string
+    subtitle?: string
+    plotArea: string
+  }>()
 
   const ps = usePicoscopeStore()
 

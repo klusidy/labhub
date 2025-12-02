@@ -40,11 +40,13 @@
         <PlotTabs
           title="Plot A"
           subtitle="top"
+          plot-area="top"
           style="height: calc(50vh - 26px); border: 0px solid navy"
         />
         <PlotTabs
           title="Plot B"
           subtitle="bottom"
+          plot-area="bottom"
           style="height: calc(50vh - 26px); border: 0px solid navy"
         />
       </q-page>
