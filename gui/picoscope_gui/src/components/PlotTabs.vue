@@ -1,21 +1,32 @@
 <template>
-  <div class="bordered q-pa-0 q-ma-0" style="border: 0px solid lime">
-    <q-tabs
-      v-model="tab"
-      dense
-      align="left"
-      class="bg-secondary text-white shadow-2 text-subtitle2 text-weight-regular"
-    >
-      <!-- <q-tab name="time_stream" label="Time stream" />
-      <q-tab name="psd" label="PSD" />
-      <q-tab name="psd_avg" label="PSD ( averaged)" /> -->
-      <q-tab v-for="s in sources" :key="s.key" :name="s.key" :label="s.title" />
-    </q-tabs>
+  <div class="bordered q-pa-0 q-ma-0" style="border: 0px solid lime; height: 100%">
+    <div class="tabs-header">
+      <q-tabs
+        v-model="tab"
+        dense
+        align="left"
+        class="bg-secondary text-white shadow-2 text-subtitle2 text-weight-regular tabs-flex"
+      >
+        <q-tab v-for="s in sources" :key="s.key" :name="s.key" :label="s.title" />
+
+        <q-btn
+          v-if="props.removable"
+          flat
+          dense
+          square
+          icon="close"
+          color="white"
+          class="close-btn bg-secondary"
+          @click="emit('remove')"
+        />
+      </q-tabs>
+
+      <!-- Close button on the right -->
+    </div>
 
     <q-tab-panels
       v-model="tab"
       animated
-      swipeable
       vertical
       keep-alive
       transition-prev="jump-up"
@@ -26,39 +37,6 @@
       <q-tab-panel v-for="s in sources" :key="s.key" :name="s.key" class="q-pa-none q-ma-none fit">
         <PlotView :name="s.key" :plot-area="props.plotArea" :title="s.title" />
       </q-tab-panel>
-
-      <!-- <q-tab-panel name="time_stream" class="q-pa-none q-ma-none fit">
-        <PlotView
-          kind="time"
-          x-scale="linear"
-          y-scale="linear"
-          :title="`Time series`"
-          x-label="t"
-          y-label="V"
-        />
-      </q-tab-panel>
-
-      <q-tab-panel name="psd" class="q-pa-none q-ma-none fit">
-        <PlotView
-          kind="time"
-          x-scale="linear"
-          y-scale="linear"
-          :title="`Time series`"
-          x-label="t"
-          y-label="V"
-        />
-      </q-tab-panel>
-
-      <q-tab-panel name="psd_avg" class="q-pa-none q-ma-none fit">
-        <PlotView
-          kind="time"
-          x-scale="linear"
-          y-scale="linear"
-          :title="`Time series`"
-          x-label="t"
-          y-label="V"
-        />
-      </q-tab-panel> -->
     </q-tab-panels>
   </div>
 </template>
@@ -69,9 +47,12 @@
   import PlotView from 'components/PlotView.vue'
 
   const props = defineProps<{
-    title?: string
-    subtitle?: string
     plotArea: string
+    removable?: boolean
+  }>()
+
+  const emit = defineEmits<{
+    remove: []
   }>()
 
   const ps = usePicoscopeStore()
@@ -118,5 +99,22 @@
 
   .plot-panel > div {
     height: 100%; /* PlotView fills the panel */
+  }
+
+  .tabs-header {
+    display: flex;
+    align-items: center;
+    background-color: var(--q-secondary);
+  }
+
+  .tabs-flex {
+    flex: 1;
+  }
+
+  .close-btn {
+    position: absolute;
+    bottom: 2px;
+    right: 0px;
+    z-index: 1000;
   }
 </style>

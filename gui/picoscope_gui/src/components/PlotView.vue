@@ -1,5 +1,5 @@
 <template>
-  <div class="plot-root row no-wrap flex q-ma-zero q-pa-zero">
+  <div ref="rootEl" class="plot-root row no-wrap flex q-ma-zero q-pa-zero">
     <!-- Left control column -->
     <div class="plot-controls column q-pa-sm q-gutter-sm q-mx-zero q-my-zero">
       <div class="col items-center q-gutter-y-md q-pt-md">
@@ -114,8 +114,10 @@
     plotArea: string
   }>()
 
+  const rootEl = ref<HTMLElement | null>(null)
   const el = ref<PlotlyHTMLElement | null>(null)
   let plotted = false
+  let resizeObserver: ResizeObserver | null = null
 
   const running = ref(false)
   const rateHz = ref(10)
@@ -466,9 +468,28 @@
 
   onMounted(async () => {
     if (lastFrame.value) await updatePlotFromFrame(lastFrame.value)
+
+    // Set up ResizeObserver to handle container size changes
+    if (rootEl.value) {
+      resizeObserver = new ResizeObserver(() => {
+        if (el.value && plotted) {
+          // Trigger Plotly resize when container changes size
+          Plotly.Plots.resize(el.value)
+        }
+      })
+
+      // Observe the root element which is resized by parent
+      resizeObserver.observe(rootEl.value)
+    }
   })
 
   onBeforeUnmount(() => {
+    // Clean up ResizeObserver
+    if (resizeObserver) {
+      resizeObserver.disconnect()
+      resizeObserver = null
+    }
+
     if (el.value) Plotly.purge(el.value)
     stopStream()
   })
