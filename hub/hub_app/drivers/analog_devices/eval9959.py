@@ -77,7 +77,8 @@ class EVAL9959(Device):
         self.bridge.set_port_value(self.dev_id, command, 0x10)
         self.bridge.set_port_value(self.dev_id, command, 0x00)
 
-    @api_property(default=50_000_000, step=1, unit="Hz") # TODO - review min/max
+    #@api_property(default=50_000_000, step=1, unit="Hz") # TODO - review min/max
+    @api_property(step=1, unit="Hz") # TODO - review min/max
     @property
     def ref_clk(self) -> int:
         """Reference clock [Hz] (input to eval board from external source)"""
@@ -89,7 +90,8 @@ class EVAL9959(Device):
         self.sys_clk = self._sys_clk_hz # call the setter = keep old value of system clock on new ref clock
 
 
-    @api_property(default=500_000_000, step=1, unit="Hz") # TODO - review min/max
+    #@api_property(default=500_000_000, step=1, unit="Hz") # TODO - review min/max
+    @api_property(step=1, unit="Hz") # TODO - review min/max
     @property
     def sys_clk(self) -> int:
         """System clock [Hz] of the internal DDS
