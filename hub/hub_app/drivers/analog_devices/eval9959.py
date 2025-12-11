@@ -34,8 +34,8 @@ class EVAL9959(Device):
         self.dll_folder = options.get("dll_folder", r"C:\Program Files (x86)\Analog Devices\AD9958_59 Evaluation Software") # <-- change to your COM port (e.g., "/dev/ttyACM0" on Linux)
         self.vid = options.get("vid", 0x0456) # CDC ignores baud, but pyserial wants a value
         self.pid = options.get("pid", 0xee25)
-        self._ref_clk_hz = 40_000_000  #options.get("ref_clk_hz", 50_000_000)
-        self._sys_clk_hz = 400_000_000 #options.get("sys_clk_hz", 500_000_000)
+        self._ref_clk_hz = 50_000_000  #options.get("ref_clk_hz", 50_000_000)
+        self._sys_clk_hz = 500_000_000 #options.get("sys_clk_hz", 500_000_000)
         self._channel0_frequency = 0
         self._channel1_frequency = 0
         self._channel2_frequency = 0
