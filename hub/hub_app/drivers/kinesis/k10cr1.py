@@ -80,7 +80,7 @@ class K10CR1(KinesisDevice):
         pos_dec = self._to_decimal(pos)
         logger.debug("raw position=%s converted=%s", pos, pos_dec)
         real = conv.DeviceUnitToReal(pos_dec, conv.UnitType.Length)
-        return float(self.Decimal.ToDouble(real))
+        return float(self.Decimal.ToDouble(real)) % 360
     
 
     @position.setter
