@@ -1,12 +1,16 @@
 from __future__ import annotations
 import asyncio
 import logging
-from typing import Any, Dict, Callable, Optional, Mapping, get_type_hints
+from typing import Any, Dict, Callable, Optional, Mapping, get_type_hints, TYPE_CHECKING
 import inspect
 from concurrent.futures import ThreadPoolExecutor
 from ._decorators import api_device, api_command, api_property, ALIASES, api_data, Frame
 
-executor = ThreadPoolExecutor(max_workers=8) # todo - get this from above somehow? also make this configurable
+if TYPE_CHECKING:
+    from ..device_manager import DeviceManager
+
+# Global fallback executor (used if device created without manager)
+_fallback_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="fallback_worker")
 
 # Use labhub namespace for logging
 logger = logging.getLogger("labhub." + __name__)
@@ -86,23 +90,50 @@ class Device:
         cls.DATA_SOURCES = data_sources
 
     @classmethod
-    async def create(cls, dev_id: str, options: dict[str, object]):
-        self = cls(dev_id, options) # just create the object
+    async def create(
+        cls, dev_id: str, options: dict[str, object], manager: Optional[DeviceManager] = None
+    ):
+        """
+        Create and initialize device instance.
+
+        Args:
+            dev_id: Device identifier
+            options: Configuration options from config.yaml
+            manager: DeviceManager instance (provides executor for blocking ops)
+
+        Returns:
+            Initialized device instance
+
+        Notes:
+            - Connects to hardware
+            - Applies driver-defined default properties
+            - Profile defaults applied separately by device_manager
+        """
+        self = cls(dev_id, options, manager)
         await self.connect()
         if self._connected:
             await self._apply_driver_defaults()
-            # Note: Config defaults removed - properties now applied via
-            # device_manager.apply_properties_from_file() after all devices connected
+            # Note: Profile defaults applied via device_manager after all devices connected
         else:
             logger.warning(f"Device '{dev_id}' failed to connect")
         return self
 
-    def __init__(self, dev_id: str, options: Dict[str, Any]):
-        """Initialize device with ID and options from config.yaml."""
+    def __init__(
+        self, dev_id: str, options: Dict[str, Any], manager: Optional[DeviceManager] = None
+    ):
+        """
+        Initialize device with ID and options from config.yaml.
+
+        Args:
+            dev_id: Device identifier
+            options: Configuration from config.yaml
+            manager: DeviceManager instance (for executor access)
+        """
         self.id = dev_id
-        self.options = options # whatever was in config.yaml
+        self.options = options
+        self.manager = manager  # Reference to device manager (for executor, event bus, etc.)
         self.LOCK = asyncio.Lock()
-        self.CACHE: Dict[str, Any] = {}  # cached property values
+        self.CACHE: Dict[str, Any] = {}  # Cached property values
         self.polling_interval = options.get("polling_interval", 1000)  # ms
         self._connected = False
 
@@ -123,11 +154,37 @@ class Device:
 
     # --- core ops v2 ---
     async def _run_blocking_in_thread(self, func, *args, **kwargs):
+        """
+        Run blocking function in thread pool executor.
+
+        Uses device manager's executor if available, otherwise fallback executor.
+
+        Args:
+            func: Blocking function to run
+            *args, **kwargs: Arguments to pass to func
+
+        Returns:
+            Result from func
+        """
         loop = asyncio.get_running_loop()
+        executor = self.manager.executor if self.manager else _fallback_executor
         return await loop.run_in_executor(executor, lambda: func(*args, **kwargs))
-    
-    async def _on_device(self, func, *args, **kwargs): #TODO - REFACTOR TO ^^^^ 
+
+    async def _on_device(self, func, *args, **kwargs):
+        """
+        Run blocking function in thread pool executor (legacy name).
+
+        TODO: Refactor all drivers to use _run_blocking_in_thread instead.
+
+        Args:
+            func: Blocking function to run
+            *args, **kwargs: Arguments to pass to func
+
+        Returns:
+            Result from func
+        """
         loop = asyncio.get_running_loop()
+        executor = self.manager.executor if self.manager else _fallback_executor
         return await loop.run_in_executor(executor, lambda: func(*args, **kwargs))
     
     async def poll_property(self, name: str) -> Any:

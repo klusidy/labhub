@@ -1,7 +1,14 @@
+"""
+Device Manager - Central coordinator for device lifecycle and operations.
+
+Manages device initialization, polling, state tracking, and API operations.
+"""
+
 from __future__ import annotations
 import asyncio
 from typing import Dict, List, Type, Any, get_args
-import time
+from concurrent.futures import ThreadPoolExecutor
+
 from .schemas import (
     DeviceInfo,
     PropertySpec,
@@ -9,24 +16,9 @@ from .schemas import (
     DeviceSpec,
     DataSourceSpec,
     ArgSpec,
-)  # <-- add these
+)
 from .events import EventBus
-
 from .drivers._base import Device
-
-# from .drivers.sim_piezo import SimPiezo
-# try:
-#     from .drivers.thorlabs_kcube_piezo import ThorlabsKCubePiezo
-# except Exception:  # pythonnet missing or non-Windows
-#     ThorlabsKCubePiezo = None  # type: ignore
-
-
-# DRIVER_REGISTRY = {
-#     "sim_piezo": SimPiezo,
-#     "kcube_piezo": ThorlabsKCubePiezo,
-# }
-
-
 from . import drivers
 import logging
 
@@ -34,11 +26,40 @@ logger = logging.getLogger("labhub.device_manager")
 
 
 class DeviceManager:
-    def __init__(self, event_bus: EventBus):
+    """
+    Central coordinator for device lifecycle and operations.
+
+    Responsibilities:
+    - Device initialization and cleanup
+    - Periodic state polling and event broadcasting
+    - API operation routing (get state, apply properties, run commands)
+    - Data source management (catalogs, frames, streaming)
+
+    Architecture:
+    - Single instance per server process
+    - Thread pool executor for blocking device operations
+    - Async polling tasks for each device
+    - Event bus integration for real-time state updates
+    """
+
+    def __init__(self, event_bus: EventBus, max_workers: int = 8):
+        """
+        Initialize device manager.
+
+        Args:
+            event_bus: Event bus for publishing device state changes
+            max_workers: Thread pool size for blocking device operations
+        """
         self.event_bus = event_bus
         self.devices: Dict[str, drivers.Device] = {}
         self._poll_tasks: Dict[str, asyncio.Task] = {}
         self._stop_evt = asyncio.Event()
+
+        # Shared thread pool executor for all devices
+        self.executor = ThreadPoolExecutor(
+            max_workers=max_workers, thread_name_prefix="device_worker"
+        )
+        logger.debug(f"Initialized device manager with {max_workers} worker threads")
 
     async def initialize_devices(self, cfg) -> None:
         """
@@ -68,102 +89,269 @@ class DeviceManager:
             logger.warning("Some devices failed to initialize - check logs for details")
 
     async def add_device(self, dev_id: str, driver: str, options: dict) -> None:
+        """
+        Add a device to the manager.
+
+        Creates device instance, connects to hardware, and registers with manager.
+        Does NOT apply default property values - defaults should be loaded from
+        profile in main.py after initialization.
+
+        Args:
+            dev_id: Unique device identifier
+            driver: Driver name (e.g., "sim_piezo", "kinesis")
+            options: Driver-specific configuration options
+
+        Raises:
+            RuntimeError: Unknown driver or driver not available on platform
+            Exception: Device connection or initialization failed
+
+        Notes:
+            - Device connection handled by driver's .create() method
+            - Failures are logged but not re-raised (allows partial initialization)
+            - Device passed the manager's executor for blocking operations
+        """
         cls = drivers.get(driver)
         if cls is None:
+            logger.error(f"Unknown driver: {driver}")
             raise RuntimeError(
                 f"Unknown driver '{driver}' or not available on this platform"
             )
 
-        logger.info("  - Adding device: %s", driver)
-        # logger.debug("Class: %r, dev_id: %r, options: %r", cls, dev_id, options)
+        logger.info(f"  - Adding device '{dev_id}' with driver '{driver}'")
+        logger.debug(f"Device options: {options}")
 
         try:
-            dev: drivers.Device = await cls.create(dev_id, options)
-            # TODO: dev.connect() and defaults are handled in .create, but it may be here...?
+            # Create device instance and connect to hardware
+            # Pass manager reference for executor access
+            dev: drivers.Device = await cls.create(dev_id, options, manager=self)
             self.devices[dev_id] = dev
+            logger.info(f"Device '{dev_id}' added successfully")
         except Exception as e:
-            logger.exception("Failed to connect to device with dev_id=%r", dev_id)
+            logger.error(
+                f"Failed to add device '{dev_id}' (driver={driver}): {e}",
+                exc_info=True,
+            )
+            raise
 
-    async def remove_device(
-        self, dev_id: str
-    ) -> None:  # <-- add (useful for reloads, tests)
+    async def remove_device(self, dev_id: str) -> None:
+        """
+        Remove a device from the manager.
+
+        Disconnects device and removes from registry. Used for device reload
+        and cleanup operations.
+
+        Args:
+            dev_id: Device identifier to remove
+
+        Notes:
+            - Silently succeeds if device not found
+            - Disconnect errors are logged but not raised
+            - Does not stop polling (call stop_polling_device first)
+        """
         dev = self.devices.pop(dev_id, None)
         if dev:
+            logger.debug(f"Removing device '{dev_id}'")
             try:
                 await dev.disconnect()
-            except Exception:
-                pass
+                logger.debug(f"Device '{dev_id}' disconnected successfully")
+            except Exception as e:
+                logger.warning(f"Error disconnecting device '{dev_id}': {e}")
+        else:
+            logger.debug(f"Device '{dev_id}' not found, nothing to remove")
 
     async def remove_all(self) -> None:
-        for dev in list(self.devices.values()):
+        """
+        Remove all devices from the manager.
+
+        Disconnects all devices and clears registry. Used for server shutdown
+        and full reload operations.
+
+        Notes:
+            - Disconnect errors are logged but not raised
+            - Does not stop polling (call stop_polling first)
+        """
+        logger.debug(f"Removing all devices ({len(self.devices)} total)")
+        for dev_id, dev in list(self.devices.items()):
             try:
                 await dev.disconnect()
-            except Exception:
-                pass
+                logger.debug(f"Device '{dev_id}' disconnected")
+            except Exception as e:
+                logger.warning(f"Error disconnecting device '{dev_id}': {e}")
         self.devices.clear()
+        logger.debug("All devices removed")
 
     async def start_polling_device(
-        self, dev_id: str, state_ms: int = 200, data_ms: int = 50
+        self,
+        dev_id: str,
     ) -> None:
+        """
+        Start periodic state polling for a device.
+
+        Creates async task that polls all device properties at the device's
+        configured polling interval and broadcasts state to event bus.
+
+        Args:
+            dev_id: Device identifier
+
+        Notes:
+            - Polling interval is device-specific (dev.polling_interval)
+            - Broadcasts full state every poll cycle
+            - TODO: Optimize to send full state infrequently + immediate updates
+                    after property changes to reduce event bus traffic
+            - Task automatically stops on CancelledError
+        """
+        if dev_id not in self.devices:
+            logger.warning(f"Cannot start polling: device '{dev_id}' not found")
+            return
 
         async def polling_task(dev_id: str, dev: Device) -> None:
+            """Inner polling loop for a single device."""
             keys = list(getattr(dev, "PROPERTIES", {}).keys())
-            state = {}
+            logger.debug(
+                f"Polling task started for '{dev_id}' ({len(keys)} properties, interval={dev.polling_interval}ms)"
+            )
+
             try:
                 while not self._stop_evt.is_set():
+                    # Poll all properties to update cache
                     for k in keys:
-                        _ = await dev.poll_property(k)  # read actual values to cache
-                    st = await dev.read_state()  # read cached values (incl. extra info)
+                        _ = await dev.poll_property(k)
+
+                    # Read cached state and broadcast
+                    st = await dev.read_state()
                     await self.event_bus.publish(
                         {"type": "device.state", "id": dev_id, "state": st}
                     )
 
+                    # Wait for next poll cycle
                     await asyncio.sleep(dev.polling_interval / 1000)
+
             except asyncio.CancelledError:
-                pass
+                logger.debug(f"Polling task cancelled for '{dev_id}'")
+            except Exception as e:
+                logger.error(f"Polling task error for '{dev_id}': {e}", exc_info=True)
 
         self._poll_tasks[dev_id] = asyncio.create_task(
             polling_task(dev_id, self.devices[dev_id])
         )
-        return
+        logger.debug(f"Started polling for device '{dev_id}'")
 
-    async def start_polling(self, state_ms: int = 200, data_ms: int = 50) -> None:
+    async def start_polling(self) -> None:
+        """
+        Start polling for all registered devices.
+
+        Notes:
+            - Creates one async task per device
+            - Each device uses its own polling interval
+        """
+        logger.info(f"Starting polling for {len(self.devices)} device(s)")
         for dev_id, dev in self.devices.items():
-            await self.start_polling_device(dev_id, state_ms, data_ms)
+            await self.start_polling_device(dev_id)
+        logger.info("Polling started for all devices")
 
     async def stop_polling_device(self, dev_id: str) -> None:
+        """
+        Stop polling for a single device.
+
+        Args:
+            dev_id: Device identifier
+
+        Notes:
+            - Silently succeeds if device not being polled
+            - Cancels async polling task
+        """
         if dev_id not in self._poll_tasks:
+            logger.debug(f"No polling task for '{dev_id}' to stop")
             return
+
         task = self._poll_tasks.pop(dev_id)
         if task:
             task.cancel()
+            logger.debug(f"Stopped polling for device '{dev_id}'")
 
     async def stop_polling(self) -> None:
+        """
+        Stop polling for all devices.
+
+        Cancels all polling tasks and resets stop event. Called during
+        server shutdown or full device reload.
+
+        Notes:
+            - Waits for all tasks to complete
+            - Errors during task cancellation are ignored
+            - Resets stop event to allow restart
+        """
+        logger.info(f"Stopping polling for {len(self._poll_tasks)} device(s)")
         self._stop_evt.set()
+
         for dev_id, t in self._poll_tasks.items():
             t.cancel()
+
         await asyncio.gather(*self._poll_tasks.values(), return_exceptions=True)
         self._poll_tasks.clear()
-        self._stop_evt = asyncio.Event()  # allow restart
+        self._stop_evt = asyncio.Event()  # Allow restart
+        logger.info("Polling stopped for all devices")
 
-    # API helpers
+    # ======= API Helper Methods =======
+
     async def list_devices(self) -> List[DeviceInfo]:
+        """
+        List all registered devices with their current state.
+
+        Returns:
+            List of DeviceInfo objects containing id, kind, status, and state
+
+        Notes:
+            - Reads fresh state from each device
+            - Includes disconnected devices with cached state
+            - Returns empty list if no devices registered
+        """
+        logger.debug(f"Listing {len(self.devices)} device(s)")
         out: List[DeviceInfo] = []
+
         for dev_id, dev in self.devices.items():
-            st = await dev.read_state()
-            out.append(
-                DeviceInfo(
-                    id=dev_id,
-                    kind=getattr(dev, "kind", "device"),
-                    status=("connected" if dev.is_connected else "disconnected"),
-                    state=st,
+            try:
+                st = await dev.read_state()
+                out.append(
+                    DeviceInfo(
+                        id=dev_id,
+                        kind=getattr(dev, "kind", "device"),
+                        status=("connected" if dev.is_connected else "disconnected"),
+                        state=st,
+                    )
                 )
-            )
+            except Exception as e:
+                logger.error(f"Error reading state for device '{dev_id}': {e}")
+                # Include device in list with error indicator
+                out.append(
+                    DeviceInfo(
+                        id=dev_id,
+                        kind=getattr(dev, "kind", "device"),
+                        status="error",
+                        state={"error": str(e)},
+                    )
+                )
+
         return out
 
     async def get_device_state(self, dev_id: str) -> DeviceInfo:
-        dev = self.devices[dev_id]
+        """
+        Get current state for a specific device.
+
+        Args:
+            dev_id: Device identifier
+
+        Returns:
+            DeviceInfo with current state
+
+        Raises:
+            KeyError: Device not found (should be caught by endpoint)
+            Exception: Error reading device state
+        """
+        logger.debug(f"Getting state for device '{dev_id}'")
+        dev = self.devices[dev_id]  # Raises KeyError if not found
         st = await dev.read_state()
+
         return DeviceInfo(
             id=dev_id,
             kind=getattr(dev, "kind", "device"),
@@ -172,17 +360,38 @@ class DeviceManager:
         )
 
     async def apply_properties(self, dev_id: str, properties: dict) -> DeviceInfo:
+        """
+        Apply property updates to a device.
+
+        Updates device properties and broadcasts new state to event bus.
+
+        Args:
+            dev_id: Device identifier
+            properties: Dict of property name-value pairs to update
+
+        Returns:
+            DeviceInfo with updated state
+
+        Raises:
+            KeyError: Device not found
+            ValueError: Invalid property name or value (driver-specific)
+            Exception: Error applying properties
+
+        Notes:
+            - Only specified properties are updated
+            - Updated state immediately published to event bus
+            - Property changes may trigger hardware operations
+        """
+        logger.debug(f"Applying {len(properties)} propert(ies) to '{dev_id}'")
         dev = self.devices[dev_id]
-        # t0=time.perf_counter();
-        st = await dev.apply_properties(
-            properties
-        )  # should not read back state - use read_state explicitely TODO
-        # t1=time.perf_counter();
+
+        st = await dev.apply_properties(properties)
+
+        # Broadcast updated state
         await self.event_bus.publish(
             {"type": "device.state", "id": dev_id, "state": st}
         )
-        # t2=time.perf_counter(); print(f"set={(t1-t0)*1000:.1f}ms publish={(t2-t1)*1000:.1f}ms")
-        # return await self.get_device_state(dev_id)
+
         return DeviceInfo(
             id=dev_id,
             kind=getattr(dev, "kind", "device"),
@@ -190,55 +399,213 @@ class DeviceManager:
             state=st,
         )
 
-    async def run_command(self, dev_id: str, name: str, args: dict):  # <-- keep/add
+    async def run_command(self, dev_id: str, name: str, args: dict):
+        """
+        Execute a device command.
+
+        Runs device-specific command and broadcasts updated state.
+
+        Args:
+            dev_id: Device identifier
+            name: Command name (from device's @api_command)
+            args: Command arguments dict
+
+        Returns:
+            Command-specific result (varies by command)
+
+        Raises:
+            KeyError: Device not found
+            RuntimeError: Device doesn't support commands
+            ValueError: Invalid command name or arguments
+            Exception: Command execution failed
+
+        Notes:
+            - Command availability defined in driver's COMMANDS metadata
+            - State update broadcast after command completes
+            - Some commands return file paths or structured data
+        """
+        logger.debug(f"Running command '{name}' on device '{dev_id}' with args: {args}")
         dev = self.devices[dev_id]
+
         if not hasattr(dev, "run_command"):
+            logger.error(f"Device '{dev_id}' does not support commands")
             raise RuntimeError("Commands not supported")
+
         res = await dev.run_command(name, args)
-        # push latest state so GUIs reflect the action
+        logger.debug(f"Command '{name}' completed for '{dev_id}'")
+
+        # Broadcast updated state so clients see changes
         st = await dev.read_state()
         await self.event_bus.publish(
             {"type": "device.state", "id": dev_id, "state": st}
         )
+
         return res
 
-    # thin wrappers for data source - are they necessary? TODO
+    # ======= Data Source Methods =======
+
     async def get_data_catalog(self, dev_id: str) -> Dict[str, Any]:
+        """
+        Get catalog of available data sources for a device.
+
+        Args:
+            dev_id: Device identifier
+
+        Returns:
+            Dict with 'device' and 'sources' keys
+
+        Raises:
+            KeyError: Device not found
+
+        Notes:
+            - Data sources provide streaming/plotting capabilities
+            - Source list defined in driver's DATA_SOURCES metadata
+        """
+        logger.debug(f"Getting data catalog for '{dev_id}'")
         dev = self.devices[dev_id]
         return {"device": dev_id, "sources": dev.list_data_sources()}
 
     async def get_plot_spec(self, dev_id: str, source: str) -> Dict[str, Any]:
+        """
+        Get plot specification for a data source.
+
+        Args:
+            dev_id: Device identifier
+            source: Data source name
+
+        Returns:
+            Dict with plot metadata (labels, units, etc.)
+
+        Raises:
+            KeyError: Device or source not found
+
+        Notes:
+            - Returns empty dict if source doesn't provide plot spec
+            - Used by clients to configure visualization
+        """
+        logger.debug(f"Getting plot spec for '{dev_id}/{source}'")
         dev = self.devices[dev_id]
         ds = dev.get_datasource(source)
-        return ds.plot()  # {} if not provided
+        return ds.plot()
 
     async def get_one_frame(self, dev_id: str, source: str) -> Dict[str, Any]:
+        """
+        Get a single data frame from a source.
+
+        Args:
+            dev_id: Device identifier
+            source: Data source name
+
+        Returns:
+            Dict with frame data (format varies by source)
+
+        Raises:
+            KeyError: Device or source not found
+            Exception: Frame acquisition failed
+
+        Notes:
+            - May trigger hardware acquisition
+            - For continuous data, use streaming instead
+        """
+        logger.debug(f"Getting one frame from '{dev_id}/{source}'")
         dev = self.devices[dev_id]
         ds = dev.get_datasource(source)
         return await ds.once()
 
     async def subscribe_stream(self, dev_id: str, source: str, *, maxsize: int = 4):
+        """
+        Subscribe to data stream from a source.
+
+        Args:
+            dev_id: Device identifier
+            source: Data source name
+            maxsize: Queue size (older frames dropped when full)
+
+        Returns:
+            asyncio.Queue for receiving frames
+
+        Raises:
+            KeyError: Device or source not found
+
+        Notes:
+            - Must call start_stream to begin frame production
+            - Client responsible for consuming frames to avoid queue overflow
+        """
+        logger.debug(f"Subscribing to stream '{dev_id}/{source}' (maxsize={maxsize})")
         dev = self.devices[dev_id]
         ds = dev.get_datasource(source)
         return await ds.subscribe(maxsize=maxsize)
 
     async def start_stream(self, dev_id: str, source: str, *, interval: float | None):
+        """
+        Start data acquisition for a stream.
+
+        Args:
+            dev_id: Device identifier
+            source: Data source name
+            interval: Acquisition interval in seconds
+
+        Raises:
+            KeyError: Device or source not found
+            Exception: Failed to start acquisition
+
+        Notes:
+            - Begins producing frames to subscribed queues
+            - Multiple subscribers can receive same frames
+        """
+        logger.debug(f"Starting stream '{dev_id}/{source}' (interval={interval}s)")
         dev = self.devices[dev_id]
         await dev.get_datasource(source).start(interval=interval)
 
     async def stop_stream(self, dev_id: str, source: str):
+        """
+        Stop data acquisition for a stream.
+
+        Args:
+            dev_id: Device identifier
+            source: Data source name
+
+        Raises:
+            KeyError: Device or source not found
+
+        Notes:
+            - Stops frame production
+            - Subscribed queues remain valid but receive no new frames
+        """
+        logger.debug(f"Stopping stream '{dev_id}/{source}'")
         dev = self.devices[dev_id]
         await dev.get_datasource(source).stop()
 
-    async def get_device_spec(self, dev_id: str) -> DeviceSpec:  # <-- new
-        """Build a SpecResponse from driver-declared PROPERTIES/COMMANDS."""
+    async def get_device_spec(self, dev_id: str) -> DeviceSpec:
+        """
+        Build device specification from driver metadata.
+
+        Constructs comprehensive API specification from driver's PROPERTIES,
+        COMMANDS, and DATA_SOURCES metadata.
+
+        Args:
+            dev_id: Device identifier
+
+        Returns:
+            DeviceSpec with properties, commands, and data sources
+
+        Raises:
+            KeyError: Device not found
+
+        Notes:
+            - Used by clients for API discovery and UI generation
+            - Property types extracted from Python type hints
+            - Command arguments include type and constraint info
+        """
+        logger.debug(f"Building device spec for '{dev_id}'")
         dev = self.devices[dev_id]
-        # PROPERTIES: expect a dict meta; tolerate missing keys
+
+        # Parse PROPERTIES metadata
         properties: List[PropertySpec] = []
         for name, meta in getattr(dev, "PROPERTIES", {}).items():
             if meta.get("type", "Any") == "Any":
                 logger.warning(
-                    f"Property {dev.options["driver"]}.{name} has not return type specified! Add type hint to the property getter"
+                    f"Property {dev.options['driver']}.{name} has no return type specified - add type hint to property getter"
                 )
                 continue
             properties.append(
@@ -322,19 +689,35 @@ class DeviceManager:
                     )
                 )
 
-        dev_meta = getattr(dev, "_api_device_meta")  # ["doc"]
-        # print("  --- inside Device Spec constructor ---")
-        # print(f"dev = {dev}, dev_id = {dev_id}, dev_meta = {dev_meta}")
+        dev_meta = getattr(dev, "_api_device_meta", {})
+        logger.debug(
+            f"Device spec built for '{dev_id}': {len(properties)} properties, {len(cmds)} commands, {len(dss)} data sources"
+        )
+
         return DeviceSpec(
             id=dev_id,
             kind=getattr(dev, "kind", "device"),
-            doc=dev_meta.get(
-                "doc", "No docstring found in driver class"
-            ),  # <-- add doc field
+            doc=dev_meta.get("doc", "No docstring found in driver class"),
             properties=properties,
             commands=cmds,
             data_sources=dss,
         )
+
+    async def shutdown(self) -> None:
+        """
+        Cleanup manager resources.
+
+        Shuts down thread pool executor. Called during server shutdown.
+
+        Notes:
+            - Should be called after stop_polling() and remove_all()
+            - Waits for running tasks to complete
+        """
+        logger.info("Shutting down device manager")
+        self.executor.shutdown(wait=True)
+        logger.info("Device manager shutdown complete")
+
+    # ======= Orphaned Profile Functions (TODO: Remove or refactor) =======
 
     async def apply_properties_from_file(self, properties_path) -> Dict[str, str]:
         """
