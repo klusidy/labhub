@@ -23,11 +23,17 @@ router = APIRouter(prefix="/api/v2/admin", tags=["admin"])
 
 # Dependency injection - will be set by main.py
 manager = None
+profile_monitor = None
 
 
 def get_manager():
     """Dependency to get device manager instance."""
     return manager
+
+
+def get_profile_monitor():
+    """Dependency to get profile monitor instance."""
+    return profile_monitor
 
 
 @router.post("/reload")
@@ -284,3 +290,153 @@ async def apply_properties(req: ApplyPropertiesRequest, manager=Depends(get_mana
     logger.info(f"Applied properties: {success_count} succeeded, {error_count} failed")
 
     return {"status": "ok", "results": results}
+
+
+@router.post("/profile/load")
+async def load_profile_endpoint(
+    file_path: str,
+    switch_path: bool = True,
+    monitor=Depends(get_profile_monitor),
+):
+    """
+    Load profile from file and apply write-policy properties.
+
+    Loads properties and policies from a profile file, applies properties with
+    "write" policy to devices, and optionally switches to using this profile
+    for future periodic saves.
+
+    Args:
+        file_path: Path to profile file to load
+        switch_path: If True, use this profile for future saves (default: True)
+
+    Returns:
+        Dict with:
+            - status: "ok"
+            - profile_path: Current profile path after operation
+            - loaded_from: Path that was loaded
+
+    Raises:
+        HTTPException(404): Profile file not found
+        HTTPException(500): Error loading or applying profile
+
+    Notes:
+        - Only properties with "write" policy are applied
+        - Value comparison done automatically (checks device CACHE)
+        - Policies from loaded profile are preserved
+        - If switch_path=False, loaded profile is applied but periodic
+          saves continue using the original profile path
+    """
+    logger.debug(
+        f"POST /api/v2/admin/profile/load - file_path={file_path}, switch_path={switch_path}"
+    )
+
+    try:
+        path = Path(file_path)
+        if not path.exists():
+            logger.warning(f"Profile file not found: {path}")
+            raise HTTPException(404, f"Profile file not found: {path}")
+
+        await monitor.load_profile(path, switch_path=switch_path)
+
+        return {
+            "status": "ok",
+            "profile_path": str(monitor.profile_path),
+            "loaded_from": str(path),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to load profile: {e}", exc_info=True)
+        raise HTTPException(500, f"Error loading profile: {str(e)}")
+
+
+@router.post("/profile/save")
+async def force_save_profile(monitor=Depends(get_profile_monitor)):
+    """
+    Force immediate profile save.
+
+    Saves current device states to profile file immediately, without waiting
+    for the next periodic save interval.
+
+    Returns:
+        Dict with:
+            - status: "ok"
+            - profile_path: Path where profile was saved
+
+    Raises:
+        HTTPException(500): Error saving profile
+
+    Use cases:
+        - Manual backup before risky operations
+        - Ensuring latest state is persisted
+        - Testing profile save functionality
+    """
+    logger.debug("POST /api/v2/admin/profile/save - forcing immediate save")
+
+    try:
+        await monitor.force_save()
+        return {"status": "ok", "profile_path": str(monitor.profile_path)}
+
+    except Exception as e:
+        logger.error(f"Failed to force save profile: {e}", exc_info=True)
+        raise HTTPException(500, f"Error saving profile: {str(e)}")
+
+
+@router.post("/profile/policy")
+async def set_property_policy(
+    dev_id: str,
+    prop_name: str,
+    policy: str,
+    monitor=Depends(get_profile_monitor),
+):
+    """
+    Change policy for a specific device property.
+
+    Sets whether a property should be restored ("write") or just monitored ("read")
+    when loading profiles. The policy change is persisted in the next profile save.
+
+    Args:
+        dev_id: Device identifier
+        prop_name: Property name
+        policy: New policy - must be "read" or "write"
+
+    Returns:
+        Dict with:
+            - status: "ok"
+            - dev_id: Device ID
+            - prop_name: Property name
+            - policy: New policy value
+
+    Raises:
+        HTTPException(400): Invalid policy or cannot set "write" on read-only property
+        HTTPException(500): Error setting policy
+
+    Policy meanings:
+        - "read": Monitor and save property value, but don't restore on load
+        - "write": Restore property value when loading profile
+
+    Notes:
+        - Cannot set "write" policy on read-only properties
+        - Policy is persisted immediately (triggers profile save)
+        - Useful for controlling which properties are restored on startup
+    """
+    logger.debug(
+        f"POST /api/v2/admin/profile/policy - dev_id={dev_id}, prop_name={prop_name}, policy={policy}"
+    )
+
+    try:
+        await monitor.set_policy(dev_id, prop_name, policy)
+        return {
+            "status": "ok",
+            "dev_id": dev_id,
+            "prop_name": prop_name,
+            "policy": policy,
+        }
+
+    except ValueError as e:
+        logger.warning(f"Invalid policy request: {e}")
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        logger.error(f"Failed to set policy: {e}", exc_info=True)
+        raise HTTPException(500, f"Error setting policy: {str(e)}")
