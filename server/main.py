@@ -22,18 +22,19 @@ from .schemas import (
 from .device_manager import DeviceManager
 from .events import EventBus
 from .utils import init_logging
-from .loader import get_config_path, load_config
+from .loader import get_config_path, load_config, get_profile_path
+from .monitor import ProfileMonitor
 from . import admin
 
 # Initialize logging - reads LABHUB_LOG_LEVEL and LABHUB_LOG_FILE from environment
 init_logging(log_file=os.environ.get("LABHUB_LOG_FILE"))
-logger = logging.getLogger(__name__)  # Uses module path automatically
+logger = logging.getLogger("labhub.main")  # Explicit name for proper hierarchy
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """FastAPI lifespan context manager for startup and shutdown."""
-    global lock
+    global lock, profile_monitor
 
     # --- Startup ---
     logger.info("LabHub server starting...")
@@ -59,11 +60,20 @@ async def lifespan(app: FastAPI):
     await manager.initialize_devices(cfg)
 
     # 3. Start property polling
-    await manager.start_polling(500)
+    await manager.start_polling()
     logger.info("Device polling started")
 
-    # TODO: 4. Initialize profile monitor (for live state backup)
-    # await init_profile_monitor(profile_path)
+    # 4. Initialize profile monitor (for live state backup)
+    await asyncio.sleep(2.0)  # Allow polling to populate initial states
+
+    profile_path = get_profile_path()
+    await profile_monitor.load_profile(profile_path)
+    await profile_monitor.start()
+
+    logger.info(f"Profile monitor started (path={profile_path})")
+
+    # Set profile_monitor for admin endpoints
+    admin.profile_monitor = profile_monitor
 
     logger.info("LabHub server ready")
 
@@ -72,14 +82,18 @@ async def lifespan(app: FastAPI):
     # --- Shutdown ---
     logger.info("LabHub server shutting down...")
 
-    # TODO: Stop profile monitor
-    # await stop_profile_monitor()
+    # Stop profile monitor (saves pending changes)
+    await profile_monitor.stop()
+    logger.info("Profile monitor stopped")
 
     await manager.stop_polling()
     logger.info("Device polling stopped")
 
     await manager.remove_all()
     logger.info("All devices disconnected")
+
+    await manager.shutdown()
+    logger.info("Device manager shutdown complete")
 
     # Release lock
     try:
@@ -96,6 +110,9 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="LabHub", version="0.2.0", lifespan=lifespan)
 event_bus = EventBus()
 manager = DeviceManager(event_bus)
+profile_monitor: ProfileMonitor | None = ProfileMonitor(
+    event_bus, manager, save_interval=10.0
+)  # Profile auto-save monitor
 lock: FileLock | None = None  # Single-instance lock per CONFIG PATH
 
 # Include admin router and set manager dependency
