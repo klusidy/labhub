@@ -51,7 +51,14 @@ When a profile is loaded (either on startup or later), the values are set up on 
 
 The intention is to avoid repeating steps when setting up an experiment. If you keep using the same profile file, it will always load the values from the last time. You can store a particular snapshot by manually copying current profile. 
 
-TODO - example once it works
+### Read/Write policy
+Sometimes, it may be useful NOT to write a new value when loading up a server. Maybe the value was updated from a different program, maybe writing a value may interfere with a locked system.
+
+For this, each property comes with a profile "policy":
+- `policy: read` means that this value from a profile file is never loaded. Current values are still tracked in the profile file, but its never used for anythin
+- `policy: write` means that this value from a profile is loaded only if it differs from value already on the server. This prevents re-writing to the same value (which may cause hiccups in time-sensitive experiments, e.g. locking frequencies)
+
+TODO - example once it works + review and reformulate if necessary
 
 # VS Code
 If you use VS code for LabHub, it is possible to set up so-called "tasks" for different configurations/profiles. To do so, create `.vscode/tasks.json` file that with something like this:

@@ -8,7 +8,9 @@
       "args": [
         "${workspaceFolder}/launcher/launcher.py",
         "--config",
-        "${workspaceFolder}/launcher/config_jk.yaml"
+        "${workspaceFolder}/launcher/config_jk.yaml",
+        "--profile",
+        "${workspaceFolder}/launcher/profile_jk.yaml"
       ],
       "presentation": {
         "reveal": "always",

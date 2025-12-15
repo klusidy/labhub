@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QStyle,
     QVBoxLayout,
+    QFileDialog,
 )
 
 from PySide6.QtGui import QIcon, QAction, QPixmap, QDesktopServices, QCursor
@@ -34,12 +35,16 @@ icon_red_base64 = b"iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAACXBIWXMAAAT/
 
 
 class Launcher:
-    def __init__(self, host, port, config_path, properties_path=None):
+    def __init__(
+        self, host, port, config_path, profile_path, log_level=None, log_file=None
+    ):
         self.host = host
         self.port = port
         self.host_full = f"http://{self.host}:{self.port}"
         self.config_path = config_path
-        self.properties_path = properties_path
+        self.profile_path = profile_path
+        self.log_level = log_level  # e.g., "INFO", "DEBUG"
+        self.log_file = log_file  # Optional path to log file
         self.app = QApplication(sys.argv)
         QApplication.setQuitOnLastWindowClosed(False)
         if not QSystemTrayIcon.isSystemTrayAvailable():
@@ -111,14 +116,20 @@ class Launcher:
         self.act_start.triggered.connect(self.start_server)
         self.act_stop = QAction("Stop server", self.menu)
         self.act_stop.triggered.connect(self.stop_server)
-        self.act_reload = QAction("Reload config", self.menu)
-        self.act_reload.triggered.connect(self.reload_server)
-        self.act_reload_props = QAction("Reload properties", self.menu)
-        self.act_reload_props.triggered.connect(self.reload_properties)
+
         self.act_open_cfg = QAction("Open config folder", self.menu)
         self.act_open_cfg.triggered.connect(self.open_config_folder)
         self.act_edit_cfg = QAction("Edit config", self.menu)
         self.act_edit_cfg.triggered.connect(self.edit_config)
+        self.act_change_cfg = QAction("Reload config", self.menu)
+        self.act_change_cfg.triggered.connect(self.change_config)
+
+        self.act_open_profile = QAction("Open profile folder", self.menu)
+        self.act_open_profile.triggered.connect(self.open_profile_folder)
+        self.act_edit_profile = QAction("Edit profile", self.menu)
+        self.act_edit_profile.triggered.connect(self.edit_profile)
+        self.act_change_profile = QAction("Change profile", self.menu)
+        self.act_change_profile.triggered.connect(self.change_profile)
 
         # self.act_status = QAction("Show status", self.menu); self.act_status.triggered.connect(self.show_status)
         self.act_docs = QAction("Open API docs", self.menu)
@@ -129,16 +140,29 @@ class Launcher:
         self.act_quit.triggered.connect(self.quit)
         # for a in (self.act_start, self.act_stop, self.act_reload, self.act_open_cfg, self.act_edit_cfg, self.act_docs, self.act_launch_gui):
         #    self.menu.addAction(a)
+
+        self.config_menu = QMenu("Device config")
+        self.config_menu.addAction(self.act_open_cfg)
+        self.config_menu.addAction(self.act_edit_cfg)
+        self.config_menu.addAction(self.act_change_cfg)
+
+        self.profile_menu = QMenu("Profile")
+        self.profile_menu.addAction(self.act_open_profile)
+        self.profile_menu.addAction(self.act_edit_profile)
+        self.profile_menu.addAction(self.act_change_profile)
+
         self.menu.addAction(self.act_start)
         self.menu.addAction(self.act_stop)
         self.menu.addSeparator()
         self.menu.addAction(self.act_launch_gui)
         self.menu.addAction(self.act_docs)
         self.menu.addSeparator()
-        self.menu.addAction(self.act_open_cfg)
-        self.menu.addAction(self.act_edit_cfg)
-        self.menu.addAction(self.act_reload)
-        self.menu.addAction(self.act_reload_props)
+        self.menu.addMenu(self.config_menu)
+        self.menu.addMenu(self.profile_menu)
+        self.menu.addSeparator()
+
+        # self.menu.addAction(self.act_reload)
+        # self.menu.addAction(self.act_reload_props)
         self.menu.addSeparator()
         self.menu.addAction(self.act_quit)
 
@@ -194,6 +218,19 @@ class Launcher:
 
         env = os.environ.copy()
         env["LABHUB_CONFIG"] = str(self.config_path)
+
+        # Optional: Set log level (INFO, DEBUG, WARNING, ERROR)
+        if self.log_level:
+            env["LABHUB_LOG_LEVEL"] = self.log_level
+
+        # Optional: Set log file path
+        if self.log_file:
+            env["LABHUB_LOG_FILE"] = str(self.log_file)
+
+        # Optional: Set profile path (server doesn't support this yet, but ready for future)
+        if self.profile_path:
+            env["LABHUB_PROFILE"] = str(self.profile_path)
+
         cwd = str(LABHUB_DIR)
 
         cmd = [
@@ -275,67 +312,63 @@ class Launcher:
                 "LabHub", f"Failed to stop server: {e}", QSystemTrayIcon.Critical, 2000
             )
 
-    def reload_server(self):
-        logger.info(
-            " -- reloading"
-        )  # todo check if server is running and not do this if not
-        try:
-            r = httpx.post(f"{self.host_full}/api/v1/admin/reload", timeout=2.0)
-            if r.status_code == 200:
-                self.tray.showMessage(
-                    "LabHub", "Reloaded config.yaml", QSystemTrayIcon.Information, 1200
-                )
-            else:
-                self.tray.showMessage(
-                    "LabHub",
-                    f"Reload failed: {r.status_code} {r.text}",
-                    QSystemTrayIcon.Warning,
-                    2000,
-                )
-        except Exception as e:
-            self.tray.showMessage(
-                "LabHub", f"Server not reachable: {e}", QSystemTrayIcon.Warning, 2000
-            )
-        logger.info(" --reload done")
+    # def reload_server(self):
+    #     logger.info(
+    #         " -- reloading"
+    #     )  # todo check if server is running and not do this if not
+    #     try:
+    #         r = httpx.post(f"{self.host_full}/api/v1/admin/reload", timeout=2.0)
+    #         if r.status_code == 200:
+    #             self.tray.showMessage(
+    #                 "LabHub", "Reloaded config.yaml", QSystemTrayIcon.Information, 1200
+    #             )
+    #         else:
+    #             self.tray.showMessage(
+    #                 "LabHub",
+    #                 f"Reload failed: {r.status_code} {r.text}",
+    #                 QSystemTrayIcon.Warning,
+    #                 2000,
+    #             )
+    #     except Exception as e:
+    #         self.tray.showMessage(
+    #             "LabHub", f"Server not reachable: {e}", QSystemTrayIcon.Warning, 2000
+    #         )
+    #     logger.info(" --reload done")
 
-    def reload_properties(self):
-        logger.info(" -- reloading properties")
-        if not self.properties_path:
-            self.tray.showMessage(
-                "LabHub", "No properties file configured", QSystemTrayIcon.Warning, 2000
-            )
-            return
-        try:
-            payload = {"file_path": str(self.properties_path)}
-            r = httpx.post(
-                f"{self.host_full}/api/v1/admin/apply_properties",
-                json=payload,
-                timeout=2.0,
-            )
-            if r.status_code == 200:
-                results = r.json().get("results", {})
-                success_count = sum(1 for v in results.values() if v == "success")
-                error_count = sum(1 for v in results.values() if v.startswith("error:"))
-                msg = (
-                    f"Properties applied: {success_count} success, {error_count} errors"
-                )
-                self.tray.showMessage("LabHub", msg, QSystemTrayIcon.Information, 2000)
-            else:
-                self.tray.showMessage(
-                    "LabHub",
-                    f"Apply properties failed: {r.status_code} {r.text}",
-                    QSystemTrayIcon.Warning,
-                    2000,
-                )
-        except Exception as e:
-            self.tray.showMessage(
-                "LabHub", f"Server not reachable: {e}", QSystemTrayIcon.Warning, 2000
-            )
-        logger.info(" --reload properties done")
-
-    # def show_status(self):
-    #    dlg = StatusDialog()
-    #    dlg.exec()
+    # def reload_properties(self):
+    #     logger.info(" -- reloading properties")
+    #     if not self.properties_path:
+    #         self.tray.showMessage(
+    #             "LabHub", "No properties file configured", QSystemTrayIcon.Warning, 2000
+    #         )
+    #         return
+    #     try:
+    #         payload = {"file_path": str(self.properties_path)}
+    #         r = httpx.post(
+    #             f"{self.host_full}/api/v1/admin/apply_properties",
+    #             json=payload,
+    #             timeout=2.0,
+    #         )
+    #         if r.status_code == 200:
+    #             results = r.json().get("results", {})
+    #             success_count = sum(1 for v in results.values() if v == "success")
+    #             error_count = sum(1 for v in results.values() if v.startswith("error:"))
+    #             msg = (
+    #                 f"Properties applied: {success_count} success, {error_count} errors"
+    #             )
+    #             self.tray.showMessage("LabHub", msg, QSystemTrayIcon.Information, 2000)
+    #         else:
+    #             self.tray.showMessage(
+    #                 "LabHub",
+    #                 f"Apply properties failed: {r.status_code} {r.text}",
+    #                 QSystemTrayIcon.Warning,
+    #                 2000,
+    #             )
+    #     except Exception as e:
+    #         self.tray.showMessage(
+    #             "LabHub", f"Server not reachable: {e}", QSystemTrayIcon.Warning, 2000
+    #         )
+    #     logger.info(" --reload properties done")
 
     def open_docs(self):
         import webbrowser
@@ -367,6 +400,67 @@ class Launcher:
                 "LabHub", f"Open file failed: {e}", QSystemTrayIcon.Warning, 2500
             )
 
+    def change_config(self):
+        options = QFileDialog.Options()
+        options |= QFileDialog.ReadOnly
+        file_path, _ = QFileDialog.getOpenFileName(
+            None,
+            "Select config.yaml",
+            "",
+            "YAML Files (*.yaml *.yml);;All Files (*)",
+            options=options,
+        )
+        if file_path:
+            self.config_path = Path(file_path)
+            # self.reload_server() <-- this only reloads the old config, not switch to new one
+            # TODO -NOTIFY SERVER OF PROFILE CHANGE (NOT SUPPORTED BY SERVER YET!)
+            self.tray.showMessage(
+                "LabHub",
+                f"Config changed to: {self.config_path}",
+                QSystemTrayIcon.Information,
+                2500,
+            )
+
+    def open_profile_folder(self):
+        try:
+            folder = str(Path(self.profile_path).parent.resolve())
+            QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+        except Exception as e:
+            self.tray.showMessage(
+                "LabHub", f"Open folder failed: {e}", QSystemTrayIcon.Warning, 2500
+            )
+
+    def edit_profile(self):
+        try:
+            profile = str(Path(self.profile_path).resolve())
+            QDesktopServices.openUrl(
+                QUrl.fromLocalFile(profile)
+            )  # opens with default editor
+        except Exception as e:
+            self.tray.showMessage(
+                "LabHub", f"Open file failed: {e}", QSystemTrayIcon.Warning, 2500
+            )
+
+    def change_profile(self):
+        options = QFileDialog.Options()
+        options |= QFileDialog.ReadOnly
+        file_path, _ = QFileDialog.getOpenFileName(
+            None,
+            "Select profile.yaml",
+            "",
+            "YAML Files (*.yaml *.yml);;All Files (*)",
+            options=options,
+        )
+        if file_path:
+            self.profile_path = Path(file_path)
+            # TODO -NOTIFY SERVER OF PROFILE CHANGE (NOT SUPPORTED BY SERVER YET!)
+            self.tray.showMessage(
+                "LabHub",
+                f"Profile changed to: {self.profile_path}",
+                QSystemTrayIcon.Information,
+                2500,
+            )
+
     def quit(self):
         try:
             if self.proc and self.proc.poll() is None:
@@ -394,9 +488,15 @@ class Launcher:
 
 def main():
     parser = argparse.ArgumentParser(description="Start LabGlue Hub")
-    parser.add_argument("--config", type=str, help="Path to config.yaml")
     parser.add_argument(
-        "--properties", type=str, help="Path to properties.yaml (optional)"
+        "--config",
+        type=str,
+        help="Path to config.yaml (optional, will fall back to config_default.yaml if not provided)",
+    )
+    parser.add_argument(
+        "--profile",
+        type=str,
+        help="Path to profile.yaml (optional, will fall back to profile_default.yaml if not provided)",
     )
     parser.add_argument(
         "--host",
@@ -410,6 +510,19 @@ def main():
         default=8212,
         help="Port for the hub server, default is 8212",
     )
+    parser.add_argument(
+        "--log-level",
+        type=str,
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        default="INFO",
+        help="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL). Default: INFO",
+    )
+    parser.add_argument(
+        "--log-file",
+        type=str,
+        default=None,
+        help="Optional path to log file (logs to console + file if specified)",
+    )
     args = parser.parse_args()
 
     # Determine config path
@@ -422,14 +535,24 @@ def main():
         sys.exit(1)
 
     # Determine properties path (optional)
-    properties_path = None
-    if args.properties:
-        properties_path = Path(args.properties)
-        if not properties_path.exists():
-            logger.warning(f"Properties file not found: {properties_path}")
-            properties_path = None
+    profile_path = None
+    if args.profile:
+        profile_path = Path(args.profile)
+    else:
+        profile_path = Path(__file__).parent / "profile_default.yaml"
 
-    Launcher(args.host, args.port, config_path, properties_path).run()
+    if not profile_path.exists():
+        logger.warning(f"Profile file not found: {profile_path}")
+        profile_path = None
+
+    Launcher(
+        args.host,
+        args.port,
+        config_path,
+        profile_path,
+        log_level=args.log_level,
+        log_file=args.log_file,
+    ).run()
 
 
 if __name__ == "__main__":
