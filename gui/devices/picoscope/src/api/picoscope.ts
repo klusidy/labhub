@@ -154,7 +154,7 @@ export interface PlotSpec {
 // ─────────────────────────────────────────────────────────────────────────────
 //
 
-const apiBase = '/api/v1'
+const apiBase = '/api/v2'
 
 function api(path: string) {
   return `${apiBase}${path}`

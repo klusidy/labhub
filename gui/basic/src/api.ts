@@ -2,17 +2,19 @@
 export type Device = { id: string; kind: string; status: string; state: any };
 
 const base = ''; // same origin (served by FastAPI at /ui)
-const api = (p: string) => `${base}/api/v1${p}`;
+const api = (p: string) => `${base}/api/v2${p}`;
 
 export async function listDevices(): Promise<Device[]> {
   const r = await fetch(api('/devices')); if (!r.ok) throw new Error('devices');
   return r.json();
 }
+
 export async function getSpec(id: string): Promise<any|null> {
   const r = await fetch(api(`/devices/${id}/spec`));
   if (r.status === 404) return null; // spec not implemented yet
   if (!r.ok) throw new Error('spec ${r.status}'); return r.json();
 }
+
 export async function patchProperties(id: string, properties: Record<string, any>) {
   const r = await fetch(api(`/devices/${id}`), {
     method:'PATCH', headers:{'Content-Type':'application/json'},
