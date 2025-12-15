@@ -1,0 +1,77 @@
+devices:
+  - id: "example_device_01"
+    driver: "example_device"
+    defaults:
+      duration_in_seconds: 10
+      time_step: 0.1
+      number_of_time_steps: 500
+      noise: true
+  - id: "filtration_cavity"
+    driver: "KPZ101"
+    conn:
+      serial: "29250267"                                 # <- your device serial
+      kinesis_path: "C:/Program Files/Thorlabs/Kinesis"  # optional if KINESIS_PATH env set
+      poll_ms: 200
+      simulate: false     
+  - id: "half_plate"
+    driver: "K10CR1"
+    conn:
+      serial: "55001297"
+      kinesis_path: "C:/Program Files/Thorlabs/Kinesis"
+      poll_ms: 200
+      simulate: false
+  - id: "mirrors"
+    driver: "KIM101"
+    conn:
+      serial: "97101498"
+      kinesis_path: "C:/Program Files/Thorlabs/Kinesis"
+      poll_ms: 200
+      simulate: false
+  - id: "picoscope"
+    driver: "ps5000a"
+    resolution: 14 #8/12/14/15/16 bit
+    channels:
+      - id: "A"
+        coupling: "AC"
+        range: "1V"
+        enable: true
+      - id: "B"
+        coupling: "AC"
+        range: "1V"
+        enable: false
+      - id: "C"
+        coupling: "AC"
+        range: "1V"
+        enable: false
+      - id: "D"
+        coupling: "AC"
+        range: "1V"
+        enable: false
+    trigger: #will call set_simple_trigger()
+      enable: true
+      source: "A"
+      threshold_mV: 1
+      direction: "RISING"
+      delay: 0
+      auto_trigger_ms: 1000
+  #- id: "aimtt_generator"
+  #  driver: "tgf4000"
+  #  port: "COM8" 
+  #  baud: 115200
+  - id: "chammber_pressure_gauge"
+    driver: "tpg"
+    port: "COM10"
+    baud: 9600
+  - id: "AD_DDS"
+    driver: "eval9959"
+    vid: 0x0456 # vendor ID  // device manager -> ADI Evaluation system -> Details -> Hardware ID
+    pid: 0xee25 # product ID
+    dll_folder: "C:/Program Files (x86)/Analog Devices/AD9958_59 Evaluation Software"
+  # - id: "NKT Adjustik"
+  #   driver: "nkt_laser_X15"
+  #   port: "COM4"
+  #   autoMode: 0
+  #   liveMode: 0
+  #- id: "NKT Boostik"
+  #  driver: "boostik"
+  #  port: "COM5"
