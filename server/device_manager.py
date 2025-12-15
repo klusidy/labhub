@@ -260,4 +260,114 @@ class DeviceManager:
             data_sources=dss
         )
 
-        
+    async def apply_properties_from_file(self, properties_path) -> Dict[str, str]:
+        """
+        Load properties file and apply to all devices.
+
+        Args:
+            properties_path: Path to properties.yaml (Path or str)
+
+        Returns:
+            Dict[dev_id] = "success" | "skipped" | "error: <message>"
+
+        Behavior:
+            - Log and skip devices not in file
+            - Log and skip devices with resolution errors
+            - Continue applying to other devices on error
+        """
+        from .properties_loader import load_and_resolve_all, PropertyResolutionError
+        from pathlib import Path
+
+        properties_path = Path(properties_path)
+        logger.info(f"Loading properties from {properties_path}")
+
+        device_ids = list(self.devices.keys())
+
+        try:
+            resolved_all = load_and_resolve_all(properties_path, device_ids)
+        except Exception as e:
+            logger.error(f"Failed to load properties file: {e}")
+            return {dev_id: f"error: file load failed" for dev_id in device_ids}
+
+        results = {}
+
+        for dev_id, device in self.devices.items():
+            if dev_id not in resolved_all:
+                logger.info(f"No properties for {dev_id}, skipping")
+                results[dev_id] = "skipped"
+                continue
+
+            resolved_props, readout_props = resolved_all[dev_id]
+
+            if not resolved_props and not readout_props:
+                logger.info(f"No properties to apply for {dev_id}")
+                results[dev_id] = "skipped"
+                continue
+
+            try:
+                await device.apply_properties_from_spec(resolved_props, readout_props)
+                results[dev_id] = "success"
+
+                # Publish updated state
+                state = await device.read_state()
+                await self.event_bus.publish({
+                    "type": "device.state",
+                    "id": dev_id,
+                    "state": state
+                })
+
+            except Exception as e:
+                logger.error(f"Failed to apply properties to {dev_id}: {e}", exc_info=True)
+                results[dev_id] = f"error: {str(e)}"
+
+        return results
+
+    async def apply_properties_from_dict(
+        self,
+        properties: Dict[str, Dict[str, Any]]
+    ) -> Dict[str, str]:
+        """
+        Apply properties from dict (for API endpoint).
+
+        Args:
+            properties: {dev_id: {prop_name: value | "$READOUT", ...}, ...}
+                       Can include "default" key for fallback
+
+        Returns:
+            Dict[dev_id] = "success" | "skipped" | "error: <message>"
+        """
+        from .properties_loader import resolve_properties_for_device, PropertyResolutionError
+
+        results = {}
+
+        for dev_id, device in self.devices.items():
+            if dev_id not in properties:
+                results[dev_id] = "skipped"
+                continue
+
+            try:
+                resolved_props, readout_props = resolve_properties_for_device(
+                    dev_id, properties
+                )
+
+                await device.apply_properties_from_spec(resolved_props, readout_props)
+                results[dev_id] = "success"
+
+                # Publish updated state
+                state = await device.read_state()
+                await self.event_bus.publish({
+                    "type": "device.state",
+                    "id": dev_id,
+                    "state": state
+                })
+
+            except PropertyResolutionError as e:
+                logger.error(f"Property resolution failed for {dev_id}: {e}")
+                results[dev_id] = f"error: {str(e)}"
+            except Exception as e:
+                logger.error(f"Failed to apply properties to {dev_id}: {e}", exc_info=True)
+                results[dev_id] = f"error: {str(e)}"
+
+        return results
+
+

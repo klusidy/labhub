@@ -58,11 +58,12 @@ icon_red_base64 = b"iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAACXBIWXMAAAT/
 #             self.list.addItem(f"(server offline) {e}")
 
 class TrayApp:
-    def __init__(self, host, port, config_path):
+    def __init__(self, host, port, config_path, properties_path=None):
         self.host = host
         self.port = port
         self.host_full = f"http://{self.host}:{self.port}"
         self.config_path = config_path
+        self.properties_path = properties_path
         self.app = QApplication(sys.argv)
         QApplication.setQuitOnLastWindowClosed(False)
         if not QSystemTrayIcon.isSystemTrayAvailable():
@@ -130,6 +131,7 @@ class TrayApp:
         self.act_start = QAction("Start server", self.menu); self.act_start.triggered.connect(self.start_server)
         self.act_stop = QAction("Stop server", self.menu); self.act_stop.triggered.connect(self.stop_server)
         self.act_reload = QAction("Reload config", self.menu); self.act_reload.triggered.connect(self.reload_server)
+        self.act_reload_props = QAction("Reload properties", self.menu); self.act_reload_props.triggered.connect(self.reload_properties)
         self.act_open_cfg = QAction("Open config folder", self.menu); self.act_open_cfg.triggered.connect(self.open_config_folder)
         self.act_edit_cfg = QAction("Edit config", self.menu);   self.act_edit_cfg.triggered.connect(self.edit_config)
         
@@ -148,6 +150,7 @@ class TrayApp:
         self.menu.addAction(self.act_open_cfg)
         self.menu.addAction(self.act_edit_cfg)
         self.menu.addAction(self.act_reload)
+        self.menu.addAction(self.act_reload_props)
         self.menu.addSeparator()
         self.menu.addAction(self.act_quit)
 
@@ -270,6 +273,26 @@ class TrayApp:
             self.tray.showMessage("LabHub", f"Server not reachable: {e}", QSystemTrayIcon.Warning, 2000)
         logger.info(" --reload done")
 
+    def reload_properties(self):
+        logger.info(" -- reloading properties")
+        if not self.properties_path:
+            self.tray.showMessage("LabHub", "No properties file configured", QSystemTrayIcon.Warning, 2000)
+            return
+        try:
+            payload = {"file_path": str(self.properties_path)}
+            r = httpx.post(f"{self.host_full}/api/v1/admin/apply_properties", json=payload, timeout=2.0)
+            if r.status_code == 200:
+                results = r.json().get("results", {})
+                success_count = sum(1 for v in results.values() if v == "success")
+                error_count = sum(1 for v in results.values() if v.startswith("error:"))
+                msg = f"Properties applied: {success_count} success, {error_count} errors"
+                self.tray.showMessage("LabHub", msg, QSystemTrayIcon.Information, 2000)
+            else:
+                self.tray.showMessage("LabHub", f"Apply properties failed: {r.status_code} {r.text}", QSystemTrayIcon.Warning, 2000)
+        except Exception as e:
+            self.tray.showMessage("LabHub", f"Server not reachable: {e}", QSystemTrayIcon.Warning, 2000)
+        logger.info(" --reload properties done")
+
     #def show_status(self):
     #    dlg = StatusDialog()
     #    dlg.exec()
@@ -323,6 +346,7 @@ class TrayApp:
 def main():
     parser = argparse.ArgumentParser(description="Start LabGlue Hub")
     parser.add_argument("--config", type=str, help="Path to config.yaml")
+    parser.add_argument("--properties", type=str, help="Path to properties.yaml (optional)")
     parser.add_argument("--host", type=str, default="127.0.0.1", help="Host for the hub server, default is 127.0.0.1 (localhost)")
     parser.add_argument("--port", type=int, default=8212, help="Port for the hub server, default is 8212")
     args = parser.parse_args()
@@ -336,7 +360,15 @@ def main():
         logger.error(f"Config file not found: {config_path}")
         sys.exit(1)
 
-    TrayApp(args.host, args.port, config_path).run()
+    # Determine properties path (optional)
+    properties_path = None
+    if args.properties:
+        properties_path = Path(args.properties)
+        if not properties_path.exists():
+            logger.warning(f"Properties file not found: {properties_path}")
+            properties_path = None
+
+    TrayApp(args.host, args.port, config_path, properties_path).run()
 
 if __name__ == "__main__":
     main()

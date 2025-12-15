@@ -1,0 +1,33 @@
+devices:
+  - id: "dummy_01"
+    driver: "dummy"
+  - id: "example_device_01"
+    driver: "example_device"
+  - id: "picoscope"
+    driver: "ps5000a"
+    resolution: 14 #8/12/14/15/16 bit
+    channels:
+      - id: "A"
+        coupling: "DC"
+        range: "1V"
+        enable: true
+      - id: "B"
+        coupling: "DC"
+        range: "1V"
+        enable: false
+      - id: "C"
+        coupling: "DC"
+        range: "1V"
+        enable: false
+      - id: "D"
+        coupling: "DC"
+        range: "1V"
+        enable: false
+    trigger: #will call set_simple_trigger()
+      enable: true
+      source: "A"
+      threshold_mV: 1
+      direction: "RISING"
+      delay: 0
+      auto_trigger_ms: 1000
+

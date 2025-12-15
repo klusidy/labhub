@@ -90,9 +90,10 @@ class Device:
         await self.connect()
         if self._connected:
             await self._apply_driver_defaults()
-            await self._apply_config_defaults()
+            # Note: Config defaults removed - properties now applied via
+            # device_manager.apply_properties_from_file() after all devices connected
         else:
-            pass # TODO report that device was not connected??
+            logger.warning(f"Device '{dev_id}' failed to connect")
         return self
 
     def __init__(self, dev_id: str, options: Dict[str, Any]):
@@ -107,15 +108,9 @@ class Device:
 
     async def _apply_driver_defaults(self):
         for property_name, metadata in getattr(self, "PROPERTIES", {}).items():
-            if "default" in metadata and metadata["default"] is not None: 
+            if "default" in metadata and metadata["default"] is not None:
                 logger.debug("- base init, prop_name=%s, metadata=%s", property_name, metadata)
                 await self.set_property(property_name, metadata["default"])
-
-
-    async def _apply_config_defaults(self):
-        for k, v in self.options.get("defaults", {}).items():
-            if k in getattr(self, "PROPERTIES", {}):
-                await self.set_property(k, v)
 
 
     # --- lifecycle ---
@@ -168,10 +163,79 @@ class Device:
         for k, v in properties.items():
             if self.get_cached(k) == v:
                 continue
-            await self.set_property(k, v) 
+            await self.set_property(k, v)
 
         # read back concurrently (optional)
         return await self.read_state()
+
+    async def apply_properties_from_spec(
+        self,
+        properties: Dict[str, Any],
+        readout_props: set
+    ) -> None:
+        """
+        Apply properties from resolved specification (from properties.yaml).
+
+        Args:
+            properties: {prop_name: value} to set on device
+            readout_props: Set of prop names to read from device (not set)
+
+        Behavior:
+            - For readout props: poll_property() to read and cache
+            - For regular props: set_property() with validation
+            - Log WARNING for clamped/type-invalid values
+            - Continue on error (don't raise)
+        """
+        # First, read $READOUT properties from device
+        for prop_name in readout_props:
+            if prop_name not in self.PROPERTIES:
+                logger.warning(f"{self.id}: $READOUT property '{prop_name}' not found, skipping")
+                continue
+            try:
+                value = await self.poll_property(prop_name)
+                logger.info(f"{self.id}.{prop_name} = {value} (read from device)")
+            except Exception as e:
+                logger.warning(f"{self.id}: Failed to read property '{prop_name}': {e}")
+
+        # Then, set specified properties
+        for prop_name, value in properties.items():
+            if prop_name not in self.PROPERTIES:
+                logger.warning(f"{self.id}: Property '{prop_name}' not found, skipping")
+                continue
+
+            try:
+                meta = self.PROPERTIES[prop_name]
+
+                # Check type compatibility
+                expected_type = meta.get("type")
+                if expected_type and not isinstance(value, expected_type):
+                    try:
+                        value = expected_type(value)  # Try conversion
+                        logger.info(
+                            f"{self.id}.{prop_name}: converted {type(value).__name__} "
+                            f"to {expected_type.__name__}"
+                        )
+                    except (ValueError, TypeError) as e:
+                        logger.warning(
+                            f"{self.id}.{prop_name}: type mismatch, expected {expected_type}, "
+                            f"got {type(value).__name__}, skipping"
+                        )
+                        continue
+
+                # Check if value will be clamped
+                original_value = value
+                clamped_value = self._coerce_clamp(meta, value)
+                if clamped_value != original_value:
+                    logger.warning(
+                        f"{self.id}.{prop_name}: value {original_value} clamped to {clamped_value}"
+                    )
+
+                # Set the property
+                await self.set_property(prop_name, value)
+                logger.info(f"{self.id}.{prop_name} = {value}")
+
+            except Exception as e:
+                logger.warning(f"{self.id}: Failed to set {prop_name} = {value}: {e}")
         
 
     # --- core ops ---

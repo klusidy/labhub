@@ -7,3 +7,5 @@ temp
 hub/config.yaml
 02_kpz_demo.py
 *.pyc
+.claude
+node_modules

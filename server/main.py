@@ -14,7 +14,7 @@ import pdb # for live debugging
 
 
 
-from .schemas import DeviceInfo, PatchRequest, DeviceSpec, CommandRequest
+from .schemas import DeviceInfo, PatchRequest, DeviceSpec, CommandRequest, ApplyPropertiesRequest
 from .device_manager import DeviceManager
 from .events import EventBus
 from ._logging import init_logging
@@ -195,6 +195,23 @@ async def admin_set_loglevel(level: str):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return res
+
+
+@app.post("/api/v1/admin/apply_properties")
+async def apply_properties_endpoint(req: ApplyPropertiesRequest):
+    """Apply properties from file or inline dict. Does NOT restart devices."""
+    if req.file_path:
+        path = Path(req.file_path)
+        if not path.exists():
+            raise HTTPException(404, f"Properties file not found: {path}")
+        results = await _manager.apply_properties_from_file(path)
+    elif req.properties:
+        results = await _manager.apply_properties_from_dict(req.properties)
+    else:
+        raise HTTPException(400, "Must provide file_path or properties")
+
+    return {"status": "ok", "results": results}
+
 
 from time import monotonic
 

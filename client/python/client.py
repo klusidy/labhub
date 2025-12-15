@@ -505,11 +505,11 @@ class Hub:
         return self._base
 
 
-    def snapshot(self, folder: str = None, name="snapshot_{now:%y%m%d_%H%M%S}",filetype: str = "json") -> str:
+    def snapshot(self, folder: str = None, name="snapshot_{now:%y%m%d_%H%M%S}", filetype: str = "yaml", content: str = "properties"):
         """
     Fetch a snapshot of all currently connected devices from the server.
 
-    The function returns python data structure optionally saves it as JSON/YAML.
+    The function returns python data structure and optionally saves it as JSON/YAML.
 
     Parameters
     ----------
@@ -519,15 +519,27 @@ class Hub:
     name : str, optional
         Filename template (without extension). Supports Python datetime
         formatting via `{now}`, default "snapshot_{now:%y%m%d_%H%M%S}".
-    type : str, optional
-        Output file format ("json"/"yaml")
+    filetype : str, optional
+        Output file format ("json" or "yaml", default "yaml")
+    content : str, optional
+        Content format: "properties" (device_id -> {prop: value}, default)
+        or "devices" (full device info including kind, status, etc.)
 
     Returns
     -------
-    list
-        The python structure of full device list.
+    dict or list
+        If content="properties": dict of {device_id: {property: value}}
+        If content="devices": list of full device info dicts
     """
         devs = self._http.get("/api/v1/devices").json()
+
+        # Transform to properties format (device_id -> state)
+        if content == "properties":
+            data = {dev["id"]: dev["state"] for dev in devs}
+        elif content == "devices":
+            data = devs
+        else:
+            raise ValueError(f"Invalid content format '{content}', must be 'properties' or 'devices'")
 
         now = datetime.now()
         filename = f"{name.format(now=now)}.{filetype.lower()}"
@@ -539,13 +551,13 @@ class Hub:
 
                 if filetype == "json":
                     with open(full, "w", encoding="utf-8") as f:
-                        json.dump(devs, f, indent=2)
+                        json.dump(data, f, indent=2)
 
                 if filetype in ("yaml", "yml"):
                     with open(full, "w", encoding="utf-8") as f:
-                        yaml.safe_dump(devs, f, sort_keys=False)
+                        yaml.safe_dump(data, f, sort_keys=False)
 
-        return devs
+        return data
 
 
 

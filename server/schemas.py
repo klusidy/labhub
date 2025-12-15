@@ -17,6 +17,11 @@ class CommandRequest(BaseModel):
     name: str
     args: Dict[str, Any] = {}
 
+class ApplyPropertiesRequest(BaseModel):
+    """Request to apply properties from file or inline dict."""
+    file_path: Optional[str] = None
+    properties: Optional[Dict[str, Dict[str, Any]]] = None
+
 # ---------- NEW: richer /spec models ----------
 class ArgSpec(BaseModel):
     name: Optional[str] = None
