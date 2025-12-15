@@ -1,6 +1,8 @@
 devices:
-  - id: "dummy_01"
-    driver: "dummy"
-  - id: "example_device_01"
+  - id: "foo"
     driver: "example_device"
+    serial_number: "EX123"
+  - id: "bar"
+    driver: "example_device"
+    serial_number: "EX456"
 
