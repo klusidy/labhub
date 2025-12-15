@@ -7,6 +7,7 @@ from ._base import Device, api_device, api_command, api_property, api_data, Fram
 
 logger = logging.getLogger(__name__)
 
+
 @api_device("example_device")
 class ExampleDevice(Device):
     """
@@ -14,8 +15,8 @@ class ExampleDevice(Device):
     Properties control the waveform and streaming cadence; commands manage streaming.
     """
 
-    kind = "example_device" # todo -keep this or replace with alias?
-    #doc = "Example device that generates a time-series from a configurable waveform."
+    kind = "example_device"  # todo -keep this or replace with alias?
+    # doc = "Example device that generates a time-series from a configurable waveform."
 
     # --- /spec metadata to make everything work -----------------------
     # PARAMS: Dict[str, Dict[str, Any]] = {
@@ -61,40 +62,45 @@ class ExampleDevice(Device):
     #         "doc": "Stop streaming.",
     #         "args": {}, "returns": "None",
     #     },
-    #}
+    # }
 
     # -------------------------------------------------------------------------
 
-    def __init__(self, dev_id: str, default_values: Dict[str, Any]):
+    def __init__(
+        self,
+        dev_id: str,
+        default_values: Dict[str, Any],
+        manager: Optional[DeviceManager] = None,
+    ):
         super().__init__(dev_id, default_values)
         # must initialize private variables (if there are any)
         self._time_step = 0
         self._number_of_time_steps = 0
         self._noise = False
         self._wave_type = "sin"
-        
-
 
     # --- lifecycle -----------------------------------------------------------
 
     async def connect(self) -> None:
-        #self._connected = True
+        # self._connected = True
         return True
 
     async def disconnect(self) -> None:
         await self.stop()
         self._connected = False
 
-    # -- API PROPERTIES 
+    # -- API PROPERTIES
 
-    @api_property(min=1e-4, max=10.0, default=0.01, step=0.001) # TODO - ADD UNITS
+    @api_property(min=1e-4, max=10.0, default=0.01, step=0.001)  # TODO - ADD UNITS
     @property
     def time_step(self) -> float:
         """Sampling interval for generated data (seconds)"""
         return self._time_step
-    
+
     @time_step.setter
-    def time_step(self, value:float): # todo when value is dict, update min/max/default etc
+    def time_step(
+        self, value: float
+    ):  # todo when value is dict, update min/max/default etc
         self._time_step = value
 
     @api_property(min=1, max=1_000_000, default=1000, step=10)
@@ -102,18 +108,17 @@ class ExampleDevice(Device):
     def number_of_time_steps(self) -> int:
         """How many samples to return from get_timestamps() (default = 1000)"""
         return self._number_of_time_steps
-    
+
     @number_of_time_steps.setter
-    def number_of_time_steps(self, value:int):
+    def number_of_time_steps(self, value: int):
         self._number_of_time_steps = value
 
-    
     @api_property(default=False)
     @property
     def noise(self) -> bool:
         """Add small uniform noise (~±5% of amplitude)."""
         return self._noise
-    
+
     @noise.setter
     def noise(self, value: bool):
         self._noise = value
@@ -123,11 +128,10 @@ class ExampleDevice(Device):
     def wave_type(self) -> str:
         """Waveform type"""
         return self._wave_type
-    
+
     @wave_type.setter
-    def wave_type(self, value: str): # validation is done automatically from choices
+    def wave_type(self, value: str):  # validation is done automatically from choices
         self._wave_type = value
-            
 
     # PARAMS: Dict[str, Dict[str, Any]] = {
 
@@ -140,7 +144,6 @@ class ExampleDevice(Device):
     #             },
     #         },
 
-        
     #         # todo -add status flags like "streaming" to PARAMS as read-only param
     #     }
 
@@ -151,9 +154,9 @@ class ExampleDevice(Device):
     #     return {
     #         "frequency": self._freq,
     #         "amplitude": self._amp,
-    #         "phase": self._phase    
+    #         "phase": self._phase
     #     }
-    
+
     # @wave.setter
     # def wave(self, value: Dict[str, Any]):
     #     # vendor-specific HW logic for value setting
@@ -168,7 +171,7 @@ class ExampleDevice(Device):
         """Return x-axis timestamps based on number_of_time_steps and time_step."""
         dt = self.time_step
         self._ts = np.arange(self.number_of_time_steps) * dt
-        return self._ts.tolist() # todo - find faster way to serialize numpy
+        return self._ts.tolist()  # todo - find faster way to serialize numpy
 
     # --- API DATA/PLOTS ---
     @api_data()
@@ -179,36 +182,41 @@ class ExampleDevice(Device):
             wave = np.sin(self.get_timestamps())
             if self.wave_type == "square":
                 wave = np.sign(wave)
-            
+
             # repeated action
             while True:
-                ret_wave = wave + (np.random.rand(self.number_of_time_steps) * 0.5) if self.noise else wave.copy()
-                yield {"series": [{"name":"Test waveform", "data": ret_wave.tolist()},]}
-                await asyncio.sleep(0.05) # 
+                ret_wave = (
+                    wave + (np.random.rand(self.number_of_time_steps) * 0.5)
+                    if self.noise
+                    else wave.copy()
+                )
+                yield {
+                    "series": [
+                        {"name": "Test waveform", "data": ret_wave.tolist()},
+                    ]
+                }
+                await asyncio.sleep(0.05)  #
 
         finally:
-            logger.debug("demo_wave generator exiting") # teardown
+            logger.debug("demo_wave generator exiting")  # teardown
 
-    
     # simple payload: { data: [...] }
     # object-of-arrays: { "PSD": [...], "Channel 1": [...], meta: {...} }
     # explicit series list: { series: [ { name: "PSD", data: [...] }, { name: "Ch 1", data: [...] } ], "x-values": [...] }
-    
+
     @demo_wave.plot()
     def demo_plot(self) -> Dict[str, Any]:
-        """ Simple line plot for demo purposes """
-        return {"title": "Demo plot", 
-                "x-label": "s", 
-                "y-label": "V", 
-                "x-values": self.get_timestamps()}
+        """Simple line plot for demo purposes"""
+        return {
+            "title": "Demo plot",
+            "x-label": "s",
+            "y-label": "V",
+            "x-values": self.get_timestamps(),
+        }
 
-
-
-    
     # --- implement methods for COMMANDS ----------------------------
     # def get_timestamps(self) -> List[float]:
-       
-    
+
     # async def start(self, duration_in_seconds: int = 0) -> None:
     #     #todo - do not ignore duration in seconds
     #     ts = np.array(self.get_timestamps())
@@ -235,9 +243,6 @@ class ExampleDevice(Device):
     #             self._stream_running = False
 
     #     self._stream_task = asyncio.create_task(_runner(), name=f"{self.id}-stream")
-
-
-        
 
     # async def start(self, duration_in_seconds: int) -> None:
     #     # Stop previous stream if any
@@ -283,7 +288,6 @@ class ExampleDevice(Device):
     #             pass
     #     self._stream_task = None
 
-
     # --- any helper methods go here ---------------------------------------------
     # def _sample(self, t: float) -> float:
     #     """Generate one sample at time t (seconds since stream start)."""
@@ -295,6 +299,3 @@ class ExampleDevice(Device):
     #     if self.add_noise and self._amp > 0:
     #         base += (random.random() * 2.0 - 1.0) * 0.05 * self._amp  # ±5% noise
     #     return base
-
-
-

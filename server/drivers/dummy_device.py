@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import Any, Dict
 from ._base import Device, api_device, api_command, api_property
 
+
 @api_device("dummy")
 class DummyDevice(Device):
     """
@@ -9,7 +10,12 @@ class DummyDevice(Device):
     Exposes one RW property 'foo' and one command 'bar()'.
     """
 
-    def __init__(self, dev_id: str, options: Dict[str, Any]):
+    def __init__(
+        self,
+        dev_id: str,
+        options: Dict[str, Any],
+        manager: Optional[DeviceManager] = None,
+    ):
         super().__init__(dev_id, options)
         properties = options.get("properties", {})
 
@@ -28,23 +34,19 @@ class DummyDevice(Device):
     @api_property(min=0, max=1.0, default=0.5, step=0.01)
     @property
     def foo(self) -> float:
-        """ Demo numeric property for testing """
+        """Demo numeric property for testing"""
         return self._foo
-    
+
     @foo.setter
     def foo(self, value: float) -> None:
         self._foo = value
-
 
     # --- API COMMANDS ---
     @api_command()
     def bar(self) -> int:
         """Demo command; increments an internal counter and return its value"""
-        self._bar_count +=1
+        self._bar_count += 1
         return self._bar_count
-
-
-
 
     # # --- setters ---
     # async def apply_params(self, params: Dict[str, Any]) -> Dict[str, Any]:

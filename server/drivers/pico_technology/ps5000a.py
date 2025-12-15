@@ -183,7 +183,12 @@ class PicoScope5000a(Device):
 
     kind = "ps5000a"  # to properly load device widget?? TODO -use driver name isntead
 
-    def __init__(self, dev_id: str, options: Dict[str, Any]):
+    def __init__(
+        self,
+        dev_id: str,
+        options: Dict[str, Any],
+        manager: Optional[DeviceManager] = None,
+    ):
         self.chandle = ctypes.c_int16()
         self.status = {}
 
@@ -210,7 +215,7 @@ class PicoScope5000a(Device):
 
         self._pico_raw_source = PicoRawSource(driver=self)
 
-        super().__init__(dev_id, options)
+        super().__init__(dev_id, options, manager)
 
     # --- lifecycle -----------------------------------------------------------
     async def connect(

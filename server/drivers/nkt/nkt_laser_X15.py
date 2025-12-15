@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 import asyncio, threading
 from nkt_tools import NKTP_DLL
 import logging
+
 logger = logging.getLogger(__name__)
 
 
@@ -16,18 +17,22 @@ class X15(Device):
 
     _EXEC = ThreadPoolExecutor(max_workers=1, thread_name_prefix="nkt_laser_X15")
 
-
-    def __init__(self, dev_id: str, options: Dict[str, Any]):
-        super().__init__(dev_id, options)
+    def __init__(
+        self,
+        dev_id: str,
+        options: Dict[str, Any],
+        manager: Optional[DeviceManager] = None,
+    ):
+        super().__init__(dev_id, options, manager)
         self.port = options.get("PORT", "COM4")
         self.autoMode = options.get("autoMode", 0)
         self.liveMode = options.get("liveMode", 0)
 
-    async def _run_blocking_in_thread(self, fn): # TODO - THIS MAY BE STATICMETHOD
+    async def _run_blocking_in_thread(self, fn):  # TODO - THIS MAY BE STATICMETHOD
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(X15._EXEC, fn)
-    
-    async def _on_device(self, fn): # TODO - THIS MAY BE STATICMETHOD
+
+    async def _on_device(self, fn):  # TODO - THIS MAY BE STATICMETHOD
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(X15._EXEC, fn)
 
@@ -36,12 +41,18 @@ class X15(Device):
         def _connect():
             openResult = NKTP_DLL.openPorts(self.port, self.autoMode, self.liveMode)
             if openResult != 0:
-                raise Exception (f"NKTP port not connected: {NKTP_DLL.PortResultTypes(openResult)}")
-            rdResult, self._wvg_standard = NKTP_DLL.registerReadU32(self.port, 0x01, 0x32, -1)
+                raise Exception(
+                    f"NKTP port not connected: {NKTP_DLL.PortResultTypes(openResult)}"
+                )
+            rdResult, self._wvg_standard = NKTP_DLL.registerReadU32(
+                self.port, 0x01, 0x32, -1
+            )
             if rdResult != 0:
-                logger.info(f"NKTP Read standard wavelength result: {NKTP_DLL.RegisterResultTypes(rdResult)}")
+                logger.info(
+                    f"NKTP Read standard wavelength result: {NKTP_DLL.RegisterResultTypes(rdResult)}"
+                )
 
-        await self._on_device(_connect) 
+        await self._on_device(_connect)
 
     async def disconnect(self) -> None:
         def _disconnect():
@@ -56,16 +67,19 @@ class X15(Device):
         rdResult, value = NKTP_DLL.registerReadU8(self.port, 0x01, 0x30, -1)
         """Emission on/off"""
         if rdResult != 0:
-            logger.info(f"NKTP emissiong read result: {NKTP_DLL.RegisterResultTypes(rdResult)}")
+            logger.info(
+                f"NKTP emissiong read result: {NKTP_DLL.RegisterResultTypes(rdResult)}"
+            )
         return bool(value)
-    
+
     @emission.setter
     def emission(self, value: bool) -> None:
         value_int = int(value)
         wrResult = NKTP_DLL.registerWriteS16(self.port, 0x01, 0x30, value_int, -1)
         if wrResult != 0:
-            logger.info(f"NKTP emission write result: {NKTP_DLL.RegisterResultTypes(wrResult)}")
-
+            logger.info(
+                f"NKTP emission write result: {NKTP_DLL.RegisterResultTypes(wrResult)}"
+            )
 
     @api_property(unit="nm")
     @property
@@ -79,9 +93,11 @@ class X15(Device):
         """Wavelength setpoint in nm. Minimal step 0.0001."""
         rdResult, wvg_actual_int = NKTP_DLL.registerReadS32(self.port, 0x01, 0x72, -1)
         if rdResult != 0:
-            logger.info(f"NKTP wvg_actual read result: {NKTP_DLL.RegisterResultTypes(rdResult)}")
-        wvg_actual = (wvg_actual_int + self._wvg_standard)/10000
-        return wvg_actual    
+            logger.info(
+                f"NKTP wvg_actual read result: {NKTP_DLL.RegisterResultTypes(rdResult)}"
+            )
+        wvg_actual = (wvg_actual_int + self._wvg_standard) / 10000
+        return wvg_actual
 
     @api_property(min=1546.0, max=1554.0, step=0.0001, unit="nm")
     @property
@@ -89,18 +105,20 @@ class X15(Device):
         """Wavelength setpoint in nm. Minimal step 0.0001. Mind the limited range."""
         rdResult, wvg_setpoint_int = NKTP_DLL.registerReadS16(self.port, 0x01, 0x2A, -1)
         if rdResult != 0:
-            logger.info(f"NKTP wsg_setpoint read result: {NKTP_DLL.RegisterResultTypes(rdResult)}")
-        wvg_setpoint = (wvg_setpoint_int + self._wvg_standard)/10000
+            logger.info(
+                f"NKTP wsg_setpoint read result: {NKTP_DLL.RegisterResultTypes(rdResult)}"
+            )
+        wvg_setpoint = (wvg_setpoint_int + self._wvg_standard) / 10000
         return wvg_setpoint
-    
+
     @wvg_setpoint.setter
     def wvg_setpoint(self, value_nm: float) -> None:
         value_int = int(round(value_nm * 10000 - self._wvg_standard))
         wrResult = NKTP_DLL.registerWriteS16(self.port, 0x01, 0x2A, value_int, -1)
         if wrResult != 0:
-            logger.info(f"NKTP wvg_setpoint write result: {NKTP_DLL.RegisterResultTypes(wrResult)}")
-
-
+            logger.info(
+                f"NKTP wvg_setpoint write result: {NKTP_DLL.RegisterResultTypes(wrResult)}"
+            )
 
     @api_property(unit="mW")
     @property
@@ -108,13 +126,14 @@ class X15(Device):
         """Output power in mW"""
         rdResult, power = NKTP_DLL.registerReadU16(self.port, 0x01, 0x17, -1)
         if rdResult != 0:
-            logger.info(f"NKTP power read result: {NKTP_DLL.RegisterResultTypes(rdResult)}")
-        return power/100
-
+            logger.info(
+                f"NKTP power read result: {NKTP_DLL.RegisterResultTypes(rdResult)}"
+            )
+        return power / 100
 
     # --- API COMMANDS ---
-    #@api_command()
-    #def bar(self, port: str) -> int:
-        #"""Demo command; increments an internal counter and return its value"""
-        #self._bar_count +=1
-        #return self._bar_count
+    # @api_command()
+    # def bar(self, port: str) -> int:
+    # """Demo command; increments an internal counter and return its value"""
+    # self._bar_count +=1
+    # return self._bar_count
