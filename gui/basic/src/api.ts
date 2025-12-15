@@ -49,7 +49,7 @@ export function openEvents(ids: string[] = [], rate?: number): WebSocket {
   const qs = new URLSearchParams();
   if (ids.length) qs.set('ids', ids.join(','));
   if (rate) qs.set('rate', String(rate));
-  const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/v1/events?${qs}`;
+  const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/v2/events?${qs}`;
   const ws = new WebSocket(url);
   return ws;
 }
@@ -59,7 +59,7 @@ export function openDataStream(id: string, source:string, rate?: number, format:
   const qs = new URLSearchParams();
   if (rate) qs.set('rate', String(rate));
   qs.set('format', format);
-  const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/v1/streams/${id}/${source}?${qs}`;
+  const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/v2/streams/${id}/${source}?${qs}`;
   const ws = new WebSocket(url);
   if (format === 'msgpack') ws.binaryType = 'arraybuffer';
   return ws;

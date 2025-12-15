@@ -209,7 +209,7 @@ export async function patchPicoscopeProperties(
 
 //
 // ─────────────────────────────────────────────────────────────────────────────
-//  Commands (POST /api/v1/devices/picoscope/commands)
+//  Commands (POST /api/v2/devices/picoscope/commands)
 // ─────────────────────────────────────────────────────────────────────────────
 //
 
@@ -287,7 +287,7 @@ export async function restartPicoscope(): Promise<string> {
 
 export function openEventsSocket(dev_id: string = 'picoscope'): WebSocket {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-  const url = `${proto}://${location.host}/api/v1/events?ids=${dev_id}`
+  const url = `${proto}://${location.host}/api/v2/events?ids=${dev_id}`
   return new WebSocket(url)
 }
 
@@ -310,7 +310,7 @@ export function openDataStream(
   const qs = new URLSearchParams()
   if (rate) qs.set('rate', String(rate))
   qs.set('format', format)
-  const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/v1/streams/${dev_id}/${source}?${qs}`
+  const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/v2/streams/${dev_id}/${source}?${qs}`
   const ws = new WebSocket(url)
   if (format === 'msgpack') ws.binaryType = 'arraybuffer'
   return ws

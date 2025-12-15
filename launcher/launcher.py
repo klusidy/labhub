@@ -173,7 +173,7 @@ class Launcher:
         except OSError:
             return False
 
-    def _ping(self, path="/api/v1/devices", timeout=0.4):
+    def _ping(self, path="/api/v2/devices", timeout=0.4):
         try:
             r = httpx.get(f"{self.host_full}{path}", timeout=timeout)
             return r.status_code == 200
@@ -184,7 +184,7 @@ class Launcher:
         """Wait until server responds or process dies. Returns (ok, reason_str)."""
         t0 = time.monotonic()
         # try both API and docs (in case no devices route yet)
-        paths = ["/api/v1/devices", "/docs"]
+        paths = ["/api/v2/devices", "/docs"]
         i = 0
         while time.monotonic() - t0 < timeout:
             # if the child exited, it failed
@@ -317,7 +317,7 @@ class Launcher:
     #         " -- reloading"
     #     )  # todo check if server is running and not do this if not
     #     try:
-    #         r = httpx.post(f"{self.host_full}/api/v1/admin/reload", timeout=2.0)
+    #         r = httpx.post(f"{self.host_full}/api/v2/admin/reload", timeout=2.0)
     #         if r.status_code == 200:
     #             self.tray.showMessage(
     #                 "LabHub", "Reloaded config.yaml", QSystemTrayIcon.Information, 1200
@@ -345,7 +345,7 @@ class Launcher:
     #     try:
     #         payload = {"file_path": str(self.properties_path)}
     #         r = httpx.post(
-    #             f"{self.host_full}/api/v1/admin/apply_properties",
+    #             f"{self.host_full}/api/v2/admin/apply_properties",
     #             json=payload,
     #             timeout=2.0,
     #         )
@@ -472,7 +472,7 @@ class Launcher:
 
     def _set_icon_from_server(self):
         try:
-            r = httpx.get(f"{self.host_full}/api/v1/devices", timeout=0.5)
+            r = httpx.get(f"{self.host_full}/api/v2/devices", timeout=0.5)
             if r.status_code == 200:
                 self.tray.setIcon(self.icon_green)
                 self.tray.setToolTip("LabHub: running")

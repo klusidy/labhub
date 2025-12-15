@@ -98,7 +98,7 @@ export default defineConfig((/* ctx */) => {
           target: 'http://localhost:8212', // your FastAPI server
           changeOrigin: true,
           secure: false,
-          ws: true, // important for /api/v1/events websocket
+          ws: true, // important for /api/v2/events websocket
         },
       },
       open: true, // opens browser window automatically
