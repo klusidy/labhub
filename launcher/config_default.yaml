@@ -1,0 +1,6 @@
+devices:
+  - id: "dummy_01"
+    driver: "dummy"
+  - id: "example_device_01"
+    driver: "example_device"
+

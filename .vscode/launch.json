@@ -2,12 +2,12 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Manual labhub start",
-      "type": "python",
+      "name": "Labhub server only (for debug)",
+      "type": "debugpy",
       "request": "launch",
       "module": "uvicorn",
       "args": [
-        "hub.hub_app.main:app",
+        "server.main:app",
         "--reload",
         "--host", "127.0.0.1",
         "--port", "8212"

@@ -1,11 +1,6 @@
-﻿hub/web/node_modules
-hub/_config.yaml
-hub/web/package-lock.json
-temp
+﻿temp
 *__pycache__
-.vscode/settings.json
-hub/config.yaml
-02_kpz_demo.py
 *.pyc
-.claude
 node_modules
+package-lock.json
+.claude
