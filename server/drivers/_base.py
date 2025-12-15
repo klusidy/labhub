@@ -8,7 +8,8 @@ from ._decorators import api_device, api_command, api_property, ALIASES, api_dat
 
 executor = ThreadPoolExecutor(max_workers=8) # todo - get this from above somehow? also make this configurable
 
-logger = logging.getLogger(__name__)
+# Use labhub namespace for logging
+logger = logging.getLogger("labhub." + __name__)
 
 # --- base class for a device driver --------------------------------
 class Device:

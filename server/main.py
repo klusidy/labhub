@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 import asyncio, json, os, tempfile, hashlib
 from contextlib import asynccontextmanager
@@ -10,203 +9,262 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 import msgpack
-import pdb # for live debugging
+import logging
 
+from .schemas import (
+    DeviceInfo,
+    PatchRequest,
+    DeviceSpec,
+    CommandRequest,
+    ApplyPropertiesRequest,
+)
 
-
-from .schemas import DeviceInfo, PatchRequest, DeviceSpec, CommandRequest, ApplyPropertiesRequest
 from .device_manager import DeviceManager
 from .events import EventBus
-from ._logging import init_logging
-import logging
-from ._logging import set_level as set_logging_level, get_level as get_logging_level
+from .utils import (
+    init_logging,
+    set_level as set_logging_level,
+    get_level as get_logging_level,
+)
+from .loader import get_config_path, load_config
 
+# Initialize logging - reads LABHUB_LOG_LEVEL and LABHUB_LOG_FILE from environment
+init_logging(log_file=os.environ.get("LABHUB_LOG_FILE"))
+logger = logging.getLogger(__name__)  # Uses module path automatically
 
-
-
-# ---- Logging ----
-init_logging()
-logger = logging.getLogger("labhub.main")
-
-# ---- Config helpers ----
-def get_config_path() -> str:
-    # Priority: app.state.config_path (set by factory/CLI) -> LABHUB_CONFIG env -> hub/config.yaml (default)
-    cp = getattr(app.state, "config_path", None) if "app" in globals() else None
-    if cp and str(cp).strip():
-        return str(cp)
-    env_cp = os.environ.get("LABHUB_CONFIG")
-    if env_cp and str(env_cp).strip():
-        return env_cp
-    return str(Path(__file__).resolve().parents[1] / "config.yaml")
-
-@dataclass
-class DeviceCfg:
-    id: str
-    driver: str
-    options: Dict[str, Any] #full dict from config.yaml for that device (incl. id and driver)
-
-@dataclass
-class HubCfg:
-    devices: List[DeviceCfg]
-
-
-
-def load_config() -> HubCfg:
-    config_path = get_config_path()
-    with open(config_path, "r", encoding="utf-8") as f:
-        raw = yaml.safe_load(f) or {}
-    devices: List[DeviceCfg] = []
-    for d in raw.get("devices", []):
-        # TODO: what if "id" or "driver" is missing?
-        devices.append(DeviceCfg(id=d["id"], driver=d["driver"], options=d))
-    return HubCfg(devices=devices)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _lock
-    cfg_path = os.path.abspath(get_config_path())
-    digest = hashlib.sha256(cfg_path.encode("utf-8")).hexdigest()[:16]
+    """FastAPI lifespan context manager for startup and shutdown."""
+    global lock
+
+    # --- Startup ---
+    logger.info("LabHub server starting...")
+
+    # 1. Acquire config file lock (prevents multiple servers for same config)
+    config_path = os.path.abspath(get_config_path())
+    digest = hashlib.sha256(config_path.encode("utf-8")).hexdigest()[:16]
     lock_path = os.path.join(tempfile.gettempdir(), f"labhub_{digest}.lock")
-    _lock = FileLock(lock_path)
+    lock = FileLock(lock_path)
     try:
-        _lock.acquire(timeout=0.1)
+        lock.acquire(timeout=0.1)
+        logger.info(f"Acquired lock for config: {config_path}")
     except Timeout:
-        raise RuntimeError(f"Another LabHub instance is already running for config: {cfg_path}")
+        logger.error(
+            f"Lock acquisition failed - another instance already running for config: {config_path}"
+        )
+        raise RuntimeError(
+            f"Another LabHub instance is already running for config: {config_path}"
+        )
 
+    # 2. Initialize devices from config
     cfg = load_config()
+    await manager.initialize_devices(cfg)
 
-    add_tasks = [asyncio.create_task(_manager.add_device(d.id, d.driver, d.options)) for d in cfg.devices]
-    results = await asyncio.gather(*add_tasks, return_exceptions=True)
+    # 3. Start property polling
+    await manager.start_polling(500)
+    logger.info("Device polling started")
 
-    for d, res in zip(cfg.devices, results):
-        if isinstance(res, Exception):
-            logger.error("Device '%s' failed to add: %r", d.id, res)
-            raise res
+    # TODO: 4. Initialize profile monitor (for live state backup)
+    # await init_profile_monitor(profile_path)
 
+    logger.info("LabHub server ready")
 
-    #for d in cfg.devices:
-    #    logger.debug("-------- adding device based on config ---------------")
-    #    await _manager.add_device(d.id, d.driver, d.options)
-    #for d in cfg.devices:
-    #    asyncio.create_task(_manager.add_device(d.id, d.driver, d.options))
+    yield  # Server is running
 
-    await _manager.start_polling(500)
-    yield
-    # shutdown
-    # Clean up the ML models and release the resources
-    await _manager.stop_polling()
-    await _manager.remove_all()
+    # --- Shutdown ---
+    logger.info("LabHub server shutting down...")
+
+    # TODO: Stop profile monitor
+    # await stop_profile_monitor()
+
+    await manager.stop_polling()
+    logger.info("Device polling stopped")
+
+    await manager.remove_all()
+    logger.info("All devices disconnected")
+
+    # Release lock
     try:
-        if _lock is not None:
-            _lock.release()
-    except Exception:
-        pass
+        if lock is not None:
+            lock.release()
+            logger.info("Config lock released")
+    except Exception as e:
+        logger.warning(f"Failed to release lock: {e}")
 
-# ---- App ----
-app = FastAPI(title="LabHub", version="0.1.3", lifespan=lifespan)
-_event_bus = EventBus()
-_manager = DeviceManager(_event_bus)
+    logger.info("LabHub server stopped")
 
-# Single-instance lock per CONFIG PATH
-_lock: FileLock | None = None
 
-WEB_DIST = Path(__file__).parent.parent / "web" / "dist"
+# ======= APP =========
+app = FastAPI(title="LabHub", version="0.2.0", lifespan=lifespan)
+event_bus = EventBus()
+manager = DeviceManager(event_bus)
+lock: FileLock | None = None  # Single-instance lock per CONFIG PATH
+
+# ---- Static files / GUI ----
+WEB_DIST = Path(__file__).parent.parent / "gui" / "basic" / "dist"
 if WEB_DIST.exists():
-    app.mount("/ui", staticfiles.StaticFiles(directory=str(WEB_DIST), html=True), name="ui")
+    app.mount(
+        "/ui", staticfiles.StaticFiles(directory=str(WEB_DIST), html=True), name="ui"
+    )
 
-GUI_PICOSCOPE_DIST = Path(__file__).parent.parent.parent / "gui" / "picoscope_gui" / "dist" / "spa"
+# todo - gui for picoscope should not be specified separately - not extensible
+GUI_PICOSCOPE_DIST = (
+    Path(__file__).parent.parent.parent / "gui" / "picoscope_gui" / "dist" / "spa"
+)
 if GUI_PICOSCOPE_DIST.exists():
-    app.mount("/picoscope", staticfiles.StaticFiles(directory=str(GUI_PICOSCOPE_DIST), html=True), name="picoscope")
+    app.mount(
+        "/picoscope",
+        staticfiles.StaticFiles(directory=str(GUI_PICOSCOPE_DIST), html=True),
+        name="picoscope",
+    )
 
 
 # ---- API ----
-@app.get("/api/v1/devices", response_model=list[DeviceInfo])
+@app.get("/api/v2/devices", response_model=list[DeviceInfo])
 async def list_devices():
-    return await _manager.list_devices()
+    return await manager.list_devices()
 
-@app.get("/api/v1/devices/{dev_id}", response_model=DeviceInfo)
+
+@app.get("/api/v2/devices/{dev_id}", response_model=DeviceInfo)
 async def get_device(dev_id: str):
-    if dev_id not in _manager.devices:
+    if dev_id not in manager.devices:
         raise HTTPException(404, f"Unknown device '{dev_id}'")
-    return await _manager.get_device_state(dev_id)
+    return await manager.get_device_state(dev_id)
 
-@app.patch("/api/v1/devices/{dev_id}", response_model=DeviceInfo)
+
+@app.patch("/api/v2/devices/{dev_id}", response_model=DeviceInfo)
 async def patch_device(dev_id: str, req: PatchRequest):
-    if dev_id not in _manager.devices:
+    if dev_id not in manager.devices:
         raise HTTPException(404, f"Unknown device '{dev_id}'")
-    #t0=time.perf_counter(); 
-    res = await _manager.apply_properties(dev_id, req.properties)
-    #print(f"PATCH total={(time.perf_counter()-t0)*1000:.1f}ms")
+    # t0=time.perf_counter();
+    res = await manager.apply_properties(dev_id, req.properties)
+    # print(f"PATCH total={(time.perf_counter()-t0)*1000:.1f}ms")
     return res
-    #return await _manager.apply_properties(dev_id, req.properties)
+    # return await manager.apply_properties(dev_id, req.properties)
 
-@app.get("/api/v1/devices/{dev_id}/spec", response_model=DeviceSpec)
+
+@app.get("/api/v2/devices/{dev_id}/spec", response_model=DeviceSpec)
 async def get_device_spec(dev_id: str):
-    if dev_id not in _manager.devices:
+    if dev_id not in manager.devices:
         raise HTTPException(404, f"Unknown device '{dev_id}'")
-    return await _manager.get_device_spec(dev_id)
+    return await manager.get_device_spec(dev_id)
 
-@app.post("/api/v1/devices/{dev_id}/commands")
+
+@app.post("/api/v2/devices/{dev_id}/commands")
 async def run_command(dev_id: str, req: CommandRequest):
-    if dev_id not in _manager.devices:
+    if dev_id not in manager.devices:
         raise HTTPException(404, f"Unknown device '{dev_id}'")
-    res = await _manager.run_command(dev_id, req.name, req.args)
+    res = await manager.run_command(dev_id, req.name, req.args)
     return res
 
-@app.post("/api/v1/admin/reload")
+
+@app.post("/api/v2/admin/reload")
 async def reload_all():
-    """Reload config.yaml without restarting the process."""
-    await _manager.stop_polling()
-    await _manager.remove_all()
-    cfg = load_config()
-    for d in cfg.devices: # TODO - CHANGE TO ASYNC GATHER
-        await _manager.add_device(d.id, d.driver, d.options)
-    await _manager.start_polling(500) #TODO - make param of each device
-    devices = [d.model_dump() for d in await _manager.list_devices()]
+    """
+    Reload all devices from config.yaml without restarting the process.
+
+    This:
+    1. Stops polling
+    2. Disconnects all devices
+    3. Reloads config
+    4. Reconnects all devices
+    5. Restarts polling
+    """
+    logger.info("Reloading all devices from config...")
+    await manager.stop_polling()
+    await manager.remove_all()
+
+    # Reinitialize devices from config
+    await manager.initialize_devices()
+
+    await manager.start_polling(
+        500
+    )  # TODO: Make polling interval per-device configurable
+    logger.info("Reload complete")
+
+    devices = [d.model_dump() for d in await manager.list_devices()]
     return {"ok": True, "devices": devices}
 
-@app.post("/api/v1/admin/reload/{dev_id}")
+
+@app.post("/api/v2/admin/reload/{dev_id}")
 async def reload_device(dev_id: str):
-    """Remove and add a (presumably) faulty device"""
-    if dev_id in _manager.devices:
-        await _manager.stop_polling_device(dev_id)
-        await _manager.remove_device(dev_id)
-    
+    """
+    Reload a single device from config.yaml.
+
+    Useful for:
+    - Recovering from device errors
+    - Applying config changes to one device
+    - Reconnecting after hardware issues
+    """
+    logger.info(f"Reloading device: {dev_id}")
+
+    # Remove existing device if present
+    if dev_id in manager.devices:
+        await manager.stop_polling_device(dev_id)
+        await manager.remove_device(dev_id)
+
+    # Find device in config and re-add
     cfg = load_config()
-    for d in cfg.devices: # TODO - CHANGE TO ASYNC GATHER
+    device_found = False
+    for d in cfg.devices:
         if d.id == dev_id:
-            await _manager.add_device(d.id, d.driver, d.options)
-            await _manager.start_polling_device(d.id, 500)
-    devices = [d.model_dump() for d in await _manager.list_devices()]
+            await manager.add_device(d.id, d.driver, d.options)
+            await manager.start_polling_device(d.id, 500)  # TODO: Configurable interval
+            device_found = True
+            logger.info(f"Device '{dev_id}' reloaded successfully")
+            break
+
+    if not device_found:
+        logger.warning(f"Device '{dev_id}' not found in config")
+        raise HTTPException(404, f"Device '{dev_id}' not found in config")
+
+    devices = [d.model_dump() for d in await manager.list_devices()]
     return {"ok": True, "devices": devices}
 
 
-@app.get("/api/v1/admin/loglevel")
-async def admin_get_loglevel():
-    """Get current root logging level."""
-    return {"level": get_logging_level()}
+@app.get("/api/v2/admin/loglevel")
+async def admin_get_loglevel(logger_name: str | None = None):
+    """
+    Get current logging level.
+
+    Args:
+        logger_name: Optional specific logger (e.g., 'labhub.drivers'). If None, returns root 'labhub' logger.
+    """
+    return {"logger": logger_name or "labhub", "level": get_logging_level(logger_name)}
 
 
-@app.post("/api/v1/admin/loglevel")
-async def admin_set_loglevel(level: str):
-    """Set root logging level. Accepts names like DEBUG, INFO or numeric values."""
+@app.post("/api/v2/admin/loglevel")
+async def admin_set_loglevel(level: str, logger_name: str | None = None):
+    """
+    Set logging level at runtime.
+
+    Args:
+        level: Level name (DEBUG, INFO, WARNING, ERROR) or numeric value
+        logger_name: Optional specific logger (e.g., 'labhub.drivers', 'labhub.drivers.kinesis').
+                    If None, sets root 'labhub' logger.
+
+    Examples:
+        POST /api/v2/admin/loglevel?level=DEBUG
+        POST /api/v2/admin/loglevel?level=WARNING&logger_name=labhub.drivers
+    """
     try:
-        res = set_logging_level(level)
+        res = set_logging_level(level, logger_name)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return res
 
 
-@app.post("/api/v1/admin/apply_properties")
+@app.post("/api/v2/admin/apply_properties")
 async def apply_properties_endpoint(req: ApplyPropertiesRequest):
     """Apply properties from file or inline dict. Does NOT restart devices."""
     if req.file_path:
         path = Path(req.file_path)
         if not path.exists():
             raise HTTPException(404, f"Properties file not found: {path}")
-        results = await _manager.apply_properties_from_file(path)
+        results = await manager.apply_properties_from_file(path)
     elif req.properties:
-        results = await _manager.apply_properties_from_dict(req.properties)
+        results = await manager.apply_properties_from_dict(req.properties)
     else:
         raise HTTPException(400, "Must provide file_path or properties")
 
@@ -215,7 +273,8 @@ async def apply_properties_endpoint(req: ApplyPropertiesRequest):
 
 from time import monotonic
 
-@app.websocket("/api/v1/events")
+
+@app.websocket("/api/v2/events")
 async def ws_events(ws: WebSocket):
     await ws.accept()
     qp = dict(ws.query_params)
@@ -224,10 +283,10 @@ async def ws_events(ws: WebSocket):
     min_period = (1.0 / rate_hz) if rate_hz > 0 else 0.0
     last_sent = 0.0
 
-    q = await _event_bus.subscribe()
+    q = await event_bus.subscribe()
     try:
         # initial snapshot (respect ids filter)
-        snap = [d.model_dump() for d in await _manager.list_devices()]
+        snap = [d.model_dump() for d in await manager.list_devices()]
         if want_ids:
             snap = [d for d in snap if d["id"] in want_ids]
         await ws.send_text(json.dumps({"type": "snapshot", "devices": snap}))
@@ -247,35 +306,39 @@ async def ws_events(ws: WebSocket):
     except WebSocketDisconnect:
         pass
     finally:
-        await _event_bus.unsubscribe(q)
+        await event_bus.unsubscribe(q)
+
 
 # todo - review if this api structure is extensible for new plots
-@app.get("/api/v1/devices/{dev_id}/data")
+@app.get("/api/v2/devices/{dev_id}/data")
 async def get_data_catalog(dev_id: str) -> Dict[str, Any]:
-    if dev_id not in _manager.devices:
+    if dev_id not in manager.devices:
         raise HTTPException(404, f"Unknown device '{dev_id}'")
-    return await _manager.get_data_catalog(dev_id)
+    return await manager.get_data_catalog(dev_id)
 
-@app.get("/api/v1/devices/{dev_id}/data/{source}/plot") # todo - change to lineplot?
+
+@app.get("/api/v2/devices/{dev_id}/data/{source}/plot")  # todo - change to lineplot?
 async def get_plot_spec(dev_id: str, source: str) -> Dict[str, Any]:
-    if dev_id not in _manager.devices:
+    if dev_id not in manager.devices:
         raise HTTPException(404, f"Unknown device '{dev_id}'")
     # 404 if unknown source
     try:
-        return await _manager.get_plot_spec(dev_id, source)
+        return await manager.get_plot_spec(dev_id, source)
     except KeyError as e:
         raise HTTPException(404, str(e))
 
-@app.get("/api/v1/devices/{dev_id}/data/{source}/frame")
+
+@app.get("/api/v2/devices/{dev_id}/data/{source}/frame")
 async def get_one_frame(dev_id: str, source: str) -> Dict[str, Any]:
-    if dev_id not in _manager.devices:
+    if dev_id not in manager.devices:
         raise HTTPException(404, f"Unknown device '{dev_id}'")
     try:
-        return await _manager.get_one_frame(dev_id, source)
+        return await manager.get_one_frame(dev_id, source)
     except KeyError as e:
         raise HTTPException(404, str(e))
 
-@app.websocket("/api/v1/streams/{dev_id}/{source}")
+
+@app.websocket("/api/v2/streams/{dev_id}/{source}")
 async def ws_stream(ws: WebSocket, dev_id: str, source: str):
     await ws.accept()
 
@@ -289,25 +352,25 @@ async def ws_stream(ws: WebSocket, dev_id: str, source: str):
     #     except Exception:
     #         interval = None
 
-    #send_hz = float(qps.get("rate", 10))
-    #send_period = (1.0 / send_hz) if send_hz > 0 else 0.1 # todo - use this somehow
+    # send_hz = float(qps.get("rate", 10))
+    # send_period = (1.0 / send_hz) if send_hz > 0 else 0.1 # todo - use this somehow
 
-    prod_hz = float(qps.get("rate", 12.5)) # producer should be slighlty faster I guess
+    prod_hz = float(qps.get("rate", 12.5))  # producer should be slighlty faster I guess
     prod_interval = (1.0 / prod_hz) if prod_hz > 0 else 0.08
 
     # Subscribe
-    if dev_id not in _manager.devices:
+    if dev_id not in manager.devices:
         await ws.close(code=4404)
         return
     try:
-        q = await _manager.subscribe_stream(dev_id, source, maxsize=64)
+        q = await manager.subscribe_stream(dev_id, source, maxsize=64)
     except KeyError:
         await ws.close(code=4404)
         return
 
     # If caller provided a rate, start (hot) producer for this source
     if prod_interval is not None:
-        await _manager.start_stream(dev_id, source, interval=prod_interval)
+        await manager.start_stream(dev_id, source, interval=prod_interval)
 
     try:
         while True:
@@ -320,23 +383,24 @@ async def ws_stream(ws: WebSocket, dev_id: str, source: str):
     finally:
         # best-effort cleanup
         try:
-            dev = _manager.devices[dev_id]
+            dev = manager.devices[dev_id]
             await dev.get_datasource(source).unsubscribe(q)
         except Exception:
             pass
 
-# @app.websocket("/api/v1/streams/{dev_id}")
+
+# @app.websocket("/api/v2/streams/{dev_id}")
 # async def ws_stream(ws: WebSocket, dev_id: str, rate : int=10, format: str = "json"):
 #     await ws.accept()
 #     format = ws.query_params.get("format", "msgpack").lower()
 #     rate_hz = float(ws.query_params.get("rate", 0) or 0)
 #     min_period = (1.0 / rate_hz) if rate_hz > 0 else 0.0
 
-#     dev = _manager.devices.get(dev_id, None)
+#     dev = manager.devices.get(dev_id, None)
 #     if dev is None or not hasattr(dev, "subscribe_stream"):
 #         await ws.close(code=1008)
 #         return
-    
+
 #     q = dev.subscribe_stream()
 #     try:
 #         while True:
@@ -351,7 +415,7 @@ async def ws_stream(ws: WebSocket, dev_id: str, source: str):
 #     finally:
 #         dev.unsubscribe_stream(q)
 
-# @app.websocket("/api/v1/streams/{dev_id}")
+# @app.websocket("/api/v2/streams/{dev_id}")
 # async def ws_stream(ws: WebSocket, dev_id: str):
 #     await ws.accept()
 #     fmt = ws.query_params.get("format", "msgpack").lower()  # "msgpack" (default) or "json"
@@ -359,11 +423,11 @@ async def ws_stream(ws: WebSocket, dev_id: str, source: str):
 #     min_period = (1.0 / rate_hz) if rate_hz > 0 else 0.0
 #     last_sent = 0.0
 
-#     if dev_id not in _manager.devices:
+#     if dev_id not in manager.devices:
 #         await ws.close(code=1008)
 #         return
 
-#     q = await _event_bus.subscribe()
+#     q = await event_bus.subscribe()
 #     try:
 #         while True:
 #             ev = await q.get()
@@ -385,5 +449,4 @@ async def ws_stream(ws: WebSocket, dev_id: str, source: str):
 #     except WebSocketDisconnect:
 #         pass
 #     finally:
-#         await _event_bus.unsubscribe(q)
-
+#         await event_bus.unsubscribe(q)
