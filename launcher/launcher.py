@@ -156,9 +156,9 @@ class Launcher:
         self.menu.addSeparator()
         self.menu.addAction(self.act_launch_gui)
         self.menu.addAction(self.act_docs)
-        self.menu.addSeparator()
-        self.menu.addMenu(self.config_menu)
-        self.menu.addMenu(self.profile_menu)
+        # self.menu.addSeparator() does not work yet
+        # self.menu.addMenu(self.config_menu)
+        # self.menu.addMenu(self.profile_menu)
         self.menu.addSeparator()
 
         # self.menu.addAction(self.act_reload)
