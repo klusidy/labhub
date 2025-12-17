@@ -24,12 +24,13 @@ import importlib
 import logging
 from typing import Type
 
-from .base import Device, ALIASES
+from .base import Device
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("labhub.device_manager.drivers")
+
 
 # Track already loaded drivers to avoid redundant imports
-ALREADY_LOADED = set()
+ALREADY_LOADED = dict()
 
 
 def load_driver_class(driver_identifier: str) -> Type[Device]:
@@ -65,40 +66,42 @@ def load_driver_class(driver_identifier: str) -> Type[Device]:
         )
 
     vendor, device_name = parts
-    module_path = f"drivers.{vendor}.{device_name}"
-    expected_class_name = device_name  # Must match filename exactly
+    module_path = f"server.drivers.{vendor}.{device_name}"
+    expected_class_name = device_name  # Shall match filename exactly
 
     # Check if already loaded
-    if expected_class_name in ALIASES:
+    if module_path in ALREADY_LOADED:
         logger.debug(f"Driver '{driver_identifier}' already loaded from cache")
-        return ALIASES[expected_class_name]
+        return ALREADY_LOADED[module_path]
 
     # Dynamic import (triggers @api_device decorator which registers class in ALIASES)
     if module_path not in ALREADY_LOADED:
         logger.info(f"Loading driver '{driver_identifier}' from {module_path}")
         try:
-            importlib.import_module(module_path)
-            ALREADY_LOADED.add(module_path)
+            module = importlib.import_module(module_path)
+            cls = getattr(module, expected_class_name)
+            ALREADY_LOADED[module_path] = cls
         except ImportError as e:
             raise ImportError(
                 f"Failed to import driver module '{module_path}': {e}\n"
-                f"Expected file: drivers/{vendor}/{device_name}.py"
+                f"Expected file: server/drivers/{vendor}/{device_name}.py"
             ) from e
 
-    # Find class in ALIASES (should be registered by @api_device decorator)
-    if expected_class_name not in ALIASES:
-        available = ", ".join(sorted(ALIASES.keys()))
-        raise KeyError(
-            f"Driver class '{expected_class_name}' not found in module '{module_path}'.\n"
-            f"Ensure:\n"
-            f"  1. Class is decorated with @api_device()\n"
-            f"  2. Class name matches filename exactly: class {expected_class_name}(Device)\n"
-            f"  3. File path: drivers/{vendor}/{device_name}.py\n"
-            f"Available classes: {available or '(none loaded yet)'}"
-        )
+    # # Find class in ALREADY_LOADED (should be registered by @api_device decorator)
+    # # this was formerly using ALIASES
+    # if expected_class_name not in ALREADY_LOADED:
+    #     available = ", ".join(sorted(ALREADY_LOADED.keys()))
+    #     raise KeyError(
+    #         f"Driver class '{expected_class_name}' not found in module '{module_path}'.\n"
+    #         f"Ensure:\n"
+    #         f"  1. Class is decorated with @api_device()\n"
+    #         f"  2. Class name matches filename exactly: class {expected_class_name}(Device)\n"
+    #         f"  3. File path: drivers/{vendor}/{device_name}.py\n"
+    #         f"Available classes: {available or '(none loaded yet)'}"
+    #     )
 
     logger.debug(f"Loaded driver '{driver_identifier}' -> {expected_class_name}")
-    return ALIASES[expected_class_name]
+    return ALREADY_LOADED[module_path]
 
 
 def get(driver_identifier: str) -> Type[Device]:
@@ -122,4 +125,4 @@ def get(driver_identifier: str) -> Type[Device]:
 
 
 # For backwards compatibility and direct access
-__all__ = ["Device", "ALIASES", "get", "load_driver_class"]
+__all__ = ["Device", "get", "load_driver_class"]

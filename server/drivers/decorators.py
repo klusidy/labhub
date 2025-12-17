@@ -21,9 +21,6 @@ import weakref
 from .data_source import DataSource, Frame
 
 
-ALIASES: Dict[str, Any] = {}
-
-
 def api_device():
     """
     Decorator to mark a class as a device driver.
@@ -38,7 +35,6 @@ def api_device():
         - Device name is inferred from class name (e.g., ExampleDevice)
         - Class name must match filename for auto-discovery:
           drivers/vendor/example_device.py → class ExampleDevice
-        - Registers class in ALIASES dict for dynamic loading
 
     Args:
         doc: Optional documentation (defaults to class docstring)
@@ -51,9 +47,6 @@ def api_device():
         # Store metadata on class
         cls._api_device_name = device_name
         cls._api_device_meta = {"doc": (cls.__doc__ or "").strip()}
-
-        # Register in global aliases for discovery
-        ALIASES[device_name] = cls
 
         return cls
 

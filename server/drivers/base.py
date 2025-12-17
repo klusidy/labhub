@@ -4,7 +4,7 @@ import logging
 from typing import Any, Dict, Callable, Optional, Mapping, get_type_hints, TYPE_CHECKING
 import inspect
 from concurrent.futures import ThreadPoolExecutor
-from .decorators import api_device, api_command, api_property, ALIASES, api_data, Frame
+from .decorators import api_device, api_command, api_property, api_data, Frame
 
 if TYPE_CHECKING:
     from ..device_manager import DeviceManager
@@ -21,8 +21,7 @@ logger = logging.getLogger("labhub.drivers._base")
 class Device:
     """Abstract async device interface."""
 
-    kind: str = "device"
-
+    _api_driver: str = "device"
     _api_properties: Dict[str, Dict[str, Any]] = {}  # per subclass
     _api_commands: Dict[str, Dict[str, Any]] = {}  # per subclass
     _api_data_sources: Dict[str, Dict[str, Any]] = {}  # per subclass
@@ -164,7 +163,8 @@ class Device:
         """
         self.id = dev_id
         self.options = options
-        self.manager = (
+        self._api_driver = options.get("driver", "unknown")
+        self._manager = (
             manager  # Reference to device manager (for executor, event bus, etc.)
         )
         self._lock = asyncio.Lock()
@@ -246,7 +246,7 @@ class Device:
             Result from func
         """
         loop = asyncio.get_running_loop()
-        executor = self.manager.executor if self.manager else _fallback_executor
+        executor = self._manager.executor if self._manager else _fallback_executor
         return await loop.run_in_executor(executor, lambda: func(*args, **kwargs))
 
     async def _on_device(self, func, *args, **kwargs):
@@ -525,7 +525,7 @@ class Device:
 
         return DeviceSpec(
             id=dev_id,
-            kind=getattr(self, "kind", "device"),
+            driver=self._api_driver,
             doc=dev_meta.get("doc", "No docstring found in driver class"),
             properties=properties,
             commands=cmds,

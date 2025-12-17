@@ -119,7 +119,9 @@ class DeviceManager:
             # Note: options already contains "driver" field from load_config()
             dev: drivers.Device = await cls.create(dev_id, options, manager=self)
             self.devices[dev_id] = dev
-            logger.info(f"Device '{dev_id}' added successfully")
+            logger.info(
+                f"\033[32m  - Device '{dev_id}' added successfully\033[0m"
+            )  # TODO BETTER COLOR MANAGEMENT
         except Exception as e:
             logger.error(
                 f"Failed to add device '{dev_id}' (driver={driver}): {e}",
