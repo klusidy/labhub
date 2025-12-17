@@ -6,17 +6,10 @@ Manages device initialization, polling, state tracking, and API operations.
 
 from __future__ import annotations
 import asyncio
-from typing import Dict, List, Type, Any, get_args
+from typing import Dict, List, Type, Any
 from concurrent.futures import ThreadPoolExecutor
 
-from .schemas import (
-    DeviceInfo,
-    PropertySpec,
-    CommandSpec,
-    DeviceSpec,
-    DataSourceSpec,
-    ArgSpec,
-)
+from .schemas import DeviceInfo, DeviceSpec
 from .events import EventBus
 from .drivers._base import Device
 from . import drivers
@@ -206,7 +199,7 @@ class DeviceManager:
 
         async def polling_task(dev_id: str, dev: Device) -> None:
             """Inner polling loop for a single device."""
-            keys = list(getattr(dev, "PROPERTIES", {}).keys())
+            keys = list(getattr(dev, "_api_properties", {}).keys())
             logger.debug(
                 f"Polling task started for '{dev_id}' ({len(keys)} properties, interval={dev.polling_interval}ms)"
             )
@@ -580,8 +573,7 @@ class DeviceManager:
         """
         Build device specification from driver metadata.
 
-        Constructs comprehensive API specification from driver's PROPERTIES,
-        COMMANDS, and DATA_SOURCES metadata.
+        Wrapper that delegates to device's build_spec() method.
 
         Args:
             dev_id: Device identifier
@@ -591,117 +583,10 @@ class DeviceManager:
 
         Raises:
             KeyError: Device not found
-
-        Notes:
-            - Used by clients for API discovery and UI generation
-            - Property types extracted from Python type hints
-            - Command arguments include type and constraint info
         """
         logger.debug(f"Building device spec for '{dev_id}'")
         dev = self.devices[dev_id]
-
-        # Parse PROPERTIES metadata
-        properties: List[PropertySpec] = []
-        for name, meta in getattr(dev, "PROPERTIES", {}).items():
-            if meta.get("type", "Any") == "Any":
-                logger.warning(
-                    f"Property {dev.options['driver']}.{name} has no return type specified - add type hint to property getter"
-                )
-                continue
-            properties.append(
-                PropertySpec(
-                    name=name,
-                    read_only=bool(meta.get("read_only", False)),
-                    unit=meta.get("unit"),
-                    type=meta.get(
-                        "type", object
-                    ).__qualname__,  # str, int, float, bool # todo - for complex types, this does not work
-                    min=meta.get("min"),
-                    max=meta.get("max"),
-                    choices=meta.get("choices"),
-                    fields=meta.get(
-                        "fields"
-                    ),  # list[str] or dict – matches your schemas.py
-                    doc=meta.get("doc"),  # <-- add doc field
-                    default=meta.get("default"),  # <-- add default field
-                    # doc/default/step if you add them later
-                    # TODO - ADD STEP/DEFAULT AND DOCS FIELDS
-                )
-            )
-        # COMMANDS: list[str] or list of {name, args}
-        cmds: List[CommandSpec] = []
-        cmd_meta = getattr(dev, "COMMANDS", [])
-        if isinstance(cmd_meta, dict):
-            for cname, cinfo in cmd_meta.items():
-                args = []  # process args to match argspec format
-                raw_args = cinfo.get("args", [])
-                # print(f"  !!!!!!!!! --- command {cname} raw args = {raw_args}")
-                for a in raw_args:
-                    a_type = a.get("type", object)
-                    if a_type is None:
-                        print(
-                            f"!! Command {cname} is missing type hint for argument {a}. Add proper type hint for correct API."
-                        )
-                        continue
-                    qualname = a_type.__qualname__
-                    if qualname == "Literal":
-                        choices = get_args(a["type"])
-                        type_str = type(choices[0]).__qualname__
-                    else:
-                        choices = None
-                        type_str = qualname
-
-                    args.append(
-                        ArgSpec(
-                            name=a.get("name"),
-                            type=type_str,  # _type_name(a.get("type", Any)), <-- for more complex args, this will be necessary
-                            default=a.get("default"),
-                            required=a.get("default", None) is None,
-                            choices=choices,
-                        )
-                    )
-                    logger.debug(
-                        "type_str = %s, choices = %s", type_str, args[-1].choices
-                    )
-                # print(f"  !!!!!!!!! --- command {cname} args = {args}")
-                events = cinfo.get("events", {})
-                cmds.append(
-                    CommandSpec(
-                        name=cname, args=args, doc=cinfo.get("doc", ""), events=events
-                    )
-                )
-        else:
-            for (
-                cname
-            ) in cmd_meta:  # COMMANDS SHOULD BE DICTIONARY, THIS SHOULD NOT HAPPEN
-                cmds.append(CommandSpec(name=cname, args={}))
-
-        # DATA SOURCES
-        dss: List[DataSourceSpec] = []
-        ds_meta = getattr(dev, "DATA_SOURCES")
-        if isinstance(ds_meta, dict):
-            for dsname, dsinfo in ds_meta.items():
-                dss.append(
-                    DataSourceSpec(
-                        name=dsname,
-                        has_plot=dsinfo.get("has_plot", False),
-                        doc=dsinfo.get("doc", ""),
-                    )
-                )
-
-        dev_meta = getattr(dev, "_api_device_meta", {})
-        logger.debug(
-            f"Device spec built for '{dev_id}': {len(properties)} properties, {len(cmds)} commands, {len(dss)} data sources"
-        )
-
-        return DeviceSpec(
-            id=dev_id,
-            kind=getattr(dev, "kind", "device"),
-            doc=dev_meta.get("doc", "No docstring found in driver class"),
-            properties=properties,
-            commands=cmds,
-            data_sources=dss,
-        )
+        return dev.build_spec(dev_id)
 
     async def shutdown(self) -> None:
         """

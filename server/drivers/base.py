@@ -14,8 +14,7 @@ _fallback_executor = ThreadPoolExecutor(
     max_workers=8, thread_name_prefix="fallback_worker"
 )
 
-# Use labhub namespace for logging
-logger = logging.getLogger("labhub." + __name__)
+logger = logging.getLogger("labhub.drivers._base")
 
 
 # --- base class for a device driver --------------------------------
@@ -24,13 +23,13 @@ class Device:
 
     kind: str = "device"
 
-    PROPERTIES: Dict[str, Dict[str, Any]] = {}  # per subclass
-    COMMANDS: Dict[str, Dict[str, Any]] = {}  # per subclass
-    DATA_SOURCES: Dict[str, Dict[str, Any]] = {}  # per subclass
+    _api_properties: Dict[str, Dict[str, Any]] = {}  # per subclass
+    _api_commands: Dict[str, Dict[str, Any]] = {}  # per subclass
+    _api_data_sources: Dict[str, Dict[str, Any]] = {}  # per subclass
 
     def __init_subclass__(cls, api_alias: Optional[str] = None):
         """Called when a subclass is defined (not initialized).
-        Scans for @api_command and @api_property decorators to auto-populate COMMANDS and PROPERTIES.
+        Scans for @api_command and @api_property decorators to auto-populate registries.
         """
         super().__init_subclass__()  # there is not superclass, but its good practice
         commands, properties, data_sources = {}, {}, {}
@@ -94,7 +93,6 @@ class Device:
                 )
                 prop["type"] = get_hint
                 prop["read_only"] = fset is None
-                prop["default"] = prop_meta.get("default", None)
                 prop["min"] = prop_meta.get("min", None)
                 prop["max"] = prop_meta.get("max", None)
                 prop["step"] = prop_meta.get("step", None)
@@ -116,9 +114,9 @@ class Device:
                 )
                 data_sources[attr._api_data_name] = data_source
 
-        cls.COMMANDS = commands
-        cls.PROPERTIES = properties
-        cls.DATA_SOURCES = data_sources
+        cls._api_commands = commands
+        cls._api_properties = properties
+        cls._api_data_sources = data_sources
 
     @classmethod
     async def create(
@@ -140,16 +138,14 @@ class Device:
 
         Notes:
             - Connects to hardware
-            - Applies driver-defined default properties
-            - Profile defaults applied separately by device_manager
+            - Property defaults applied from profile (monitor.py)
         """
         self = cls(dev_id, options, manager)
         await self.connect()
-        if self._connected:
-            await self._apply_driver_defaults()
-            # Note: Profile defaults applied via device_manager after all devices connected
-        else:
-            logger.warning(f"Device '{dev_id}' failed to connect")
+        if self._status != "connected":
+            logger.warning(
+                f"Device '{dev_id}' failed to connect (status: {self._status})"
+            )
         return self
 
     def __init__(
@@ -171,25 +167,35 @@ class Device:
         self.manager = (
             manager  # Reference to device manager (for executor, event bus, etc.)
         )
-        self.LOCK = asyncio.Lock()
-        self.CACHE: Dict[str, Any] = {}  # Cached property values
+        self._lock = asyncio.Lock()
+        self._cache: Dict[str, Any] = {}  # Cached property values
         self.polling_interval = options.get("polling_interval", 1000)  # ms
-        self._connected = False
-
-    async def _apply_driver_defaults(self):
-        for property_name, metadata in getattr(self, "PROPERTIES", {}).items():
-            if "default" in metadata and metadata["default"] is not None:
-                logger.debug(
-                    "- base init, prop_name=%s, metadata=%s", property_name, metadata
-                )
-                await self.set_property(property_name, metadata["default"])
+        self._status = "disconnected"  # "disconnected", "connected", "unhealthy"
+        self._poll_error_count = 0  # Track consecutive polling failures
 
     # --- lifecycle ---
     async def connect(self) -> None:  # override
-        self._connected = True
+        """Connect to device hardware. Override in subclasses."""
+        self._status = "connected"
+        self._poll_error_count = 0
 
     async def disconnect(self) -> None:  # override
-        self._connected = False
+        """Disconnect from device hardware. Override in subclasses."""
+        self._status = "disconnected"
+
+    def check_status(self) -> str:
+        """
+        Check device health status.
+
+        Returns:
+            Status string: "connected", "disconnected", or "unhealthy"
+
+        Notes:
+            Override in subclasses that can actively detect disconnection
+            (e.g., by querying device status). Base implementation returns
+            current status based on connection state and polling failures.
+        """
+        return self._status
 
     # --- core ops v2 ---
     async def _run_blocking_in_thread(self, func, *args, **kwargs):
@@ -211,9 +217,10 @@ class Device:
 
     async def _on_device(self, func, *args, **kwargs):
         """
-        Run blocking function in thread pool executor (legacy name).
+        Legacy alias for _run_blocking_in_thread.
 
-        TODO: Refactor all drivers to use _run_blocking_in_thread instead.
+        Deprecated: Use _run_blocking_in_thread instead. Kept for backwards
+        compatibility with existing drivers.
 
         Args:
             func: Blocking function to run
@@ -222,40 +229,76 @@ class Device:
         Returns:
             Result from func
         """
-        loop = asyncio.get_running_loop()
-        executor = self.manager.executor if self.manager else _fallback_executor
-        return await loop.run_in_executor(executor, lambda: func(*args, **kwargs))
+        return await self._run_blocking_in_thread(func, *args, **kwargs)
 
     async def poll_property(self, name: str) -> Any:
-        """Read one property from device and update cache."""
-        async with self.LOCK:
-            value = await self._run_blocking_in_thread(lambda: getattr(self, name))
-            self.CACHE[name] = (
-                value  # CachedValue(value=value, updated_at=asyncio.get_event_loop().time())
-            )
-            return value
+        """
+        Read one property from device and update cache.
+
+        Handles polling failures by tracking consecutive errors. After 3
+        consecutive failures, marks device as "unhealthy".
+
+        Args:
+            name: Property name to poll
+
+        Returns:
+            Property value
+
+        Raises:
+            Exception: If polling fails (after logging and updating status)
+        """
+        async with self._lock:
+            try:
+                value = await self._run_blocking_in_thread(lambda: getattr(self, name))
+                self._cache[name] = value
+
+                # Reset error count on successful poll
+                if self._poll_error_count > 0:
+                    logger.info(f"{self.id}: Poll recovered (property '{name}')")
+                    self._poll_error_count = 0
+                    if self._status == "unhealthy":
+                        self._status = "connected"
+                        logger.info(
+                            f"{self.id}: Device status recovered: unhealthy -> connected"
+                        )
+
+                return value
+
+            except Exception as e:
+                self._poll_error_count += 1
+                logger.warning(
+                    f"{self.id}: Failed to poll property '{name}'"
+                    f"(error #{self._poll_error_count}): {e}"
+                )
+
+                # Mark as unhealthy after 3 consecutive failures
+                if self._poll_error_count >= 3 and self._status == "connected":
+                    self._status = "unhealthy"
+                    logger.error(
+                        f"{self.id}: Device marked as unhealthy after {self._poll_error_count} "
+                        f"consecutive polling failures"
+                    )
+
+                raise
 
     async def set_property(self, name: str, value: Any) -> None:
         """Set one property on device and update cache."""
-        meta = getattr(self, "PROPERTIES", {}).get(name, {})
+        meta = getattr(self, "_api_properties", {}).get(name, {})
         clamped_value = self._coerce_clamp(meta, value)
-        async with self.LOCK:
+        async with self._lock:
             await self._run_blocking_in_thread(
                 lambda: setattr(self, name, clamped_value)
             )
-            self.CACHE[name] = value
-            # read-back (optional) - TODO decide if needed (probably not? - just trust it)
-            # new_value = await self._run_blocking_in_thread(lambda: self.property_get(name))
-            # self.cache[name] = new_value
+            self._cache[name] = clamped_value  # Cache the clamped value, not original
 
     def get_cached(self, name: str) -> Any:
         """Get cached property value."""
-        return self.CACHE.get(name, None)
+        return self._cache.get(name, None)
 
     async def read_state(self) -> Dict[str, Any]:
         """Reads all properties from cache."""
         state = {}
-        for k in getattr(self, "PROPERTIES", {}).keys():
+        for k in getattr(self, "_api_properties", {}).keys():
             state[k] = self.get_cached(k)
         return state
 
@@ -267,109 +310,6 @@ class Device:
 
         # read back concurrently (optional)
         return await self.read_state()
-
-    async def apply_properties_from_spec(
-        self, properties: Dict[str, Any], readout_props: set
-    ) -> None:
-        """
-        Apply properties from resolved specification (from properties.yaml).
-
-        Args:
-            properties: {prop_name: value} to set on device
-            readout_props: Set of prop names to read from device (not set)
-
-        Behavior:
-            - For readout props: poll_property() to read and cache
-            - For regular props: set_property() with validation
-            - Log WARNING for clamped/type-invalid values
-            - Continue on error (don't raise)
-        """
-        # First, read $READOUT properties from device
-        for prop_name in readout_props:
-            if prop_name not in self.PROPERTIES:
-                logger.warning(
-                    f"{self.id}: $READOUT property '{prop_name}' not found, skipping"
-                )
-                continue
-            try:
-                value = await self.poll_property(prop_name)
-                logger.info(f"{self.id}.{prop_name} = {value} (read from device)")
-            except Exception as e:
-                logger.warning(f"{self.id}: Failed to read property '{prop_name}': {e}")
-
-        # Then, set specified properties
-        for prop_name, value in properties.items():
-            if prop_name not in self.PROPERTIES:
-                logger.warning(f"{self.id}: Property '{prop_name}' not found, skipping")
-                continue
-
-            try:
-                meta = self.PROPERTIES[prop_name]
-
-                # Check type compatibility
-                expected_type = meta.get("type")
-                if expected_type and not isinstance(value, expected_type):
-                    try:
-                        value = expected_type(value)  # Try conversion
-                        logger.info(
-                            f"{self.id}.{prop_name}: converted {type(value).__name__} "
-                            f"to {expected_type.__name__}"
-                        )
-                    except (ValueError, TypeError) as e:
-                        logger.warning(
-                            f"{self.id}.{prop_name}: type mismatch, expected {expected_type}, "
-                            f"got {type(value).__name__}, skipping"
-                        )
-                        continue
-
-                # Check if value will be clamped
-                original_value = value
-                clamped_value = self._coerce_clamp(meta, value)
-                if clamped_value != original_value:
-                    logger.warning(
-                        f"{self.id}.{prop_name}: value {original_value} clamped to {clamped_value}"
-                    )
-
-                # Set the property
-                await self.set_property(prop_name, value)
-                logger.info(f"{self.id}.{prop_name} = {value}")
-
-            except Exception as e:
-                logger.warning(f"{self.id}: Failed to set {prop_name} = {value}: {e}")
-
-    # --- core ops ---
-    # async def read_state(self) -> Dict[str, Any]:
-    #     keys = list(getattr(self, "PROPERTIES", {}).keys())
-    #     vals = await asyncio.gather(*(self.property_get_async(k) for k in keys))
-    #     state = dict(zip(keys, vals))
-    #     return state
-
-    # async def read_state_sequential(self) -> Dict[str, Any]:
-    #     keys = list(getattr(self, "PROPERTIES", {}).keys())
-    #     state = {}
-    #     for k in keys:
-    #         state[k] = await self.property_get_async(k)
-    #     return state
-
-    # def property_get(self, name: str) -> Any:
-    #     return getattr(self, name)
-
-    # async def property_get_async(self, name: str):
-    #     return await self._on_device(lambda: self.property_get(name))
-
-    # async def apply_properties(self, properties: dict) -> dict:
-    #     for k, v in properties.items():
-    #         await self.property_set_async(k, v)
-
-    #     # read back concurrently (optional)
-    #     return await self.read_state()
-
-    # def property_set(self, name: str, value):
-    #     meta = getattr(self, "PROPERTIES", {}).get(name, {})
-    #     setattr(self, name, self._coerce_clamp(meta, value))
-
-    # async def property_set_async(self, name: str, value):
-    #     return await self._on_device(lambda: self.property_set(name, value))
 
     def _coerce_clamp(self, spec: Dict[str, Any], value: Any) -> Any:
         # best-effort type + bounds + choices enforcement
@@ -400,15 +340,9 @@ class Device:
             value = min(spec["max"], value)
         if "choices" in spec and spec["choices"]:
             if value not in spec["choices"]:
-                # pick closest/default if out of set
-                value = spec.get("default", spec["choices"][0])
+                # pick first choice if value not in valid set
+                value = spec["choices"][0]
         return value
-
-    # Default marshaller: just offload to a thread so we don't block the loop.
-    # Drivers that need strict thread affinity will override this (see KPZ).
-    # async def _on_device(self, fn):
-    #     loop = asyncio.get_running_loop()
-    #     return await loop.run_in_executor(None, fn)
 
     # ---- generic command runner -------------------------------------------
     async def run_command(self, name: str, args: Dict[str, Any] | None = None):
@@ -416,17 +350,17 @@ class Device:
         if hasattr(self, name) and callable(fn := getattr(self, name)):
             return await fn(**args) if asyncio.iscoroutinefunction(fn) else fn(**args)
         raise RuntimeError(
-            f"Method {name} specified in COMMANDS not found in the class"
+            f"Method {name} specified in _api_commands not found in the class"
         )
 
     # Convenience accessors
     def list_data_sources(self) -> Dict[str, Dict[str, Any]]:
         """Return the per-class registry (name -> spec)."""
-        return dict(self.__class__.DATA_SOURCES)
+        return dict(self.__class__._api_data_sources)
 
     def get_datasource(self, name: str):
-        """Return the DataSource instance (the descriptor’s __get__ gives you one)."""
-        spec = self.__class__.DATA_SOURCES.get(name)
+        """Return the DataSource instance (the descriptor's __get__ gives you one)."""
+        spec = self.__class__._api_data_sources.get(name)
         if not spec:
             raise KeyError(
                 f"Unknown data source '{name}' for {self.__class__.__name__}"
@@ -436,4 +370,128 @@ class Device:
     # --- helpers ---
     @property
     def is_connected(self) -> bool:
-        return self._connected
+        """Check if device is connected (backwards compatibility)."""
+        return self._status == "connected"
+
+    def build_spec(self, dev_id: str):
+        """
+        Build device specification from driver metadata.
+
+        Constructs comprehensive API specification from driver's _api_properties,
+        _api_commands, and _api_data_sources metadata.
+
+        Args:
+            dev_id: Device identifier
+
+        Returns:
+            DeviceSpec with properties, commands, and data sources
+
+        Notes:
+            - Used by clients for API discovery and UI generation
+            - Property types extracted from Python type hints
+            - Command arguments include type and constraint info
+        """
+        from typing import get_args
+        from ..schemas import (
+            DeviceSpec,
+            PropertySpec,
+            CommandSpec,
+            DataSourceSpec,
+            ArgSpec,
+        )
+
+        # Parse _api_properties metadata
+        properties = []
+        for name, meta in self._api_properties.items():
+            # Type validation now done in decorator - this is a safety net for edge cases
+            if meta.get("type", "Any") == "Any":
+                logger.debug(
+                    f"Property {self.options['driver']}.{name} has type 'Any' (decorator should have caught this)"
+                )
+                continue
+            properties.append(
+                PropertySpec(
+                    name=name,
+                    read_only=bool(meta.get("read_only", False)),
+                    unit=meta.get("unit"),
+                    type=meta.get("type", object).__qualname__,
+                    min=meta.get("min"),
+                    max=meta.get("max"),
+                    choices=meta.get("choices"),
+                    fields=meta.get("fields"),
+                    doc=meta.get("doc"),
+                )
+            )
+
+        # Parse _api_commands metadata
+        cmds = []
+        cmd_meta = self._api_commands
+        if isinstance(cmd_meta, dict):
+            for cname, cinfo in cmd_meta.items():
+                args = []
+                raw_args = cinfo.get("args", [])
+                for a in raw_args:
+                    a_type = a.get("type", object)
+                    if a_type is None:
+                        logger.warning(
+                            f"Command {cname} is missing type hint for argument {a}. Add proper type hint for correct API."
+                        )
+                        continue
+                    qualname = a_type.__qualname__
+                    if qualname == "Literal":
+                        choices = get_args(a["type"])
+                        type_str = type(choices[0]).__qualname__
+                    else:
+                        choices = None
+                        type_str = qualname
+
+                    args.append(
+                        ArgSpec(
+                            name=a.get("name"),
+                            type=type_str,
+                            default=a.get("default"),
+                            required=a.get("default", None) is None,
+                            choices=choices,
+                        )
+                    )
+                    logger.debug(
+                        "type_str = %s, choices = %s", type_str, args[-1].choices
+                    )
+
+                events = cinfo.get("events", {})
+                cmds.append(
+                    CommandSpec(
+                        name=cname, args=args, doc=cinfo.get("doc", ""), events=events
+                    )
+                )
+        else:
+            # Fallback for legacy format
+            for cname in cmd_meta:
+                cmds.append(CommandSpec(name=cname, args=[]))
+
+        # Parse _api_data_sources metadata
+        dss = []
+        ds_meta = self._api_data_sources
+        if isinstance(ds_meta, dict):
+            for dsname, dsinfo in ds_meta.items():
+                dss.append(
+                    DataSourceSpec(
+                        name=dsname,
+                        has_plot=dsinfo.get("has_plot", False),
+                        doc=dsinfo.get("doc", ""),
+                    )
+                )
+
+        dev_meta = getattr(self, "_api_device_meta", {})
+        logger.debug(
+            f"Device spec built for '{dev_id}': {len(properties)} properties, {len(cmds)} commands, {len(dss)} data sources"
+        )
+
+        return DeviceSpec(
+            id=dev_id,
+            kind=getattr(self, "kind", "device"),
+            doc=dev_meta.get("doc", "No docstring found in driver class"),
+            properties=properties,
+            commands=cmds,
+            data_sources=dss,
+        )

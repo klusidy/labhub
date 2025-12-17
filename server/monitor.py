@@ -91,6 +91,15 @@ class ProfileMonitor:
         # Load existing profile to preserve policies
         self._load_policies()
 
+        # Wait for initial polling to populate CACHE
+        # This prevents unnecessary property writes on startup when CACHE is empty
+        if initial_delay > 0:
+            logger.debug(
+                f"Waiting {initial_delay}s for initial device polling to populate CACHE..."
+            )
+            await asyncio.sleep(initial_delay)
+            logger.debug("Initial delay complete, CACHE should be populated")
+
         # Start periodic save loop
         self._save_task = asyncio.create_task(self._periodic_save_loop())
 
@@ -198,7 +207,7 @@ class ProfileMonitor:
                         policy = self._policies[dev_id][prop_name]
                     else:
                         # Determine policy from property metadata
-                        prop_meta = dev.PROPERTIES.get(prop_name, {})
+                        prop_meta = dev._api_properties.get(prop_name, {})
                         policy = "read" if prop_meta.get("read_only") else "write"
                         self._policies[dev_id][
                             prop_name
@@ -339,7 +348,7 @@ class ProfileMonitor:
         # Validate: cannot set "write" on read-only property
         dev = self.manager.devices.get(dev_id)
         if dev:
-            prop_meta = dev.PROPERTIES.get(prop_name, {})
+            prop_meta = dev._api_properties.get(prop_name, {})
             if prop_meta.get("read_only") and policy == "write":
                 raise ValueError(
                     f"Cannot set 'write' policy on read-only property '{prop_name}'"
