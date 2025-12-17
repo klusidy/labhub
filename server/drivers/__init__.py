@@ -86,19 +86,11 @@ def load_driver_class(driver_identifier: str) -> Type[Device]:
                 f"Failed to import driver module '{module_path}': {e}\n"
                 f"Expected file: server/drivers/{vendor}/{device_name}.py"
             ) from e
-
-    # # Find class in ALREADY_LOADED (should be registered by @api_device decorator)
-    # # this was formerly using ALIASES
-    # if expected_class_name not in ALREADY_LOADED:
-    #     available = ", ".join(sorted(ALREADY_LOADED.keys()))
-    #     raise KeyError(
-    #         f"Driver class '{expected_class_name}' not found in module '{module_path}'.\n"
-    #         f"Ensure:\n"
-    #         f"  1. Class is decorated with @api_device()\n"
-    #         f"  2. Class name matches filename exactly: class {expected_class_name}(Device)\n"
-    #         f"  3. File path: drivers/{vendor}/{device_name}.py\n"
-    #         f"Available classes: {available or '(none loaded yet)'}"
-    #     )
+        except Exception as e:
+            raise ImportError(
+                f"Error while loading driver '{expected_class_name}' from '{module_path}':\n"
+                f"{e}"
+            ) from e
 
     logger.debug(f"Loaded driver '{driver_identifier}' -> {expected_class_name}")
     return ALREADY_LOADED[module_path]

@@ -176,9 +176,10 @@ def api_property(
     def decorator(fget):
         # Validate input
         if not callable(fget):
+            frame = inspect.stack()[1]
             raise TypeError(
                 f"@api_property() must be applied to a function, "
-                f"got {type(fget).__name__}"
+                f"got {type(fget).__name__} on line {frame.lineno} of {frame.filename}"
             )
 
         # Validate type hint exists (fail fast at class definition time)

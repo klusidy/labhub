@@ -60,7 +60,7 @@ class example_device(Device):  # Class name MUST match filename exactly
             - Don't connect to hardware here - use async connect() method
             - Initialize private variables that cache hardware state here
         """
-        super().__init__(dev_id, options, manager)
+        super().__init__(dev_id, options, manager) # Do include this base class initialization!
 
         # Initialize whatever internal variables are needed
         # Here, we simulate HW state with them

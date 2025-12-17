@@ -103,9 +103,28 @@ class DeviceManager:
             - Failures are logged but not re-raised (allows partial initialization)
             - Device passed the manager's executor for blocking operations
         """
-        cls = drivers.get(driver)
+        try:
+            cls = drivers.get(driver)
+        except KeyError as ke:
+            cls = None
+            logger.error(
+                f"Driver class not found in module: {driver}: {ke}", exc_info=True
+            )
+        except ValueError as ve:
+            cls = None
+            logger.error(f"Error loading driver '{driver}': {ve}", exc_info=True)
+        except ImportError as ie:
+            cls = None
+            logger.error(
+                f"Failed to import driver module for '{driver}': \n" f"{ie}",
+                exc_info=True,
+            )
+            raise RuntimeError(
+                f"Failed to import driver module for '{driver}': \n" f"{ie}"
+            ) from ie
+
         if cls is None:
-            logger.error(f"Unknown driver: {driver}")
+            logger.error(f"Unknown driver '{driver}' or not available on this platform")
             raise RuntimeError(
                 f"Unknown driver '{driver}' or not available on this platform"
             )

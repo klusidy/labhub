@@ -4,7 +4,8 @@
 
 from __future__ import annotations
 import asyncio, math, random, logging
-from typing import Any, Dict, Optional, List, Literal, AsyncIterator
+from typing import Any, Dict, Optional, List, Literal, AsyncIterator, TYPE_CHECKING
+
 import numpy as np
 from collections import deque
 from scipy.signal import get_window, detrend as sp_detrend
@@ -12,6 +13,8 @@ from scipy.signal import get_window, detrend as sp_detrend
 from ..base import Device, api_device, api_command, api_property, api_data, Frame
 from ..data_source import DataSource
 
+if TYPE_CHECKING:
+    from ...device_manager import DeviceManager
 
 import ctypes
 import os
@@ -176,12 +179,12 @@ class PicoRawSource(DataSource):
         self._task.add_done_callback(on_done)
 
 
-@api_device("ps5000a")
-class PicoScope5000a(Device):
+# @api_device("ps5000a")
+class ps5000a(Device):
     """PicoScope 5000a series driver.
     This driver requires the PicoSDK to be installed."""
 
-    kind = "ps5000a"  # to properly load device widget?? TODO -use driver name isntead
+    # kind = "ps5000a"  # to properly load device widget?? TODO -use driver name isntead
 
     def __init__(
         self,
