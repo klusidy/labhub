@@ -72,22 +72,16 @@ def api_command(api_name=None, *, doc=None):
 
             # Warn if no return type specified (not all commands return values, so just warn)
             if "return" not in hints:
-                import warnings
-
-                warnings.warn(
+                raise TypeError(
                     f"Command '{method.__name__}' has no return type hint. "
-                    f"Consider adding -> YourType or -> None",
-                    RuntimeWarning,
-                )
+                    f"Please add -> YourType or -> None",
+                )  # TODO ADD LINE NUMBERS TO ALL EXCEPTINS RAISED HERE
+
         except NameError as e:
             # Forward references not resolved yet - warn but allow
-            import warnings
-
-            warnings.warn(
-                f"Could not validate type hints for command '{method.__name__}': {e}. "
-                f"Ensure forward references are properly quoted.",
-                RuntimeWarning,
-            )
+            raise TypeError(
+                f"Something wrong with '{method.__name__}': {e}. "
+            )  # TODO - WTF IS THIS NAME ERROR??
 
         method._api_command_name = api_name or method.__name__
         method._api_command_meta = {"doc": doc or (method.__doc__ or "").strip()}

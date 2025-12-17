@@ -225,7 +225,7 @@ class ps5000a(Device):
         """Connect to the device."""
         # TODO - fail gracefully if something goes wrong
 
-        def _connect():
+        def sync_connect():
             self.started = ctypes.c_int16(0)  # <-- status*, not handle
             self.status["openunit"] = ps.ps5000aOpenUnitAsync(
                 ctypes.byref(self.started), None, self.resolution
@@ -271,10 +271,13 @@ class ps5000a(Device):
 
             return True
 
-        await self._on_device(
-            _connect
+        res = await self._on_device(
+            sync_connect
         )  # TODO - keep track of single thread like kinesis?
-        self._connected = True
+        # TODO - sync_connect mechanism is in base, but what to do with the channel defaults?
+        # TODO - NO CHANNEL DEFAULTS IN CONFIG.YAML!!!
+        if not res:
+            return False
 
         for channel_defaults in self.options.get("channels", []):
             if "id" not in channel_defaults:
@@ -283,6 +286,7 @@ class ps5000a(Device):
             _range = channel_defaults.get("range", "1V")
             _enable = channel_defaults.get("enable", True)
             await self.set_channel(channel_defaults["id"], _enable, _coupling, _range)
+        return True
 
     async def disconnect(self) -> None:
         """Disconnect from the device."""
@@ -347,7 +351,6 @@ class ps5000a(Device):
         return timebase
 
     @api_property(unit="Hz")
-    @property
     def sampling_frequency(self) -> float:
         """Current sampling frequency in Hz."""
 
@@ -402,23 +405,20 @@ class ps5000a(Device):
 
     # read-only properties (slave of sampling_frequency)
     @api_property()
-    @property
     def sampling_time_ns(self) -> float:
         return self._time_interval_ns
 
     @api_property()
-    @property
     def max_data_samples(self) -> int:
         """Maximum number of samples that can be captured in one acquisition."""
         return self._max_samples
 
     @api_property(unit="s")
-    @property
     def max_data_seconds(self) -> float:
         """Maximum number of samples that can be captured in one acquisition."""
         return self._max_samples * self._time_interval_ns * 1e-9
 
-    @property
+    @api_property()
     def pre_trigger_samples(self) -> int:
         """Number of pre-trigger samples in the current acquisition."""
         return self._pre_trigger_samples
@@ -433,7 +433,6 @@ class ps5000a(Device):
         return value
 
     @api_property()
-    @property
     def post_trigger_samples(self) -> int:
         """Number of post-trigger samples in the current acquisition."""
         return self._post_trigger_samples
@@ -452,7 +451,6 @@ class ps5000a(Device):
         return value
 
     @api_property(unit="s")
-    @property
     def post_trigger_samples_seconds(
         self,
     ) -> float:  # TODO link different units to the same property
@@ -460,7 +458,6 @@ class ps5000a(Device):
         return self._post_trigger_samples * self._time_interval_ns * 1e-9
 
     @api_property()
-    @property
     def pre_trigger_samples(self) -> int:
         """Number of pre-trigger samples in the current acquisition."""
         return self._pre_trigger_samples
@@ -475,7 +472,6 @@ class ps5000a(Device):
         return value
 
     @api_property()
-    @property
     def downsample_window(self) -> int:
         """Number of samples to average over in downsampled PSD"""
         return self._downsample_window
@@ -607,7 +603,7 @@ class ps5000a(Device):
     @api_command()
     async def acquire_to_file(
         self, folder: str, filename: str, acquisition_duration_s: Optional[float] = None
-    ):
+    ) -> dict:
 
         sampling_frequency_hz = self._sampling_frequency
 

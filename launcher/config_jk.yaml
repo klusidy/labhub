@@ -1,10 +1,10 @@
 devices:
-  - id: "dummy_01"
-    driver: "dummy"
+  # - id: "dummy_01"
+  #   driver: "dummy"
   - id: "example_device_01"
-    driver: "example_device"
+    driver: "example.example_device"
   - id: "picoscope"
-    driver: "ps5000a"
+    driver: "pico_technology.ps5000a"
     resolution: 14 #8/12/14/15/16 bit
     channels:
       - id: "A"
