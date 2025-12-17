@@ -1,301 +1,290 @@
-# hub_app/drivers/example_device.py
+"""
+Example Device Driver Template
+
+This file serves as a template for creating new device drivers.
+
+To create a new driver:
+1. Copy this file to drivers/vendor_name/your_device_name.py
+2. Rename class to match filename EXACTLY: class your_device_name(Device)
+3. Update docstrings and implement device-specific hardware interaction
+4. Add entry to config.yaml: driver: vendor_name.your_device_name
+
+Key patterns demonstrated:
+- @api_device() decorator (no arguments) registers the driver
+- @api_property() creates properties with metadata (min/max/unit/choices)
+- @api_command() creates callable commands with type-checked arguments
+- @api_data() creates streaming data sources with optional plot specs
+- Class name MUST match filename exactly (e.g., example_device.py → class example_device)
+"""
+
 from __future__ import annotations
-import asyncio, math, random, logging
-from typing import Any, Dict, Optional, List, AsyncIterator
+import asyncio
+import logging
+from typing import List, AsyncIterator, Dict, Any, Optional, TYPE_CHECKING
+
 import numpy as np
-from ._base import Device, api_device, api_command, api_property, api_data, Frame
+
+from ..base import Device, api_device, api_command, api_property, api_data, Frame
+
+if TYPE_CHECKING:
+    from ...device_manager import DeviceManager
 
 logger = logging.getLogger(__name__)
 
 
-@api_device("example_device")
-class ExampleDevice(Device):
+@api_device()  # No arguments - metadata inferred from class
+class example_device(Device):  # Class name MUST match filename exactly
     """
-    Spec-driven toy device that generates a time-series from a configurable waveform.
-    Properties control the waveform and streaming cadence; commands manage streaming.
+    Example device that generates configurable waveforms for testing.
+
+    This is a simulated device - it doesn't connect to real hardware.
+    For real device examples, see other files in drivers/<vendor> folders.
     """
-
-    kind = "example_device"  # todo -keep this or replace with alias?
-    # doc = "Example device that generates a time-series from a configurable waveform."
-
-    # --- /spec metadata to make everything work -----------------------
-    # PARAMS: Dict[str, Dict[str, Any]] = {
-    #     "time_step": {
-    #         "doc": "Sampling interval for generated data (seconds).",
-    #         "type": "float", "unit": "s", "minimum": 1e-4, "maximum": 10.0, "default": 0.01, "step": 0.001,
-    #     },
-    #     "number_of_time_steps": {
-    #         "doc": "How many samples to return from get_timestamps().",
-    #         "type": "int", "minimum": 1, "maximum": 1_000_000, "default": 1000, "step": 1,
-    #     },
-    #     "wave": {
-    #         "doc": "Composite waveform parameters.",
-    #         "fields": {
-    #             "frequency": {"doc": "Wave frequency (Hz).", "unit": "Hz", "minimum": 0.0, "maximum": 10_000.0, "default": 1.0},
-    #             "amplitude": {"doc": "Wave amplitude.", "minimum": 0.0, "maximum": 1e6, "default": 1.0},
-    #             "phase":     {"doc": "Phase offset (radians).", "unit": "rad", "minimum": 0.0, "maximum": 2*math.pi, "default": 0.0},
-    #         },
-    #     },
-    #     "add_noise": {
-    #         "doc": "Add small uniform noise (~±5% of amplitude).",
-    #         "type": "bool", "default": False,
-    #     },
-    #     "wave_type": {
-    #         "doc": "Waveform type.",
-    #         "type": "str", "choices": ["sin", "square"], "default": "sin",
-    #     },
-    #     # todo -add status flags like "streaming" to PARAMS as read-only param
-    # }
-
-    # COMMANDS: Dict[str, Dict[str, Any]] = {
-    #     "get_timestamps": {
-    #         "doc": "Return x-axis timestamps based on number_of_time_steps and time_step.",
-    #         "args": {}, "returns": "List[float]",
-    #         "method": "get_timestamps",  # method name to call
-    #     },
-    #     "start": {
-    #         "doc": "Start streaming y-values at time_step Hz. Stops automatically after duration (s) if >0.",
-    #         "args": {"duration_in_seconds": {"type": "int", "required": True, "default": 0}},
-    #         "returns": "None",
-    #     },
-    #     "stop": {
-    #         "doc": "Stop streaming.",
-    #         "args": {}, "returns": "None",
-    #     },
-    # }
-
-    # -------------------------------------------------------------------------
 
     def __init__(
         self,
         dev_id: str,
-        default_values: Dict[str, Any],
+        options: Dict[str, Any],
         manager: Optional[DeviceManager] = None,
     ):
-        super().__init__(dev_id, default_values)
-        # must initialize private variables (if there are any)
-        self._time_step = 0
-        self._number_of_time_steps = 0
-        self._noise = False
-        self._wave_type = "sin"
+        """
+        Initialize device instance.
 
-    # --- lifecycle -----------------------------------------------------------
+        Args:
+            dev_id: Unique device identifier from config.yaml
+            options: Full device config dict from config.yaml (includes "driver" key)
+            manager: Reference to DeviceManager (provides executor, event bus)
 
-    async def connect(self) -> None:
-        # self._connected = True
-        return True
+        Notes:
+            - Base class stores options, manager, creates _cache, _lock
+            - Don't connect to hardware here - use async connect() method
+            - Initialize private variables that cache hardware state here
+        """
+        super().__init__(dev_id, options, manager)
+
+        # Initialize whatever internal variables are needed
+        # Here, we simulate HW state with them
+        self.hw_time_step = 0.01  # Would be read from device in real driver
+        self.hw_number_of_time_steps = 1000
+        self.hw_noise = False
+        self.hw_wave_type = "sin"
+
+    # --- Lifecycle Methods ---------------------------------------------------
+    # Override these to manage hardware connections
+
+    def connect(self) -> None:
+        """Either sync or async method to establish connection to HW.
+
+        Returns:
+            bool: True if connection was successful, False otherwise.
+        """
+        return True  # For real hardware, implement connection logic here¨
 
     async def disconnect(self) -> None:
-        await self.stop()
-        self._connected = False
+        """
+        Either sync or async method to safely terminate connection to HW.
 
-    # -- API PROPERTIES
+        Returns:
+            bool: True if connection was successful, False otherwise.
+        """
+        return True
 
-    @api_property(min=1e-4, max=10.0, default=0.01, step=0.001)  # TODO - ADD UNITS
-    @property
+    # --- Properties ----------------------------------------------------------
+    # Properties represent device state that can be read (and optionally written).
+    #
+    # Instead of python @property, use @api_property() decorator to signify that
+    # a property should be polled and exposed through the API
+    # The decorator accepts metadata arguments:
+    # - min, max: Numeric bounds for validation
+    # - step: Increment step for numeric properties
+    # - unit: Unit string (e.g., "V", "s", "Hz")
+    # - choices: List of valid string options
+    #
+    # Under the hood:
+    # - polling thread calls the getter periodically
+    # - value is cached in self._cache
+    # - clients read cached values via API
+    # - setters update hardware and cache when called
+    # - locking (exclusive access) is handled automatically
+    @api_property(min=1e-4, max=10.0, step=0.001, unit="s")
     def time_step(self) -> float:
-        """Sampling interval for generated data (seconds)"""
-        return self._time_step
+        """
+        Sampling interval for generated data.
+
+        Getter returns cached value (fast, no hardware access).
+        For real devices, this would return the last value read from hardware.
+        """
+        return self.hw_time_step
 
     @time_step.setter
-    def time_step(
-        self, value: float
-    ):  # todo when value is dict, update min/max/default etc
-        self._time_step = value
+    def time_step(self, value: float):
+        """
+        Set sampling interval.
 
-    @api_property(min=1, max=1_000_000, default=1000, step=10)
-    @property
+        For real hardware, this would:
+        1. Call SDK function to configure device
+        2. Update private cache variable
+
+        Example (from ps5000a.py):
+            ps.ps5000aSetTimebase(self.chandle, timebase, ...)
+            self._time_interval = value  # Update cache
+
+        Note: Base class handles validation (min/max/choices from decorator)
+        """
+        self.hw_time_step = value
+
+    @api_property(min=1, max=1_000_000, step=10)
     def number_of_time_steps(self) -> int:
-        """How many samples to return from get_timestamps() (default = 1000)"""
-        return self._number_of_time_steps
+        """Number of samples to generate"""
+        return self.hw_number_of_time_steps
 
     @number_of_time_steps.setter
     def number_of_time_steps(self, value: int):
-        self._number_of_time_steps = value
+        self.hw_number_of_time_steps = value
 
-    @api_property(default=False)
-    @property
+    @api_property()
     def noise(self) -> bool:
-        """Add small uniform noise (~±5% of amplitude)."""
-        return self._noise
+        """Add random noise to waveform"""
+        return self.hw_noise
 
     @noise.setter
     def noise(self, value: bool):
-        self._noise = value
+        self.hw_noise = value
 
-    @api_property(choices=["sin", "square"], default="sin")
-    @property
+    @api_property(choices=["sin", "square"])
     def wave_type(self) -> str:
         """Waveform type"""
-        return self._wave_type
+        return self.hw_wave_type
 
     @wave_type.setter
-    def wave_type(self, value: str):  # validation is done automatically from choices
-        self._wave_type = value
+    def wave_type(self, value: str):
+        self.hw_wave_type = value
 
-    # PARAMS: Dict[str, Dict[str, Any]] = {
-
-    #         "wave": {
-    #             "doc": "Composite waveform parameters.",
-    #             "fields": {
-    #                 "frequency": {"doc": "Wave frequency (Hz).", "unit": "Hz", "minimum": 0.0, "maximum": 10_000.0, "default": 1.0},
-    #                 "amplitude": {"doc": "Wave amplitude.", "minimum": 0.0, "maximum": 1e6, "default": 1.0},
-    #                 "phase":     {"doc": "Phase offset (radians).", "unit": "rad", "minimum": 0.0, "maximum": 2*math.pi, "default": 0.0},
-    #             },
-    #         },
-
-    #         # todo -add status flags like "streaming" to PARAMS as read-only param
-    #     }
-
-    # @api_property()
-    # @property
-    # def wave(self):
-    #     # vendor-specific HW logic for value readout
-    #     return {
-    #         "frequency": self._freq,
-    #         "amplitude": self._amp,
-    #         "phase": self._phase
-    #     }
-
-    # @wave.setter
-    # def wave(self, value: Dict[str, Any]):
-    #     # vendor-specific HW logic for value setting
-    #     self._freq = float(value.get("frequency", 1.0))
-    #     self._amp = float(value.get("amplitude", 1.0))
-    #     self._phase = float(value.get("phase", 0.0))
-
-    # --- API COMMANDS ---
-
+    # --- Commands ------------------------------------------------------------
+    # Commands are actions that execute on demand (not polled/cached).
+    # Use for operations like: start acquisition, save data, reset device.
+    # Use @api_command() decorator to publish commands to API
+    # Dont forget to type-annotate arguments and return type!
     @api_command()
     def get_timestamps(self) -> List[float]:
-        """Return x-axis timestamps based on number_of_time_steps and time_step."""
-        dt = self.time_step
-        self._ts = np.arange(self.number_of_time_steps) * dt
-        return self._ts.tolist()  # todo - find faster way to serialize numpy
+        """
+        Generate timestamp array for current configuration.
 
-    # --- API DATA/PLOTS ---
+        Commands can be sync or async:
+        - Sync (def): For fast, non-blocking operations
+        - Async (async def): For operations that do hardware I/O
+
+        For blocking SDK calls, use:
+            value = await self._run_blocking_in_thread(sdk_function, arg1, arg2)
+
+        This prevents blocking the asyncio event loop.
+        """
+        dt = self.time_step
+        ts = np.arange(self.number_of_time_steps) * dt
+        return ts.tolist()  # TODO move calling to separate thread allways?
+
+    # --- Data Sources --------------------------------------------------------
+    # Data sources are async generators that yield Frame dicts for streaming.
+    # They run in background tasks managed by the DataSource class.
+
     @api_data()
     async def demo_wave(self) -> AsyncIterator[Frame]:
-        """Simple wave generator for demo purposes"""
-        try:
-            # setup
-            wave = np.sin(self.get_timestamps())
-            if self.wave_type == "square":
-                wave = np.sign(wave)
+        """
+        Generate continuous waveform stream.
 
-            # repeated action
+        Yields Frame dicts with structure:
+            {
+                "series": [
+                    {"name": "Channel A", "data": [y1, y2, ...]},
+                    {"name": "Channel B", "data": [y1, y2, ...]},
+                ]
+            }
+
+        Important:
+        - Use await asyncio.sleep() to control emission rate
+        - Clean up hardware resources in finally block
+        - Use self._run_blocking_in_thread() for SDK calls
+        """
+        try:
+            logger.debug(f"{self.id}: demo_wave starting")
+
             while True:
-                ret_wave = (
-                    wave + (np.random.rand(self.number_of_time_steps) * 0.5)
-                    if self.noise
-                    else wave.copy()
-                )
+                # Generate waveform
+                ts = np.arange(self.number_of_time_steps) * self.time_step
+                wave = np.sin(2 * np.pi * ts)
+
+                if self.wave_type == "square":
+                    wave = np.sign(wave)
+
+                if self.noise:
+                    wave = wave + (np.random.rand(len(wave)) - 0.5) * 0.1
+
+                # Yield frame to all subscribers
                 yield {
                     "series": [
-                        {"name": "Test waveform", "data": ret_wave.tolist()},
+                        {"name": "Waveform", "data": wave.tolist()},
                     ]
                 }
-                await asyncio.sleep(0.05)  #
+
+                # Control emission rate
+                await asyncio.sleep(0.05)
 
         finally:
-            logger.debug("demo_wave generator exiting")  # teardown
-
-    # simple payload: { data: [...] }
-    # object-of-arrays: { "PSD": [...], "Channel 1": [...], meta: {...} }
-    # explicit series list: { series: [ { name: "PSD", data: [...] }, { name: "Ch 1", data: [...] } ], "x-values": [...] }
+            logger.debug(f"{self.id}: demo_wave stopped")
+            # For real hardware: stop acquisition, release buffers
 
     @demo_wave.plot()
     def demo_plot(self) -> Dict[str, Any]:
-        """Simple line plot for demo purposes"""
+        """
+        Define plot specification for demo_wave.
+
+        Called once when client requests plot config.
+        Returns dict with title, axis labels, and x-values.
+        """
         return {
-            "title": "Demo plot",
-            "x-label": "s",
-            "y-label": "V",
+            "title": "Example Waveform",
+            "x-label": "Time (s)",
+            "y-label": "Amplitude (V)",
             "x-values": self.get_timestamps(),
         }
 
-    # --- implement methods for COMMANDS ----------------------------
-    # def get_timestamps(self) -> List[float]:
 
-    # async def start(self, duration_in_seconds: int = 0) -> None:
-    #     #todo - do not ignore duration in seconds
-    #     ts = np.array(self.get_timestamps())
-
-    #     # WHAT IF self._stream_queue is not there??
-    #     async def _runner():
-    #         try:
-    #             while self._stream_running:
-    #                 x = np.sin(2 * np.pi * self._freq * ts + self._phase) * self._amp
-    #                 if self.add_noise and self._amp > 0:
-    #                     x += (np.random.random(len(x)) * 2.0 - 1.0) * 0.05 * self._amp
-    #                 if self._stream_queue.full():
-    #                     try:
-    #                         _ = self._q.get_nowait()
-    #                     except asyncio.QueueEmpty:
-    #                         pass
-
-    #                     try:
-    #                         self._q.put_nowait(x)
-    #                     except asyncio.QueueFull:
-    #                         pass
-    #                     await asyncio.sleep(self.time_step)
-    #         finally:
-    #             self._stream_running = False
-
-    #     self._stream_task = asyncio.create_task(_runner(), name=f"{self.id}-stream")
-
-    # async def start(self, duration_in_seconds: int) -> None:
-    #     # Stop previous stream if any
-    #     await self.stop()
-
-    #     loop = asyncio.get_running_loop()
-    #     self._t0 = loop.time()
-    #     self._stream_running = True
-    #     self._stream_end = (self._t0 + float(duration_in_seconds)) if duration_in_seconds and duration_in_seconds > 0 else None
-    #     self._q = asyncio.Queue(maxsize=4096)
-
-    #     async def _runner():
-    #         try:
-    #             while self._stream_running:
-    #                 now = loop.time()
-    #                 if self._stream_end is not None and now >= self._stream_end:
-    #                     break
-    #                 t = now - self._t0
-    #                 y = self._sample(t)
-    #                 # If full, drop oldest to keep stream moving
-    #                 if self._q.full():
-    #                     try:
-    #                         _ = self._q.get_nowait()
-    #                     except asyncio.QueueEmpty:
-    #                         pass
-    #                 try:
-    #                     self._q.put_nowait((t, y))
-    #                 except asyncio.QueueFull:
-    #                     pass
-    #                 await asyncio.sleep(self.time_step)
-    #         finally:
-    #             self._stream_running = False
-
-    #     self._stream_task = asyncio.create_task(_runner(), name=f"{self.id}-stream")
-
-    # async def stop(self) -> None:
-    #     self._stream_running = False
-    #     if self._stream_task and not self._stream_task.done():
-    #         self._stream_task.cancel()
-    #         try:
-    #             await self._stream_task
-    #         except asyncio.CancelledError:
-    #             pass
-    #     self._stream_task = None
-
-    # --- any helper methods go here ---------------------------------------------
-    # def _sample(self, t: float) -> float:
-    #     """Generate one sample at time t (seconds since stream start)."""
-    #     ωt = 2.0 * math.pi * self._freq * t + self._phase
-    #     if self.wave_type == "square":
-    #         base = self._amp * (1.0 if math.sin(ωt) >= 0.0 else -1.0)
-    #     else:
-    #         base = self._amp * math.sin(ωt)
-    #     if self.add_noise and self._amp > 0:
-    #         base += (random.random() * 2.0 - 1.0) * 0.05 * self._amp  # ±5% noise
-    #     return base
+# === Additional Notes ========================================================
+#
+# Threading for Blocking SDK Calls:
+# ----------------------------------
+# Many hardware SDKs use blocking C functions. To prevent blocking the async
+# event loop, wrap these calls:
+#
+#     value = await self._run_blocking_in_thread(sdk_func, arg1, arg2)
+#
+# This runs the function in the thread pool executor.
+#
+# Property vs Command Decision:
+# -----------------------------
+# - Property: Represents device state (frequency, voltage, mode)
+#            Cached value, polled periodically, supports min/max/choices
+#            Use when: value can be read back from device
+#
+# - Command: Triggers an action (start_scan, save_file, reset)
+#           Not cached, executes on demand, can return result
+#           Use when: operation has side effects or doesn't represent state
+#
+# Read-Only Properties:
+# ---------------------
+# Omit .setter decorator to make property read-only.
+# Useful for: device serial number, firmware version, capabilities
+#
+# Device Status and Health:
+# -------------------------
+# - Base class tracks self._status: "connected", "disconnected", "unhealthy"
+# - Override check_status() if device SDK can actively detect disconnection
+# - Polling failures automatically mark device unhealthy after 3 errors
+#
+# Configuration Access:
+# ---------------------
+# All config.yaml parameters available via self.options dict:
+#     serial_num = self.options.get("serial_number")
+#     ip = self.options.get("ip_address", "192.168.1.1")
+#
+# The "driver" field is automatically included in options.
