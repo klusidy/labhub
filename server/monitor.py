@@ -91,14 +91,14 @@ class ProfileMonitor:
         # Load existing profile to preserve policies
         self._load_policies()
 
-        # Wait for initial polling to populate CACHE
+        # Wait for initial polling to populate CACHE TODO - SHOULD BE ELSEWHERE? ORDER OF OPERATIONS DURING STARTUP REVIEW!!
         # This prevents unnecessary property writes on startup when CACHE is empty
-        if initial_delay > 0:
-            logger.debug(
-                f"Waiting {initial_delay}s for initial device polling to populate CACHE..."
-            )
-            await asyncio.sleep(initial_delay)
-            logger.debug("Initial delay complete, CACHE should be populated")
+        # if initial_delay > 0:
+        #     logger.debug(
+        #         f"Waiting {initial_delay}s for initial device polling to populate CACHE..."
+        #     )
+        #     await asyncio.sleep(initial_delay)
+        #     logger.debug("Initial delay complete, CACHE should be populated")
 
         # Start periodic save loop
         self._save_task = asyncio.create_task(self._periodic_save_loop())

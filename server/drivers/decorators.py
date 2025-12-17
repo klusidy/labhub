@@ -18,18 +18,43 @@ import asyncio
 import time
 import weakref
 
-from ._data_source import DataSource, Frame
+from .data_source import DataSource, Frame
 
 
 ALIASES: Dict[str, Any] = {}
 
 
-def api_device(api_name: str = None, doc: str = None):
-    def decorator(cls: Any):
-        cls._api_device_name = api_name or cls.__name__
-        cls._api_device_meta = {"doc": doc or (cls.__doc__ or "").strip()}
+def api_device():
+    """
+    Decorator to mark a class as a device driver.
 
-        ALIASES[cls._api_device_name] = cls
+    Usage:
+        @api_device()
+        class ExampleDevice(Device):
+            ...
+
+    Notes:
+        - Must be called with parentheses: @api_device()
+        - Device name is inferred from class name (e.g., ExampleDevice)
+        - Class name must match filename for auto-discovery:
+          drivers/vendor/example_device.py → class ExampleDevice
+        - Registers class in ALIASES dict for dynamic loading
+
+    Args:
+        doc: Optional documentation (defaults to class docstring)
+    """
+
+    def decorator(cls: Any):
+        # Infer device name from class name
+        device_name = cls.__name__
+
+        # Store metadata on class
+        cls._api_device_name = device_name
+        cls._api_device_meta = {"doc": (cls.__doc__ or "").strip()}
+
+        # Register in global aliases for discovery
+        ALIASES[device_name] = cls
+
         return cls
 
     return decorator
@@ -55,18 +80,20 @@ def api_command(api_name=None, *, doc=None):
             # Warn if no return type specified (not all commands return values, so just warn)
             if "return" not in hints:
                 import warnings
+
                 warnings.warn(
                     f"Command '{method.__name__}' has no return type hint. "
                     f"Consider adding -> YourType or -> None",
-                    RuntimeWarning
+                    RuntimeWarning,
                 )
         except NameError as e:
             # Forward references not resolved yet - warn but allow
             import warnings
+
             warnings.warn(
                 f"Could not validate type hints for command '{method.__name__}': {e}. "
                 f"Ensure forward references are properly quoted.",
-                RuntimeWarning
+                RuntimeWarning,
             )
 
         method._api_command_name = api_name or method.__name__
@@ -163,9 +190,10 @@ def api_property(
 
         # Validate type hint exists (fail fast at class definition time)
         from typing import get_type_hints
+
         try:
             hints = get_type_hints(fget)
-            return_type = hints.get('return')
+            return_type = hints.get("return")
             if return_type is None:
                 raise TypeError(
                     f"Property '{fget.__name__}' is missing a return type hint.\n"
@@ -175,10 +203,11 @@ def api_property(
             # get_type_hints can fail if forward references aren't resolved yet
             # This is OK during class definition - just warn
             import warnings
+
             warnings.warn(
                 f"Could not validate type hint for '{fget.__name__}': {e}. "
                 f"Ensure forward references are properly quoted.",
-                RuntimeWarning
+                RuntimeWarning,
             )
 
         # Attach metadata to the getter function

@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from .schemas import DeviceInfo, DeviceSpec
 from .events import EventBus
-from .drivers._base import Device
+from .drivers.base import Device
 from . import drivers
 import logging
 
@@ -116,6 +116,7 @@ class DeviceManager:
         try:
             # Create device instance and connect to hardware
             # Pass manager reference for executor access
+            # Note: options already contains "driver" field from load_config()
             dev: drivers.Device = await cls.create(dev_id, options, manager=self)
             self.devices[dev_id] = dev
             logger.info(f"Device '{dev_id}' added successfully")
@@ -308,7 +309,7 @@ class DeviceManager:
                 out.append(
                     DeviceInfo(
                         id=dev_id,
-                        kind=getattr(dev, "kind", "device"),
+                        driver=dev._api_driver,
                         status=("connected" if dev.is_connected else "disconnected"),
                         state=st,
                     )
@@ -319,7 +320,7 @@ class DeviceManager:
                 out.append(
                     DeviceInfo(
                         id=dev_id,
-                        kind=getattr(dev, "kind", "device"),
+                        driver=dev._api_driver,
                         status="error",
                         state={"error": str(e)},
                     )
@@ -347,7 +348,7 @@ class DeviceManager:
 
         return DeviceInfo(
             id=dev_id,
-            kind=getattr(dev, "kind", "device"),
+            driver=dev._api_driver,
             status=("connected" if dev.is_connected else "disconnected"),
             state=st,
         )
@@ -387,7 +388,7 @@ class DeviceManager:
 
         return DeviceInfo(
             id=dev_id,
-            kind=getattr(dev, "kind", "device"),
+            driver=dev._api_driver,
             status=("connected" if dev.is_connected else "disconnected"),
             state=st,
         )

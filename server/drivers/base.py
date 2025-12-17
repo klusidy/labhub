@@ -4,7 +4,7 @@ import logging
 from typing import Any, Dict, Callable, Optional, Mapping, get_type_hints, TYPE_CHECKING
 import inspect
 from concurrent.futures import ThreadPoolExecutor
-from ._decorators import api_device, api_command, api_property, ALIASES, api_data, Frame
+from .decorators import api_device, api_command, api_property, ALIASES, api_data, Frame
 
 if TYPE_CHECKING:
     from ..device_manager import DeviceManager
@@ -141,7 +141,7 @@ class Device:
             - Property defaults applied from profile (monitor.py)
         """
         self = cls(dev_id, options, manager)
-        await self.connect()
+        await self._connect()
         if self._status != "connected":
             logger.warning(
                 f"Device '{dev_id}' failed to connect (status: {self._status})"
@@ -174,14 +174,48 @@ class Device:
         self._poll_error_count = 0  # Track consecutive polling failures
 
     # --- lifecycle ---
-    async def connect(self) -> None:  # override
-        """Connect to device hardware. Override in subclasses."""
-        self._status = "connected"
-        self._poll_error_count = 0
+    async def _connect(self) -> None:  # override
+        """Internal connect method called by create()."""
+        # check if sync or async connect is implemented
+        if asyncio.iscoroutinefunction(self.connect):
+            success = await self.connect()
+        else:
+            success = await self._run_blocking_in_thread(self.connect)
 
-    async def disconnect(self) -> None:  # override
-        """Disconnect from device hardware. Override in subclasses."""
-        self._status = "disconnected"
+        if success:
+            self._status = "connected"
+            self._poll_error_count = 0
+        else:
+            self._status = "disconnected"
+
+    def connect(self) -> bool:
+        """Either sync or async method to be overwritten by subclasses.
+
+        Returns:
+            bool: True if connection was successful, False otherwise.
+        """
+        return True
+
+    async def _disconnect(self) -> None:  # override
+        """Internal disconnect method."""
+        if asyncio.iscoroutinefunction(self.disconnect):
+            success = await self.disconnect()
+        else:
+            success = await self._run_blocking_in_thread(self.disconnect)
+
+        if success:
+            self._status = "disconnected"
+        else:
+            logger.warning(f"{self.id}: Disconnect reported failure")
+            self._status = "unhealthy"
+
+    def disconnect(self) -> bool:
+        """Either sync or async method to be overwritten by subclasses.
+
+        Returns:
+            bool: True if connection was successful, False otherwise.
+        """
+        return True
 
     def check_status(self) -> str:
         """
@@ -348,7 +382,9 @@ class Device:
     async def run_command(self, name: str, args: Dict[str, Any] | None = None):
         args = args or {}
         if hasattr(self, name) and callable(fn := getattr(self, name)):
-            return await fn(**args) if asyncio.iscoroutinefunction(fn) else fn(**args)
+            return (
+                await fn(**args) if asyncio.iscoroutinefunction(fn) else fn(**args)
+            )  # todo - make async via run_blocking_in_thread??
         raise RuntimeError(
             f"Method {name} specified in _api_commands not found in the class"
         )

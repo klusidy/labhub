@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, Union, Tuple
 # ---------- existing ----------
 class DeviceInfo(BaseModel):  # keep
     id: str
-    kind: str
+    driver: str  # Driver identifier (e.g., "vendor.device_name")
     status: str = "disconnected"  # connected | disconnected | error
     locked_by: Optional[str] = None
     state: Dict[str, Any] = Field(default_factory=dict)
@@ -68,10 +68,8 @@ class DataSourceSpec(BaseModel):
 class DeviceSpec(BaseModel):
     """Full capability sheet for one device instance."""
     id: str
-    kind: str                             # keep: canonical device type (e.g., 'kcube_piezo')
-    driver: Optional[str] = None          # e.g., 'ThorlabsKCubePiezo'
-    driver_version: Optional[str] = None
-    doc: Optional[str] = None               # human-friendly description
+    driver: str  # Driver identifier (e.g., "vendor.device_name")
+    doc: Optional[str] = None  # human-friendly description
     properties: List[PropertySpec]
     commands: List[CommandSpec]
     data_sources: List[DataSourceSpec]
