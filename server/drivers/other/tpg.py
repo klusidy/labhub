@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional, List, AsyncIterator
 import numpy as np
 import serial
 import time
-from .._base import Device, api_device, api_command, api_property, api_data, Frame
+from ..base import Device, api_device, api_command, api_property, api_data, Frame
 
 
 ACK = b"\x06"

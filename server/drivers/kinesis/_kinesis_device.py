@@ -5,7 +5,7 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 import os
 from typing import Any, Dict
-from .._base import Device
+from ..base import Device
 
 
 # async def run(fn):

@@ -9,8 +9,8 @@ import numpy as np
 from collections import deque
 from scipy.signal import get_window, detrend as sp_detrend
 
-from .._base import Device, api_device, api_command, api_property, api_data, Frame
-from .._data_source import DataSource
+from ..base import Device, api_device, api_command, api_property, api_data, Frame
+from ..data_source import DataSource
 
 
 import ctypes
@@ -218,12 +218,9 @@ class PicoScope5000a(Device):
         super().__init__(dev_id, options, manager)
 
     # --- lifecycle -----------------------------------------------------------
-    async def connect(
-        self,
-    ) -> (
-        None
-    ):  # TODO - fail gracefully if something goes wrong while connecting one of the devices
+    async def connect(self) -> None:
         """Connect to the device."""
+        # TODO - fail gracefully if something goes wrong
 
         def _connect():
             self.started = ctypes.c_int16(0)  # <-- status*, not handle

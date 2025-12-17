@@ -7,7 +7,7 @@ import serial
 import time
 from pathlib import Path
 
-from .._base import Device, api_device, api_command, api_property, api_data, Frame
+from ..base import Device, api_device, api_command, api_property, api_data, Frame
 from .adi_bridge import AdiClockEvalBridge
 
 BRIDGE_EXE = str(Path(__file__).with_name("adiclockeval_spi_bridge.exe"))

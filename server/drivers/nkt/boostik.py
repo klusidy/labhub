@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import Any, Dict
-from .._base import Device, api_device, api_command, api_property
+from ..base import Device, api_device, api_command, api_property
 import serial, time, threading
 
 

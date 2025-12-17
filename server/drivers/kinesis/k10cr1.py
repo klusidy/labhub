@@ -1,7 +1,7 @@
 from __future__ import annotations
 import os, asyncio, time
 from typing import Any, Dict, Optional, Literal
-from .._base import Device, api_device, api_command, api_property
+from ..base import Device, api_device, api_command, api_property
 from ._kinesis_device import KinesisDevice
 
 
