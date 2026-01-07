@@ -1,34 +1,33 @@
-# hub_app/drivers/example_device.py
+"""Analog Devices EVAL-AD9959 DDS Evaluation Board Driver"""
 from __future__ import annotations
-import asyncio, math, random
-from typing import Any, Dict, Optional, List, AsyncIterator
-import numpy as np
-import serial
+import logging
 import time
 from pathlib import Path
+from typing import Any, Dict, Optional, TYPE_CHECKING
 
-from ..base import Device, api_device, api_command, api_property, api_data, Frame
+from ..base import Device, api_device, api_command, api_property
 from .adi_bridge import AdiClockEvalBridge
 
+if TYPE_CHECKING:
+    from ...device_manager import DeviceManager
+
+logger = logging.getLogger(__name__)
+
+# Path to 32-bit bridge executable for DLL interop
 BRIDGE_EXE = str(Path(__file__).with_name("adiclockeval_spi_bridge.exe"))
 
+# Channel selection masks
 CHANNELS = {0: 0x10, 1: 0x20, 2: 0x40, 3: 0x80}
 
-#   - id: "AnalogDevices_DDS"
-#     driver: "eval9959"
-#     vid: 0x0456
-#     pid: 0xee25
-#     ref_clk_hz: 50_000_000
-#     dll_folder: "C:/Program Files (x86)/Analog Devices/AD9958_59 Evaluation Software"
 
-
-@api_device("eval9959")
-class EVAL9959(Device):
+@api_device()
+class eval9959(Device):
     """
-    Analog devices 9959 evaluation board
-    """
+    Analog Devices EVAL-AD9959 DDS evaluation board.
 
-    kind = "eval9959"
+    Uses subprocess bridge to communicate with 32-bit AD DLL from 64-bit Python.
+    Bridge communicates via stdin/stdout, serialized by base class _lock.
+    """
 
     def __init__(
         self,
@@ -36,154 +35,226 @@ class EVAL9959(Device):
         options: Dict[str, Any],
         manager: Optional[DeviceManager] = None,
     ):
+        """
+        Initialize EVAL-AD9959 driver.
+
+        Config options:
+            dll_folder: Path to AD evaluation software DLLs
+            vid: USB vendor ID (default: 0x0456)
+            pid: USB product ID (default: 0xEE25)
+            ref_clk_hz: Reference clock frequency (default: 40 MHz)
+            sys_clk_hz: System clock frequency (default: 400 MHz)
+        """
+        super().__init__(dev_id, options, manager)
+
         self.dll_folder = options.get(
             "dll_folder",
             r"C:\Program Files (x86)\Analog Devices\AD9958_59 Evaluation Software",
-        )  # <-- change to your COM port (e.g., "/dev/ttyACM0" on Linux)
-        self.vid = options.get(
-            "vid", 0x0456
-        )  # CDC ignores baud, but pyserial wants a value
+        )
+        self.vid = options.get("vid", 0x0456)
         self.pid = options.get("pid", 0xEE25)
-        self._ref_clk_hz = 40_000_000  # options.get("ref_clk_hz", 50_000_000)
-        self._sys_clk_hz = 400_000_000  # options.get("sys_clk_hz", 500_000_000)
-        self._channel0_frequency = 0
-        self._channel1_frequency = 0
-        self._channel2_frequency = 0
-        self._channel3_frequency = 0
+        self._ref_clk_hz = options.get("ref_clk_hz", 40_000_000)
+        self._sys_clk_hz = options.get("sys_clk_hz", 400_000_000)
 
-        self._channel0_amplitude = 0
-        self._channel1_amplitude = 0
-        self._channel2_amplitude = 0
-        self._channel3_amplitude = 0
-        self.dev_id = 0  # for now, support only one device TODO
+        # Cached channel state (no readback support from hardware)
+        self._channel0_frequency = 0.0
+        self._channel1_frequency = 0.0
+        self._channel2_frequency = 0.0
+        self._channel3_frequency = 0.0
+        self._channel0_amplitude = 0.0
+        self._channel1_amplitude = 0.0
+        self._channel2_amplitude = 0.0
+        self._channel3_amplitude = 0.0
+
+        self.device_index = 0  # Support only first device for now
         self.bridge = None
-        super().__init__(dev_id, options, manager)
 
-    async def connect(self) -> None:
+    # --- Lifecycle ---
 
-        def _connect():
-            bridge = AdiClockEvalBridge(BRIDGE_EXE, self.dll_folder, timeout=10.0)
+    def connect(self) -> bool:
+        """
+        Connect to EVAL-AD9959 device.
+
+        Starts bridge subprocess and searches for USB device.
+
+        Returns:
+            True if connection successful, False otherwise
+        """
+        try:
+            # Initialize bridge subprocess
+            self.bridge = AdiClockEvalBridge(BRIDGE_EXE, self.dll_folder, timeout=10.0)
             time.sleep(0.1)
-            bridge.start()
-            return bridge
+            self.bridge.start()
 
-        self.bridge = await self._on_device(_connect)
-        self.bridge.find_hardware(
-            1,
-            [
-                (self.vid, self.pid),
-            ],
-        )  # TODO CHECK IF its connected
-        if (
-            self.bridge.get_vendor_id() != self.vid
-            or self.bridge.get_product_id() != self.pid
-        ):
-            raise Exception(
-                f"Failed to connect to AD device with vid={hex(self.vid)} and pid={hex(self.pid)}"
+            # Search for hardware
+            self.bridge.find_hardware(1, [(self.vid, self.pid)])
+
+            # Verify correct device is connected
+            if (
+                self.bridge.get_vendor_id() != self.vid
+                or self.bridge.get_product_id() != self.pid
+            ):
+                logger.error(
+                    f"{self.id}: Device not found or wrong VID/PID. "
+                    f"Expected {hex(self.vid)}:{hex(self.pid)}, "
+                    f"got {hex(self.bridge.get_vendor_id())}:{hex(self.bridge.get_product_id())}"
+                )
+                return False
+
+            logger.info(
+                f"{self.id}: Connected to EVAL-AD9959 "
+                f"(VID:{hex(self.vid)} PID:{hex(self.pid)})"
             )
+            return True
+        except Exception as e:
+            logger.error(f"{self.id}: Failed to connect to EVAL-AD9959: {e}")
+            return False
 
-        self._connected = True  # indicate successful connection
-        return
+    def disconnect(self) -> bool:
+        """
+        Disconnect from device.
 
-    async def disconnect(self) -> None:
-        def _disconnect():
+        Closes bridge subprocess.
+
+        Returns:
+            True if disconnect successful, False otherwise
+        """
+        if not self.bridge:
+            return True
+
+        try:
             self.bridge.close()
+            return True
+        except Exception as e:
+            logger.error(f"{self.id}: Error during disconnect: {e}")
+            return False
 
-        await self._on_device(_disconnect)
-        self._connected = False
+    # --- Low-level helpers ---
 
     def io_update(self):
-        command = 3  # maps to opcode 0x0C
-        self.bridge.set_port_value(self.dev_id, command, 0x10)
-        self.bridge.set_port_value(self.dev_id, command, 0x00)
+        """Trigger I/O update to apply pending register changes"""
+        command = 3  # Maps to opcode 0x0C
+        self.bridge.set_port_value(self.device_index, command, 0x10)
+        self.bridge.set_port_value(self.device_index, command, 0x00)
 
-    @api_property(default=50_000_000, step=1, unit="Hz")  # TODO - review min/max
-    @property
+    def select_channel(self, channel_mask: int):
+        """Select channel(s) for subsequent operations via channel mask"""
+        self.bridge.spi_write_addr_payload(self.device_index, 0x00, [channel_mask])
+
+    # --- Properties ---
+
+    @api_property(step=1, unit="Hz")
     def ref_clk(self) -> int:
         """Reference clock [Hz] (input to eval board from external source)"""
         return self._ref_clk_hz
 
     @ref_clk.setter
     def ref_clk(self, value: int):
-        self._ref_clk_hz = value  # update reference clock // TODO - checks?
-        self.sys_clk = (
-            self._sys_clk_hz
-        )  # call the setter = keep old value of system clock on new ref clock
+        self._ref_clk_hz = value
+        # Re-apply system clock setting with new reference clock
+        self.sys_clk = self._sys_clk_hz
 
-    @api_property(default=500_000_000, step=1, unit="Hz")  # TODO - review min/max
-    @property
+    @api_property(step=1, unit="Hz")
     def sys_clk(self) -> int:
-        """System clock [Hz] of the internal DDS
-        (reference clock × integer multiplier)"""
+        """System clock [Hz] of internal DDS (reference clock × integer multiplier)"""
         return self._sys_clk_hz
 
     @sys_clk.setter
-    def sys_clk(self, value: int = 500_000_000):
+    def sys_clk(self, value: int):
+        """
+        Set system clock frequency.
+
+        The DDS requires an integer multiplier of the reference clock.
+        Valid ranges: 100-255 MHz or 255-500 MHz.
+        """
         multiplier = int(round(value / self._ref_clk_hz))
         self._sys_clk_hz = self._ref_clk_hz * multiplier
+
+        # Determine VCO range
         if 255_000_000 <= self._sys_clk_hz <= 500_000_000:
             vco_flag = True
         elif 100_000_000 <= self._sys_clk_hz <= 255_000_000:
             vco_flag = False
         else:
-            print(
-                f" For sys_clk = {self._sys_clk_hz} Hz, there is not guarantee of operation (choose either 100-160 MHz or 255-500 MHz"
+            logger.warning(
+                f"{self.id}: System clock {self._sys_clk_hz} Hz is out of "
+                f"guaranteed operation range (100-255 MHz or 255-500 MHz)"
             )
-            return  # TODO - some sort of error into GUI??
+            return
 
+        # Configure FR1 register: VCO flag + multiplier
         fr1_val = 0
         if vco_flag:
             fr1_val |= 1 << 23
         fr1_val |= (multiplier & 0x1F) << 18
         data = fr1_val.to_bytes(3, "big")
-        self.bridge.spi_write_addr_payload(
-            self.dev_id, 0x01, data
-        )  # TODO - wait for confirmation
+
+        self.bridge.spi_write_addr_payload(self.device_index, 0x01, data)
         self.io_update()
 
-    def select_channel(self, channel_mask):
-        self.bridge.spi_write_addr_payload(
-            self.dev_id,
-            0x00,
-            [
-                channel_mask,
-            ],
-        )
+    # --- Commands ---
 
     @api_command()
-    def set_channel_frequency(self, channel_mask: int, frequency: int) -> float:
-        """Sets frequency (in Hz) to one or more channels according to channel mask
-        ch0: 0x10, ch1: 0x20, ch2: 0x40, ch3: 0x80"""
+    def set_channel_frequency(self, channel_mask: int, frequency: float) -> float:
+        """
+        Set frequency (Hz) for one or more channels.
+
+        Args:
+            channel_mask: Channel selection (ch0: 0x10, ch1: 0x20, ch2: 0x40, ch3: 0x80)
+            frequency: Desired frequency in Hz
+
+        Returns:
+            Actual frequency set (quantized to DDS resolution)
+        """
         self.select_channel(channel_mask)
+
+        # Calculate frequency tuning word (32-bit)
         ftw = int(round(frequency * (1 << 32) / self._sys_clk_hz)) & 0xFFFFFFFF
+
+        # Write to CFTW0 register (address 0x04)
         self.bridge.spi_write_addr_payload(
-            self.dev_id, 0x04, ftw.to_bytes(4, "big")
-        )  # 0x04 is cftw0 address
-        freq = ftw * self._sys_clk_hz / 2**32
+            self.device_index, 0x04, ftw.to_bytes(4, "big")
+        )
+
+        # Calculate actual frequency
+        actual_freq = ftw * self._sys_clk_hz / (1 << 32)
         self.io_update()
-        return freq
+        return actual_freq
 
     @api_command()
     def set_channel_amplitude(self, channel_mask: int, amplitude: float) -> float:
-        """Sets relative amplitude (range 0..1) to one or more channels according to channel mask
-        ch0: 0x10, ch1: 0x20, ch2: 0x40, ch3: 0x80"""
-        self.select_channel(channel_mask)
-        amplitude_int = int(round(max(0, min(1023, float(amplitude * 1024)))))
+        """
+        Set amplitude for one or more channels.
 
-        acr_val = (1 << 12) | amplitude_int  # "1" at bit 12 enables manual writing
+        Args:
+            channel_mask: Channel selection (ch0: 0x10, ch1: 0x20, ch2: 0x40, ch3: 0x80)
+            amplitude: Amplitude 0.0-1.0 (relative to full scale)
+
+        Returns:
+            Actual amplitude set (quantized to 10-bit resolution)
+        """
+        self.select_channel(channel_mask)
+
+        # Clamp and quantize to 10-bit (0-1023)
+        amplitude_int = int(round(max(0, min(1023, amplitude * 1024))))
+
+        # ACR register: bit 12 enables manual amplitude control
+        acr_val = (1 << 12) | amplitude_int
         data = acr_val.to_bytes(3, "big")
 
-        self.bridge.spi_write_addr_payload(self.dev_id, 0x06, data)
+        # Write to ACR register (address 0x06)
+        self.bridge.spi_write_addr_payload(self.device_index, 0x06, data)
 
-        amp = amplitude_int / 1024
-        # print(f"Channel set to single tone amp = {amp}")
+        actual_amp = amplitude_int / 1024
         self.io_update()
-        return amp
+        return actual_amp
+
+    # --- Channel Properties ---
+    # Note: No hardware readback support; these return cached values
 
     @api_property(unit="Hz")
-    @property
     def channel0_frequency(self) -> float:
-        """Frequency [Hz] of single tone signal on channel 0"""
+        """Frequency [Hz] of channel 0"""
         return self._channel0_frequency
 
     @channel0_frequency.setter
@@ -191,9 +262,8 @@ class EVAL9959(Device):
         self._channel0_frequency = self.set_channel_frequency(0x10, value)
 
     @api_property()
-    @property
     def channel0_amplitude(self) -> float:
-        """Amplitude (0–1) of single tone signal on channel 0"""
+        """Amplitude (0.0-1.0) of channel 0"""
         return self._channel0_amplitude
 
     @channel0_amplitude.setter
@@ -201,9 +271,8 @@ class EVAL9959(Device):
         self._channel0_amplitude = self.set_channel_amplitude(0x10, value)
 
     @api_property(unit="Hz")
-    @property
     def channel1_frequency(self) -> float:
-        """Frequency [Hz] of single tone signal on channel 1"""
+        """Frequency [Hz] of channel 1"""
         return self._channel1_frequency
 
     @channel1_frequency.setter
@@ -211,9 +280,8 @@ class EVAL9959(Device):
         self._channel1_frequency = self.set_channel_frequency(0x20, value)
 
     @api_property()
-    @property
     def channel1_amplitude(self) -> float:
-        """Amplitude (0–1) of single tone signal on channel 1"""
+        """Amplitude (0.0-1.0) of channel 1"""
         return self._channel1_amplitude
 
     @channel1_amplitude.setter
@@ -221,9 +289,8 @@ class EVAL9959(Device):
         self._channel1_amplitude = self.set_channel_amplitude(0x20, value)
 
     @api_property(unit="Hz")
-    @property
     def channel2_frequency(self) -> float:
-        """Frequency [Hz] of single tone signal on channel 2"""
+        """Frequency [Hz] of channel 2"""
         return self._channel2_frequency
 
     @channel2_frequency.setter
@@ -231,9 +298,8 @@ class EVAL9959(Device):
         self._channel2_frequency = self.set_channel_frequency(0x40, value)
 
     @api_property()
-    @property
     def channel2_amplitude(self) -> float:
-        """Amplitude (0–1) of single tone signal on channel 2"""
+        """Amplitude (0.0-1.0) of channel 2"""
         return self._channel2_amplitude
 
     @channel2_amplitude.setter
@@ -241,9 +307,8 @@ class EVAL9959(Device):
         self._channel2_amplitude = self.set_channel_amplitude(0x40, value)
 
     @api_property(unit="Hz")
-    @property
     def channel3_frequency(self) -> float:
-        """Frequency [Hz] of single tone signal on channel 3"""
+        """Frequency [Hz] of channel 3"""
         return self._channel3_frequency
 
     @channel3_frequency.setter
@@ -251,9 +316,8 @@ class EVAL9959(Device):
         self._channel3_frequency = self.set_channel_frequency(0x80, value)
 
     @api_property()
-    @property
     def channel3_amplitude(self) -> float:
-        """Amplitude (0–1) of single tone signal on channel 3"""
+        """Amplitude (0.0-1.0) of channel 3"""
         return self._channel3_amplitude
 
     @channel3_amplitude.setter
