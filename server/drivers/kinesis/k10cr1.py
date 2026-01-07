@@ -1,22 +1,35 @@
+"""
+Thorlabs K10CR1 Stepper Motor Rotation Mount Driver
+"""
+
 from __future__ import annotations
-import os, asyncio, time
-from typing import Any, Dict, Optional, Literal
-from ..base import Device, api_device, api_command, api_property
+import time
+import logging
+from typing import Any, Dict, Optional, TYPE_CHECKING
+
+from ..base import api_device, api_command, api_property
 from ._kinesis_device import KinesisDevice
 
-
-import logging
+if TYPE_CHECKING:
+    from ...device_manager import DeviceManager
 
 logger = logging.getLogger(__name__)
 
 
-@api_device("k10cr1")
-class K10CR1(KinesisDevice):
-    """
-    Stepper Motor Rotation Mount
-    """
+@api_device()
+class k10cr1(KinesisDevice):
+    """Stepper Motor Rotation Mount (K10CR1)"""
 
-    pass
+    _DLL_REQUIREMENTS = {
+        "dlls": [
+            "Thorlabs.MotionControl.GenericMotorCLI.dll",
+            "ThorLabs.MotionControl.IntegratedStepperMotorsCLI.dll",
+        ],
+        "imports": {
+            "IntegratedStepperMotorsCLI": "Thorlabs.MotionControl.IntegratedStepperMotorsCLI",
+            "MotorDirection": "Thorlabs.MotionControl.GenericMotorCLI.MotorDirection",
+        },
+    }
 
     def __init__(
         self,
@@ -24,32 +37,35 @@ class K10CR1(KinesisDevice):
         options: Dict[str, Any],
         manager: Optional[DeviceManager] = None,
     ):
-        conn = options.get("conn")
+        """
+        Initialize K10CR1 driver.
 
-        self.serial: str = conn.get("serial")
-        self.poll_ms: int = int(conn.get("poll_ms", 200))
-        self.simulate: bool = bool(conn.get("simulate", False))
-        self._dev = None
-        # debug: init info
-        logger.debug("init of K10CR1 dev_id=%s options=%s", dev_id, options)
+        Config options:
+            serial: Device serial number (required)
+            poll_ms: Polling interval in milliseconds (default: 200)
+            kinesis_path: Path to Kinesis DLLs (or set KINESIS_PATH env var)
+        """
         super().__init__(dev_id, options, manager)
 
-    async def _call(
-        self, fn, *args, **kw
-    ):  # to keep it fresh, run everything in a "kinesis" executor thread
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(self._exec, lambda: fn(*args, **kw))
+        self.serial: str = options.get("serial", "")
+        self.poll_ms: int = int(options.get("poll_ms", 200))
 
-    def _to_decimal(self, value: float):
-        return self.Decimal(value) if self.Decimal else float(value)
+        if not self.serial:
+            raise ValueError(f"Device '{dev_id}': serial number required")
 
-    async def connect(self) -> None:
-        if self.simulate:
-            self._connected = True
-            logger.info(f"[SIM] Connected to simulated KCubePiezo {self.serial}")
-            return
+        self._dev = None
+        self.dev_settings = None
 
-        await self._ensure_kinesis_loaded()  # TODO - DIFFERENT DLLS FOR EACH DEVICE
+        logger.debug(f"Initialized K10CR1: serial={self.serial}, poll_ms={self.poll_ms}")
+
+    async def connect(self) -> bool:
+        """
+        Connect to K10CR1 device.
+
+        Returns:
+            True if connection successful, False otherwise
+        """
+        await self._ensure_kinesis_loaded()
 
         def _connect():
             self.DeviceManagerCLI.BuildDeviceList()
@@ -58,171 +74,97 @@ class K10CR1(KinesisDevice):
             )
             device.Connect(self.serial)
             device.WaitForSettingsInitialized(2000)
-
             device.StartPolling(self.poll_ms)
             time.sleep(max(0.25, self.poll_ms / 1000))
             device.EnableDevice()
             time.sleep(0.25)
-
             return device
 
-        self._dev = await self._on_device(_connect)
+        try:
+            self._dev = await self._run_blocking_in_thread(_connect)
 
-        self.dev_settings = self._dev.LoadMotorConfiguration(self.serial)
-        currentDeviceSettings = (
-            self._dev.MotorDeviceSettings
-        )  # why this? (https://github.com/Thorlabs/Motion_Control_Examples/blob/main/Matlab/Intergrated/K10CR2/K10CR2.m)
-        self.dev_settings.UpdateCurrentConfiguration()
+            # Load motor configuration
+            self.dev_settings = self._dev.LoadMotorConfiguration(self.serial)
+            # Access current device settings (from Thorlabs examples)
+            _ = self._dev.MotorDeviceSettings
+            self.dev_settings.UpdateCurrentConfiguration()
 
-        self._connected = True
+            logger.info(f"{self.id}: Connected to K10CR1 {self.serial}")
+            return True
+        except Exception as e:
+            logger.error(f"{self.id}: Failed to connect to K10CR1 {self.serial}: {e}")
+            return False
 
-    async def disconnect(self) -> None:
-        if self.simulate and not self._dev:
-            self._connected = False
-            return
+    async def disconnect(self) -> bool:
+        """
+        Disconnect from device and clean up.
 
-        await self._on_device(self._dev.StopPolling)
-        await self._on_device(self._dev.Disconnect)
-        self._connected = False
+        Returns:
+            True if disconnect successful, False otherwise
+        """
+        if not self._dev:
+            return True
 
-    @api_property()
-    @property
+        try:
+            await self._run_blocking_in_thread(self._dev.StopPolling)
+            await self._run_blocking_in_thread(self._dev.Disconnect)
+            logger.info(f"{self.id}: Disconnected from K10CR1 {self.serial}")
+            return True
+        except Exception as e:
+            logger.error(f"{self.id}: Error during disconnect: {e}")
+            return False
+
+    # --- Properties ---
+
+    @api_property(unit="deg")
     def position(self) -> float:
-        """ Position in real-world units, presumably degrees (?)""" ""
+        """Position in real-world units (degrees)"""
         conv = self._dev.UnitConverter
         pos = self._dev.GetPositionCounter()
         pos_dec = self._to_decimal(pos)
-        logger.debug("raw position=%s converted=%s", pos, pos_dec)
         real = conv.DeviceUnitToReal(pos_dec, conv.UnitType.Length)
         return float(self.Decimal.ToDouble(real))
 
     @position.setter
-    def position(
-        self, value: float
-    ) -> None:  # todo when value is dict, update min/max/default etc
+    def position(self, value: float) -> None:
         conv = self._dev.UnitConverter
-        value_decimal = self._to_decimal(value)
-        self._dev.MoveTo(
-            value_decimal, 60000
-        )  # TODO - should be async? (properties are not async...)
-        return value
+        value_dec = self._to_decimal(value)
+        device_unit = conv.RealToDeviceUnit(value_dec, conv.UnitType.Length)
+        self._dev.SetMoveAbsolutePosition(device_unit)
+        self._dev.MoveAbsolute(5000)  # 5 second timeout
+
+    # --- Commands ---
 
     @api_command()
-    def move_to(
-        self, value: float
-    ) -> None:  # todo when value is dict, update min/max/default etc
-        conv = self._dev.UnitConverter
-        value_decimal = self._to_decimal(value)
-        self._dev.MoveTo(
-            value_decimal, 60000
-        )  # TODO - should be async? (properties are not async...)
-        return value
-
-    # @api_property()
-    # @property
-    # def units(self) -> str:
-    # cound not find any enum of available units...
-    # self._dev.MotorDeviceSettings.Physical.RealUnits = "°" # can set like this, but can change to anythinng...
-    # return "°"
-
-    # @units.setter
-    # def units(self, units: str) -> None: # self._dev.SetJogParams_DeviceUnit
-    #     return
-
-    @api_command()
-    def drive_up(self, velocity: float) -> None:
-        fwd = self.MotorDirection.Forward  # todo add support for veocity!!
-        self._dev.MoveContinuous(fwd)
-        return
-
-    @api_command()
-    def drive_down(self, velocity: float) -> None:
-        bck = self.MotorDirection.Backward
-        self._dev.MoveContinuous(bck)
-        return
-
-    @drive_up.release()
-    @drive_down.release()
-    def drive_up_release(self, **kwargs) -> None:
-        self._dev.StopImmediate()
-        return
+    def identify(self) -> None:
+        """Flash device LED to identify physically"""
+        self._dev.IdentifyDevice()
 
     @api_command()
     def home(self) -> None:
-        self._dev.Home(60000)
-        return
-
-    # @api_command()
-    # def jog_up(self) -> None:
-    #     return
-
-    # @api_command()
-    # def jog_down(self) -> None:
-    #     return
-
-    # @jog_up.release()
-    # @jog_down.release()
-    # def jog_down_release(self) -> None:
-    #     return
+        """Home the device (move to zero position)"""
+        self._dev.Home(5000)  # 5 second timeout
 
     @api_command()
-    def set_jog_parameters(
-        self,
-        jog_mode: Literal["single_step", "continuous_held", "continuous_unheld"],
-        step_size: float = 5,
-        acceleration: float = 15,
-        max_velocity: float = 15,
-    ) -> dict:
-        # min_velocity: float = 5)-> dict :#step_mode: str, max_velocity:int, acc:int) -> dict:
-        logger.debug("inside set_jog_parameters")
-        jog_params = self._dev.GetJogParams()
-        if step_size:
-            jog_params.StepSize = self._to_decimal(step_size)
-        if acceleration:
-            jog_params.VelocityParams.Acceleration = self._to_decimal(acceleration)
-        if max_velocity:
-            jog_params.VelocityParams.MaxVelocity = self._to_decimal(max_velocity)
-        if jog_mode == "single_step":
-            jog_params.JogMode = jog_params.JogModes.SingleStep
-        elif jog_mode == "continuous_held":
-            jog_params.JogMode = jog_params.JogModes.ContinuousHeld
-        elif jog_mode == "continuous_unheld":
-            jog_params.JogMode = jog_params.JogModes.ContinuousUnheld
+    def zero(self) -> None:
+        """Set current position as zero"""
+        self._dev.SetPositionAs(0)
 
-        # self._dev.SetJogParams_DeviceUnit TODO - UNITS!!!
-        self._dev.SetJogParams(jog_params)
+    @api_command()
+    def move_relative(self, distance: float) -> None:
+        """
+        Move relative to current position.
 
-        # if min_velocity:
-        #    jog_params.VelocityParams.MinVelocity = self._to_decimal(min_velocity)
+        Args:
+            distance: Distance to move in degrees
+        """
+        conv = self._dev.UnitConverter
+        distance_dec = self._to_decimal(distance)
+        device_unit = conv.RealToDeviceUnit(distance_dec, conv.UnitType.Length)
+        self._dev.SetMoveRelativeDistance(device_unit)
+        self._dev.MoveRelative(5000)  # 5 second timeout
 
-        r = {  # todo -read out from actual params
-            "step_size": self.Decimal.ToDouble(jog_params.StepSize),
-            "acceleration": self.Decimal.ToDouble(
-                jog_params.VelocityParams.Acceleration
-            ),
-            "max_velocity": self.Decimal.ToDouble(
-                jog_params.VelocityParams.MaxVelocity
-            ),
-            "jog_mode": (
-                "single_step"
-                if jog_params.JogMode == jog_params.JogModes.SingleStep
-                else (
-                    "continuous_held"
-                    if jog_params.JogMode == jog_params.JogModes.ContinuousHeld
-                    else (
-                        "continuous_unheld"
-                        if jog_params.JogMode == jog_params.JogModes.ContinuousUnheld
-                        else "unknown"
-                    )
-                )
-            ),
-        }
-        return r
-
-    # @api_command()
-    # def stop(self) -> None:
-    #     return
-
-    # @api_command()
-    # def identify(self) -> None:
-    #     return
+    @api_command()
+    def stop(self) -> None:
+        """Stop any ongoing motion"""
+        self._dev.Stop(500)  # 500ms timeout

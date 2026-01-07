@@ -1,116 +1,152 @@
-# kinesis_runtime.py
+"""
+Kinesis Device Base Class
+
+Provides common infrastructure for all Thorlabs Kinesis devices:
+- Single-threaded executor for .NET DLL access (required by pythonnet)
+- Lazy loading of .NET assemblies
+- Declarative DLL requirements system
+
+Architecture:
+- All Kinesis operations run on dedicated single thread (_EXEC)
+- DLL loaded once per process, shared by all device instances
+- Each device subclass declares its DLL requirements via _DLL_REQUIREMENTS
+
+Usage:
+    class kpz101(KinesisDevice):
+        _DLL_REQUIREMENTS = {
+            'dlls': ['Thorlabs.MotionControl.KCube.PiezoCLI.dll'],
+            'imports': {
+                'KCubePiezo': 'Thorlabs.MotionControl.KCube.PiezoCLI.KCubePiezo',
+            }
+        }
+"""
+
 from __future__ import annotations
-import asyncio, threading
+import asyncio
+import threading
+import logging
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 import os
-from typing import Any, Dict
+from typing import Any, Dict, Optional, TYPE_CHECKING
+
 from ..base import Device
 
+if TYPE_CHECKING:
+    from ...device_manager import DeviceManager
 
-# async def run(fn):
-#     """Run callable on the single Kinesis thread."""
-#     loop = asyncio.get_running_loop()
-#     return await loop.run_in_executor(_EXEC, fn)
-
-# def run_sync(fn):
-#     """Synchronous variant (avoid in async paths)."""
-#     return _EXEC.submit(fn).result()
-
-
-# def shutdown():
-#     _EXEC.shutdown(wait=True)
+logger = logging.getLogger(__name__)
 
 
 class KinesisDevice(Device):
+    """
+    Base class for all Thorlabs Kinesis devices.
 
-    # CLASS VARIABLES shared by all KinesisDevice instances
-    # All kinesis calls must be done on a single thread due to .NET limitations.
-    _LOADED = False
-    _THREAD_ID: int | None = None
+    Handles .NET CLR interop via pythonnet with single-threaded execution.
+    All subclasses share the same thread and DLL imports.
+    """
+
+    # Shared class variables for all Kinesis devices
+    _LOADED = False  # Whether .NET DLLs have been loaded
+    _THREAD_ID: int | None = None  # ID of the Kinesis thread
     _EXEC = ThreadPoolExecutor(max_workers=1, thread_name_prefix="kinesis")
+    _LOADED_CLASSES: Dict[str, Any] = {}  # Cache of loaded .NET classes
 
-    DeviceManagerCLI = None
-    KCubePiezo = None
-    Decimal = None
+    # Common DLL requirements for all Kinesis devices
+    _COMMON_DLL_REQUIREMENTS = {
+        "dlls": [
+            "Thorlabs.MotionControl.DeviceManagerCLI.dll",
+        ],
+        "imports": {
+            # Common imports needed by all devices
+            "DeviceManagerCLI": "Thorlabs.MotionControl.DeviceManagerCLI.DeviceManagerCLI",
+            "Decimal": "System.Decimal",
+            "Action": "System.Action",
+            "UInt64": "System.UInt64",
+        },
+    }
 
-    @staticmethod
-    def _load_dotnet_sync(kinesis_path: str):
-        if (
-            KinesisDevice._LOADED
-        ):  # here I import only once- but its not good design to have to have all dlls for all devices here...
+    # Device-specific requirements - override in subclasses
+    _DLL_REQUIREMENTS: Dict[str, Any] = {"dlls": [], "imports": {}}
+
+    @classmethod
+    def _load_dotnet_sync(cls, kinesis_path: str) -> None:
+        """
+        Load .NET DLLs and import required classes.
+
+        Called once per process on the Kinesis thread. Loads DLLs and classes
+        declared in _COMMON_DLL_REQUIREMENTS and all subclass _DLL_REQUIREMENTS.
+
+        Args:
+            kinesis_path: Directory containing Kinesis DLLs
+
+        Raises:
+            RuntimeError: If DLL files not found or import fails
+        """
+        if cls._LOADED:
             return
 
-        import clr  # type: ignore
+        try:
+            import clr  # type: ignore
+        except ImportError:
+            raise RuntimeError(
+                "pythonnet not installed. Install with: pip install pythonnet"
+            )
 
         base = Path(kinesis_path)
+        logger.info(f"Loading Kinesis DLLs from {base}")
 
-        dlls = [
-            "Thorlabs.MotionControl.DeviceManagerCLI.dll",
-            "Thorlabs.MotionControl.KCube.PiezoCLI.dll",  # kcube kpz101
-            "Thorlabs.MotionControl.GenericMotorCLI.dll",  # inertial motor (generic)
-            "ThorLabs.MotionControl.KCube.InertialMotorCLI.dll",  # kim101
-            "ThorLabs.MotionControl.IntegratedStepperMotorsCLI.dll",  # k10cr1
-        ]
+        # Collect all DLL requirements from common + all subclasses
+        all_dlls = set(cls._COMMON_DLL_REQUIREMENTS["dlls"])
+        all_imports = dict(cls._COMMON_DLL_REQUIREMENTS["imports"])
 
-        for dll_name in dlls:
-            p = base / dll_name
-            if not (p.exists):
-                raise RuntimeError(f"Kinesis DLL {dll_name} not found in {base}")
-            clr.AddReference(str(p))
+        # Scan all KinesisDevice subclasses for their requirements
+        for subclass in cls.__subclasses__():
+            if hasattr(subclass, "_DLL_REQUIREMENTS"):
+                reqs = subclass._DLL_REQUIREMENTS
+                all_dlls.update(reqs.get("dlls", []))
+                all_imports.update(reqs.get("imports", {}))
 
-        # Imports MUST happen after AddReference and on the same thread.
-        from Thorlabs.MotionControl.DeviceManagerCLI import DeviceManagerCLI as _DMCLI  # type: ignore
-        from System import (
-            Decimal as _Decimal,  # type: ignore
-            Action as Action,
-            UInt64 as UInt64,
+        # Load DLL files
+        logger.debug(f"Loading {len(all_dlls)} DLL(s)")
+        for dll_name in sorted(all_dlls):
+            dll_path = base / dll_name
+            if not dll_path.exists():
+                raise RuntimeError(f"Kinesis DLL not found: {dll_path}")
+            clr.AddReference(str(dll_path))
+            logger.debug(f"  Loaded: {dll_name}")
+
+        # Import .NET classes dynamically
+        logger.debug(f"Importing {len(all_imports)} .NET class(es)")
+        for name, dotnet_path in sorted(all_imports.items()):
+            try:
+                # Parse module.ClassName format
+                parts = dotnet_path.rsplit(".", 1)
+                if len(parts) == 2:
+                    module_name, class_name = parts
+                else:
+                    module_name, class_name = "", dotnet_path
+
+                # Import the .NET module
+                if module_name:
+                    module = __import__(module_name, fromlist=[class_name])
+                    cls._LOADED_CLASSES[name] = getattr(module, class_name)
+                else:
+                    # Top-level import
+                    cls._LOADED_CLASSES[name] = __import__(class_name)
+
+                logger.debug(f"  Imported: {name} <- {dotnet_path}")
+            except Exception as e:
+                raise RuntimeError(
+                    f"Failed to import .NET class '{dotnet_path}' as '{name}': {e}"
+                ) from e
+
+        cls._THREAD_ID = threading.get_ident()
+        cls._LOADED = True
+        logger.info(
+            f"Kinesis .NET runtime loaded (thread={cls._THREAD_ID}, "
+            f"{len(all_dlls)} DLLs, {len(all_imports)} classes)"
         )
-
-        from Thorlabs.MotionControl.KCube.PiezoCLI import KCubePiezo as _KCubePiezo  # type: ignore
-
-        from Thorlabs.MotionControl.GenericMotorCLI import (
-            GenericMotorCLI as _GenericMotorCLI,
-        )  # type:ignore
-        from Thorlabs.MotionControl.GenericMotorCLI import (
-            MotorDirection as _MotorDirection,
-        )  # type:ignore
-        from Thorlabs.MotionControl.KCube.InertialMotorCLI import (  # type:ignore
-            KCubeInertialMotor as _KCubeInertialMotor,
-            InertialMotorStatus as _InertialMotorStatus,
-            ThorlabsInertialMotorSettings as _ThorlabsInertialMotorSettings,
-            InertialMotorJogMode as _InertialMotorJogMode,
-            InertialMotorJogDirection as _InertialMotorJogDirection,
-            DriveParams as _DriveParams,
-        )
-
-        import Thorlabs.MotionControl.IntegratedStepperMotorsCLI as _IntegratedStepperMotorsCLI  # type:ignore
-
-        # common
-        KinesisDevice.Decimal = _Decimal
-        KinesisDevice.Action = Action
-        KinesisDevice.UInt64 = UInt64
-        KinesisDevice.DeviceManagerCLI = _DMCLI
-
-        # KPZ
-        KinesisDevice.KCubePiezo = _KCubePiezo
-
-        # KIM #TODO - REFACTOR AND KEEP THE CLI ONLY
-        KinesisDevice.GenericMotorCLI = _GenericMotorCLI
-        KinesisDevice.KCubeInertialMotor = _KCubeInertialMotor
-        KinesisDevice.InertialMotorStatus = _InertialMotorStatus
-        KinesisDevice.ThorlabsInertialMotorSettings = _ThorlabsInertialMotorSettings
-        KinesisDevice.InertialMotorJogMode = _InertialMotorJogMode
-        KinesisDevice.InertialMotorJogDirection = _InertialMotorJogDirection
-        KinesisDevice.DriveParams = _DriveParams
-
-        # k10cr1
-        KinesisDevice.IntegratedStepperMotorsCLI = (
-            _IntegratedStepperMotorsCLI  # store the whole package, not one-by-one
-        )
-        KinesisDevice.MotorDirection = _MotorDirection
-        KinesisDevice._THREAD_ID = threading.get_ident()
-        KinesisDevice._LOADED = True
 
     def __init__(
         self,
@@ -118,28 +154,75 @@ class KinesisDevice(Device):
         options: Dict[str, Any],
         manager: Optional[DeviceManager] = None,
     ):
-        conn = options.get("conn", {})
-        self.kinesis_path: str = (
-            conn.get("kinesis_path") or os.environ.get("KINESIS_PATH") or ""
-        )
-        if not self.kinesis_path:
-            raise RuntimeError("Provide conn.kinesis_path or set KINESIS_PATH")
-        self._Decimal = None  # filled in after ensure_loaded()
+        """
+        Initialize Kinesis device.
+
+        Args:
+            dev_id: Device identifier
+            options: Must contain kinesis_path or KINESIS_PATH env var must be set
+            manager: Device manager reference
+        """
         super().__init__(dev_id, options, manager)
 
-    async def _run_blocking_in_thread(self, fn):  # TODO - THIS MAY BE STATICMETHOD
+        # Extract kinesis_path from options (legacy: conn.kinesis_path)
+        conn = options.get("conn", {})
+        self.kinesis_path: str = (
+            options.get("kinesis_path")
+            or conn.get("kinesis_path")
+            or os.environ.get("KINESIS_PATH")
+            or ""
+        )
+        if not self.kinesis_path:
+            raise RuntimeError(
+                f"Device '{dev_id}': kinesis_path not specified. "
+                "Set in config.yaml or KINESIS_PATH environment variable"
+            )
+
+    def __getattr__(self, name: str) -> Any:
+        """
+        Provide access to loaded .NET classes via attribute access.
+
+        Allows: self.DeviceManagerCLI instead of KinesisDevice._LOADED_CLASSES['DeviceManagerCLI']
+        """
+        if name in self._LOADED_CLASSES:
+            return self._LOADED_CLASSES[name]
+        raise AttributeError(
+            f"'{type(self).__name__}' object has no attribute '{name}'"
+        )
+
+    async def _ensure_kinesis_loaded(self) -> None:
+        """
+        Ensure .NET DLLs are loaded (called from connect()).
+
+        Runs _load_dotnet_sync on the Kinesis thread if not already loaded.
+        """
+        if not self._LOADED:
+            await self._run_blocking_in_thread(lambda: self._load_dotnet_sync(self.kinesis_path))
+
+    async def _run_blocking_in_thread(self, fn):
+        """
+        Execute function on the dedicated Kinesis thread.
+
+        Override base class to use Kinesis-specific single-threaded executor.
+        All .NET interop must go through this method to avoid threading issues.
+
+        Args:
+            fn: Callable to execute (can be lambda or bound method)
+
+        Returns:
+            Result of fn()
+        """
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(KinesisDevice._EXEC, fn)
+        return await loop.run_in_executor(self._EXEC, fn)
 
-    async def _on_device(self, fn):  # TODO - THIS MAY BE STATICMETHOD
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(KinesisDevice._EXEC, fn)
+    def _to_decimal(self, value: float):
+        """
+        Convert Python float to .NET Decimal.
 
-    # async def property_get_async(self, name: str):
-    #     return await self._on_device(lambda: self.property_get(name))
+        Helper for interop with Kinesis SDK methods that require System.Decimal.
+        """
+        Decimal = self._LOADED_CLASSES.get("Decimal")
+        return Decimal(value) if Decimal else float(value)
 
-    # async def property_set_async(self, name: str, value):
-    #     return await self._on_device(lambda: self.property_set(name, value))
-
-    async def _ensure_kinesis_loaded(self):
-        return await self._on_device(lambda: self._load_dotnet_sync(self.kinesis_path))
+    # Note: Subclasses override connect() and disconnect()
+    # See example_device.py for the pattern

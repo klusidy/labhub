@@ -213,7 +213,7 @@ class Device:
         """Either sync or async method to be overwritten by subclasses.
 
         Returns:
-            bool: True if connection was successful, False otherwise.
+            bool: True if disconnect was successful, False otherwise.
         """
         return True
 
@@ -380,11 +380,30 @@ class Device:
 
     # ---- generic command runner -------------------------------------------
     async def run_command(self, name: str, args: Dict[str, Any] | None = None):
+        """
+        Execute a command on the device.
+
+        Commands are executed with exclusive lock to prevent collision with
+        property access. Sync commands run in thread pool to avoid blocking.
+
+        Args:
+            name: Command method name
+            args: Command arguments
+
+        Returns:
+            Command result
+
+        Notes:
+            - Sync commands: Wrapped in _run_blocking_in_thread
+            - Async commands: Awaited directly (must handle threading internally)
+        """
         args = args or {}
         if hasattr(self, name) and callable(fn := getattr(self, name)):
-            return (
-                await fn(**args) if asyncio.iscoroutinefunction(fn) else fn(**args)
-            )  # todo - make async via run_blocking_in_thread??
+            async with self._lock:
+                if asyncio.iscoroutinefunction(fn):
+                    return await fn(**args)
+                else:
+                    return await self._run_blocking_in_thread(lambda: fn(**args))
         raise RuntimeError(
             f"Method {name} specified in _api_commands not found in the class"
         )

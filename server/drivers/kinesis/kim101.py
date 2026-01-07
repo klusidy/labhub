@@ -1,21 +1,43 @@
+"""
+Thorlabs KIM101 K-Cube Inertial Motor Controller Driver
+
+https://www.thorlabs.com/drawings/1babbca0d1da909e-CB0C236B-E3A6-8D8A-502F4365BA99A6F5/KIM101-KinesisManual.pdf
+"""
+
 from __future__ import annotations
-import os, asyncio, time, threading
-from typing import Any, Dict, Optional, List, Literal, AsyncIterator
-from ..base import Device, api_device, api_command, api_property
+import time
+import logging
+from typing import Any, Dict, Optional, TYPE_CHECKING
+
+from ..base import api_device, api_command, api_property
 from ._kinesis_device import KinesisDevice
 
-
-import logging
+if TYPE_CHECKING:
+    from ...device_manager import DeviceManager
 
 logger = logging.getLogger(__name__)
 
 
-@api_device("kim101")
-class KIM101(KinesisDevice):
-    """
-    Kinesis Inertial Motor
-    https://www.thorlabs.com/drawings/1babbca0d1da909e-CB0C236B-E3A6-8D8A-502F4365BA99A6F5/KIM101-KinesisManual.pdf
-    """
+@api_device()
+class kim101(KinesisDevice):
+    """K-Cube Inertial Motor Controller (KIM101)"""
+
+    _DLL_REQUIREMENTS = {
+        "dlls": [
+            "Thorlabs.MotionControl.GenericMotorCLI.dll",
+            "ThorLabs.MotionControl.KCube.InertialMotorCLI.dll",
+        ],
+        "imports": {
+            "GenericMotorCLI": "Thorlabs.MotionControl.GenericMotorCLI.GenericMotorCLI",
+            "MotorDirection": "Thorlabs.MotionControl.GenericMotorCLI.MotorDirection",
+            "KCubeInertialMotor": "Thorlabs.MotionControl.KCube.InertialMotorCLI.KCubeInertialMotor",
+            "InertialMotorStatus": "Thorlabs.MotionControl.KCube.InertialMotorCLI.InertialMotorStatus",
+            "ThorlabsInertialMotorSettings": "Thorlabs.MotionControl.KCube.InertialMotorCLI.ThorlabsInertialMotorSettings",
+            "InertialMotorJogMode": "Thorlabs.MotionControl.KCube.InertialMotorCLI.InertialMotorJogMode",
+            "InertialMotorJogDirection": "Thorlabs.MotionControl.KCube.InertialMotorCLI.InertialMotorJogDirection",
+            "DriveParams": "Thorlabs.MotionControl.KCube.InertialMotorCLI.DriveParams",
+        },
+    }
 
     def __init__(
         self,
@@ -23,290 +45,157 @@ class KIM101(KinesisDevice):
         options: Dict[str, Any],
         manager: Optional[DeviceManager] = None,
     ):
-        conn = options.get("conn")
+        """
+        Initialize KIM101 driver.
 
-        self.serial: str = conn.get("serial")
-        self.poll_ms: int = int(conn.get("poll_ms", 200))
-        self.simulate: bool = bool(conn.get("simulate", False))
-        self._dev = None
-        logger.debug("init of KIM101 dev_id=%s options=%s", dev_id, options)
+        Config options:
+            serial: Device serial number (required)
+            poll_ms: Polling interval in milliseconds (default: 200)
+            kinesis_path: Path to Kinesis DLLs (or set KINESIS_PATH env var)
+        """
         super().__init__(dev_id, options, manager)
 
-    async def _call(
-        self, fn, *args, **kw
-    ):  # to keep it fresh, run everything in a "kinesis" executor thread
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(self._exec, lambda: fn(*args, **kw))
+        self.serial: str = options.get("serial", "")
+        self.poll_ms: int = int(options.get("poll_ms", 200))
 
-    def _to_decimal(self, value: float):
-        return self.Decimal(value) if self.Decimal else float(value)
+        if not self.serial:
+            raise ValueError(f"Device '{dev_id}': serial number required")
 
-    async def connect(self) -> None:
-        if self.simulate:
-            self._connected = True
-            logger.info(f"[SIM] Connected to simulated KCubePiezo {self.serial}")
-            return
+        self._dev = None
+        self.dev_settings = None
+        self._jog_state = None
 
-        await self._ensure_kinesis_loaded()  # TODO - DIFFERENT DLLS FOR EACH DEVICE
+        logger.debug(f"Initialized KIM101: serial={self.serial}, poll_ms={self.poll_ms}")
+
+    def _init_jog_state(self):
+        """Initialize jog state tracking (called after connect)"""
+        self._jog_state = {
+            "A": {"direction": None, "active": False},
+            "B": {"direction": None, "active": False},
+        }
+
+    async def connect(self) -> bool:
+        """
+        Connect to KIM101 device.
+
+        Returns:
+            True if connection successful, False otherwise
+        """
+        await self._ensure_kinesis_loaded()
 
         def _connect():
             self.DeviceManagerCLI.BuildDeviceList()
             device = self.KCubeInertialMotor.CreateKCubeInertialMotor(self.serial)
             device.Connect(self.serial)
             device.WaitForSettingsInitialized(2000)
-
             device.StartPolling(self.poll_ms)
             time.sleep(max(0.25, self.poll_ms / 1000))
             device.EnableDevice()
             time.sleep(0.25)
 
+            # Get device settings
             inertial_motor_config = device.GetInertialMotorConfiguration(self.serial)
-
-            # Get parameters related to homing/zeroing/moving
-            self.dev_settings = self.ThorlabsInertialMotorSettings.GetSettings(
+            dev_settings = self.ThorlabsInertialMotorSettings.GetSettings(
                 inertial_motor_config
             )
+            return device, dev_settings
 
-            return device
+        try:
+            self._dev, self.dev_settings = await self._run_blocking_in_thread(_connect)
+            self._dev.SetSettings(self.dev_settings, True, True)
+            self._init_jog_state()
+            logger.info(f"{self.id}: Connected to KIM101 {self.serial}")
+            return True
+        except Exception as e:
+            logger.error(f"{self.id}: Failed to connect to KIM101 {self.serial}: {e}")
+            return False
 
-        self._dev = await self._on_device(_connect)
-        self._dev.SetSettings(self.dev_settings, True, True)
-        self._init_jog_state()
-        self._connected = True
+    async def disconnect(self) -> bool:
+        """
+        Disconnect from device and clean up.
 
-    async def disconnect(self) -> None:
-        if self.simulate and not self._dev:
-            self._connected = False
-            return
+        Returns:
+            True if disconnect successful, False otherwise
+        """
+        if not self._dev:
+            return True
 
-        await self._on_device(self._dev.StopPolling)
-        await self._on_device(self._dev.Disconnect)
-        self._connected = False
+        try:
+            await self._run_blocking_in_thread(self._dev.StopPolling)
+            await self._run_blocking_in_thread(self._dev.Disconnect)
+            logger.info(f"{self.id}: Disconnected from KIM101 {self.serial}")
+            return True
+        except Exception as e:
+            logger.error(f"{self.id}: Error during disconnect: {e}")
+            return False
 
-    # --- API PROPERTIES ---
+    # --- Properties ---
+
     @api_property()
-    @property
     def channel_A(self) -> int:
+        """Position of channel A (steps)"""
         chan = self.InertialMotorStatus.MotorChannels.Channel1
         return self._dev.GetPosition(chan)
 
     @api_property()
-    @property
     def channel_B(self) -> int:
+        """Position of channel B (steps)"""
         chan = self.InertialMotorStatus.MotorChannels.Channel2
         return self._dev.GetPosition(chan)
 
     @api_property()
-    @property
-    def channel_C(self) -> int:
-        chan = self.InertialMotorStatus.MotorChannels.Channel3
-        return self._dev.GetPosition(chan)
+    def channel_A_rate(self) -> int:
+        """Step rate for channel A"""
+        chan = self.InertialMotorStatus.MotorChannels.Channel1
+        return self.dev_settings.Drive.Channel(chan).StepRate
+
+    @channel_A_rate.setter
+    def channel_A_rate(self, value: int) -> None:
+        chan = self.InertialMotorStatus.MotorChannels.Channel1
+        self.dev_settings.Drive.Channel(chan).StepRate = value
+        self._dev.SetSettings(self.dev_settings, True, True)
 
     @api_property()
-    @property
-    def channel_D(self) -> int:
-        chan = self.InertialMotorStatus.MotorChannels.Channel4
-        return self._dev.GetPosition(chan)
+    def channel_B_rate(self) -> int:
+        """Step rate for channel B"""
+        chan = self.InertialMotorStatus.MotorChannels.Channel2
+        return self.dev_settings.Drive.Channel(chan).StepRate
 
-    # setters? - probably not a good idea since only one can move at time TODO decide
+    @channel_B_rate.setter
+    def channel_B_rate(self, value: int) -> None:
+        chan = self.InertialMotorStatus.MotorChannels.Channel2
+        self.dev_settings.Drive.Channel(chan).StepRate = value
+        self._dev.SetSettings(self.dev_settings, True, True)
 
-    # @channel_A.setter
-    # def channel_A(self, value:int) -> None:
-    #    return
-
-    def get_channel(self, channel):
-        d = {
-            "A": self.InertialMotorStatus.MotorChannels.Channel1,
-            "B": self.InertialMotorStatus.MotorChannels.Channel2,
-            "C": self.InertialMotorStatus.MotorChannels.Channel3,
-            "D": self.InertialMotorStatus.MotorChannels.Channel4,
-        }
-        return d[channel]
-
-    # --- API COMMANDS ---
-    @api_command()  # TODO HIGH PRIO - ASYNC!!!
-    def move_to(self, channel: Literal["A", "B", "C", "D"], position: int) -> None:
-        """Moves channel to specified position"""
-        ch = self.get_channel(channel)
-        new_pos = (
-            position  # try int???self.Decimal(position) # TODO OPEN VS CLOSED LOOP
-        )
-        self._dev.MoveTo(ch, new_pos, 60000)  # 60s timeout TODO - should be async!
-
-    def _init_jog_state(self):
-        # one hold flag per channel
-        self._hold_flags = {
-            self.InertialMotorStatus.MotorChannels.Channel1: threading.Event(),
-            self.InertialMotorStatus.MotorChannels.Channel2: threading.Event(),
-            self.InertialMotorStatus.MotorChannels.Channel3: threading.Event(),
-            self.InertialMotorStatus.MotorChannels.Channel4: threading.Event(),
-        }
-        self._hold_tasks: Dict[int, asyncio.Task] = {}
-        self._move_lock = asyncio.Lock()  # one motion at a time is safest on KIM
+    # --- Commands ---
 
     @api_command()
-    async def jog(
-        self,
-        channel: Literal["A", "B", "C", "D"],
-        direction: Literal["increase", "decrease"],
-    ) -> None:
-        """Jogs the selected channel in given direction. Press-releae pattern"""
-
-        ch = self.get_channel(channel)
-        dir = (
-            self.InertialMotorJogDirection.Increase
-            if direction == "increase"
-            else self.InertialMotorJogDirection.Decrease
-        )
-
-        jog_params = self._dev.GetJogParameters(ch)
-        jog_mode = (
-            (
-                "step"
-                if jog_params.JogMode == self.InertialMotorJogMode.Step
-                else "continuous"
-            ),
-        )
-
-        if jog_mode == "step":
-            evt = self._hold_flags[ch]
-            if evt.is_set():
-                return  # already holding
-            evt.set()
-
-            async def _repeat_steps():
-                # loop runs while key held; each call blocks until single step finishes or times out
-                while evt.is_set():
-                    # short timeout per step; if too small, bump it
-                    await self._on_device(lambda: self._dev.Jog(ch, dir, 2000))
-                    # tiny pause between repeats so Stop can catch up
-                    await asyncio.sleep(0.01)
-
-            t = asyncio.create_task(_repeat_steps())
-            self._hold_tasks[ch] = (
-                t  # TODO - SOME SEMI-AUTO MECHANISM TO CALL RELEASE??
-            )
-
-        else:  # continuous mode
-
-            def _start():
-                # simple no-op callback to complete the signature
-                cb = KinesisDevice.Action[KinesisDevice.UInt64](lambda cmd_id: None)
-                self._dev.Jog(ch, dir, cb)
-
-            await self._on_device(_start)
-
-        return
-
-    @jog.release()
-    async def jog_release(
-        self,
-        channel: Literal["A", "B", "C", "D"],
-        direction: Literal["increase", "decrease"],
-    ) -> None:  # same arguments as parent (or add **kwargs?) - TODO
-        """Stops the current jog (if any)"""
-        ch = self.get_channel(channel)
-        # check mode
-        jog_params = self._dev.GetJogParameters(ch)
-        jog_mode = (
-            (
-                "step"
-                if jog_params.JogMode == self.InertialMotorJogMode.Step
-                else "continuous"
-            ),
-        )
-
-        if jog_mode == "step":
-            # stop the repeat loop
-            evt = self._hold_flags[ch]
-            evt.clear()
-            # don't await the task here; it will exit after the current step
-        else:
-            # Continuous: send Stop
-            await self._on_device(lambda: self._dev.Stop(ch))  # or StopImmediate(ch)
-
-    @api_command()  # TODO - prime candidate for composite property...
-    def set_jog_parameters(
-        self,
-        channel: Literal["A", "B", "C", "D"],
-        mode: Literal["step", "continuous"] = "step",
-        acc: int = 1000,
-        rate: int = 500,
-        step_fwd: int = 250,
-        step_rev: int = 250,
-    ) -> dict:
-        """Sets common parameters for jogging on a channel"""
-        ch = self.get_channel(channel)
-        jog_params = self._dev.GetJogParameters(ch)
-
-        if acc:
-            jog_params.JogAcceleration = acc
-        if mode:
-            jog_params.JogMode = (
-                self.InertialMotorJogMode.Step
-                if mode == "step"
-                else self.InertialMotorJogMode.Continuous
-            )
-        if rate:
-            jog_params.JogRate = rate
-        if step_fwd:
-            jog_params.JogStepFwd = step_fwd
-        if step_rev:
-            jog_params.JogStepRev = step_rev
-
-        self._dev.SetJogParameters(ch, jog_params)
-
-        # turn back into dictionary
-        r = {
-            "channel": channel,
-            "acc": int(jog_params.JogAcceleration),
-            "mode": (
-                "step"
-                if jog_params.JogMode == self.InertialMotorJogMode.Step
-                else "continuous"
-            ),
-            "rate": int(jog_params.JogRate),
-            "step_fwd": int(jog_params.JogStepFwd),
-            "step_rev": int(jog_params.JogStepRev),
-        }
-        return r
-
-    @api_command()
-    def set_drive_parameters(
-        self,
-        channel: Literal["A", "B", "C", "D"],
-        max_voltage: int = 112,
-        step_rate: int = 500,
-        step_acc: int = 1000,
-    ) -> dict:
-        """Sets drive parameters for a channel"""
-        ch = self.get_channel(channel)
-        drive_params = self._dev.GetDriveParameters(ch)
-
-        if max_voltage:
-            drive_params.MaxVoltage = max_voltage
-        if step_rate:
-            drive_params.StepRate = step_rate
-        if step_acc:
-            drive_params.StepAcceleration = step_acc
-
-        self._dev.SetDriveParameters(ch, drive_params)
-        r = {
-            "channel": channel,
-            "max_voltage": drive_params.MaxVoltage,
-            "step_rate": drive_params.StepRate,
-            "step_acc": drive_params.StepAcceleration,
-        }
-        return r
-
-    @api_command()
-    def zero(
-        self, channel: Literal["A", "B", "C", "D"]
-    ) -> None:  # TODO HIGH PRIO - ASYNC!!!
-        """SetPositionAs(channel, 0)"""
-        self._dev.SetPositionAs(self.get_channel(channel), 0)
-
-    @api_command()
-    def identify(self) -> int:
-        """Blinks display of the device a few times"""
+    def identify(self) -> None:
+        """Flash device LED to identify physically"""
         self._dev.IdentifyDevice()
+
+    @api_command()
+    def home_channel_A(self) -> None:
+        """Home channel A (move to zero position)"""
+        chan = self.InertialMotorStatus.MotorChannels.Channel1
+        self._dev.Home(chan)
+
+    @api_command()
+    def home_channel_B(self) -> None:
+        """Home channel B (move to zero position)"""
+        chan = self.InertialMotorStatus.MotorChannels.Channel2
+        self._dev.Home(chan)
+
+    @api_command()
+    def zero_channel_A(self) -> None:
+        """Set current position of channel A as zero"""
+        chan = self.InertialMotorStatus.MotorChannels.Channel1
+        self._dev.SetPositionAs(chan, 0)
+
+    @api_command()
+    def zero_channel_B(self) -> None:
+        """Set current position of channel B as zero"""
+        chan = self.InertialMotorStatus.MotorChannels.Channel2
+        self._dev.SetPositionAs(chan, 0)
+
+    # TODO: Add jog commands if needed (press/release pattern with events)

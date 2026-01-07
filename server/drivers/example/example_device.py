@@ -165,23 +165,29 @@ class example_device(Device):  # Class name MUST match filename exactly
     # Use for operations like: start acquisition, save data, reset device.
     # Use @api_command() decorator to publish commands to API
     # Dont forget to type-annotate arguments and return type!
+    #
+    # Threading behavior:
+    # - Sync commands (def): Automatically run in thread pool, safe for blocking calls
+    # - Async commands (async def): Run directly in event loop, must use
+    #   await self._run_blocking_in_thread() for any blocking/thread-specific calls
+    #
+    # Locking: Commands acquire exclusive lock automatically (no collision with properties)
     @api_command()
     def get_timestamps(self) -> List[float]:
         """
         Generate timestamp array for current configuration.
 
-        Commands can be sync or async:
-        - Sync (def): For fast, non-blocking operations
-        - Async (async def): For operations that do hardware I/O
+        This is a sync command - it will automatically run in a thread pool,
+        so it's safe to make blocking SDK calls directly here.
 
-        For blocking SDK calls, use:
-            value = await self._run_blocking_in_thread(sdk_function, arg1, arg2)
-
-        This prevents blocking the asyncio event loop.
+        For async commands, you must wrap blocking calls:
+            async def my_async_command(self, arg: int) -> str:
+                result = await self._run_blocking_in_thread(sdk_function, arg)
+                return result
         """
         dt = self.time_step
         ts = np.arange(self.number_of_time_steps) * dt
-        return ts.tolist()  # TODO move calling to separate thread allways?
+        return ts.tolist()
 
     # --- Data Sources --------------------------------------------------------
     # Data sources are async generators that yield Frame dicts for streaming.
