@@ -1,57 +1,82 @@
-# hub_app/drivers/example_device.py
+"""Aim-TTi TGF4000 Series Function Generator Driver"""
 from __future__ import annotations
-import asyncio, math, random
-from typing import Any, Dict, Optional, List, AsyncIterator
-import numpy as np
 import serial
 import time
-from ..base import Device, api_device, api_command, api_property, api_data, Frame
+import logging
+from typing import Any, Dict, Optional, List, TYPE_CHECKING
+
+from ..base import Device, api_device, api_command
+
+if TYPE_CHECKING:
+    from ...device_manager import DeviceManager
+
+logger = logging.getLogger(__name__)
 
 
-@api_device("tgf4000")
-class TGF4000(Device):
-    """
-    TGF4000 signal generator
-    """
+@api_device()
+class tgf4000(Device):
+    """Aim-TTi TGF4000 series function generator"""
 
-    kind = "tgf4000"  # todo -keep this or replace with alias?
+    def __init__(
+        self,
+        dev_id: str,
+        options: Dict[str, Any],
+        manager: Optional[DeviceManager] = None,
+    ):
+        """
+        Initialize TGF4000 driver.
 
-    # -------------------------------------------------------------------------
+        Config options:
+            port: Serial port (e.g., "COM8" or "/dev/ttyUSB0")
+            baud: Baud rate (default: 115200)
+        """
+        super().__init__(dev_id, options, manager)
 
-    def __init__(self, dev_id: str, options: Dict[str, Any]):
-        self.PORT = options.get(
-            "port", "COM8"
-        )  # <-- change to your COM port (e.g., "/dev/ttyACM0" on Linux)
-        self.BAUD = options.get(
-            "baud", 115200
-        )  # CDC ignores baud, but pyserial wants a value
+        self.PORT = options.get("port", "COM8")
+        self.BAUD = options.get("baud", 115200)
         self.ser = None
-        super().__init__(dev_id, options)
 
-    # --- lifecycle -----------------------------------------------------------
+    # --- Lifecycle ---
 
-    async def connect(self) -> None:
+    def connect(self) -> bool:
+        """
+        Connect to TGF4000 device.
 
-        def _connect():
-            ser = serial.Serial(
+        Returns:
+            True if connection successful, False otherwise
+        """
+        try:
+            self.ser = serial.Serial(
                 port=self.PORT,
                 baudrate=self.BAUD,
                 bytesize=serial.EIGHTBITS,
                 parity=serial.PARITY_NONE,
                 stopbits=serial.STOPBITS_ONE,
-                timeout=1.0,  # seconds
+                timeout=1.0,
                 write_timeout=1.0,
             )
             time.sleep(0.1)
-            return ser
+            return True
+        except Exception as e:
+            logger.error(f"{self.id}: Failed to connect to TGF4000 on {self.PORT}: {e}")
+            return False
 
-        self.ser = await self._on_device(_connect)
+    def disconnect(self) -> bool:
+        """
+        Disconnect from device.
 
-    async def disconnect(self) -> None:
-        def _disconnect():
+        Returns:
+            True if disconnect successful, False otherwise
+        """
+        if not self.ser:
+            return True
+
+        try:
             self.ser.close()
-
-        await self._on_device(_disconnect)
+            return True
+        except Exception as e:
+            logger.error(f"{self.id}: Error during disconnect: {e}")
+            return False
 
     # -- API PROPERTIES
 

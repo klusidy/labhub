@@ -1,14 +1,21 @@
+"""NKT Photonics Boostik Fiber Amplifier Driver"""
 from __future__ import annotations
-from typing import Any, Dict
+import serial
+import time
+import logging
+from typing import Any, Dict, Optional, TYPE_CHECKING
+
 from ..base import Device, api_device, api_command, api_property
-import serial, time, threading
+
+if TYPE_CHECKING:
+    from ...device_manager import DeviceManager
+
+logger = logging.getLogger(__name__)
 
 
-@api_device("boostik")
-class Boostik(Device):
-    """
-    NKT Boostik fiber amplifier
-    """
+@api_device()
+class boostik(Device):
+    """NKT Photonics Boostik fiber amplifier"""
 
     def __init__(
         self,
@@ -16,23 +23,34 @@ class Boostik(Device):
         options: Dict[str, Any],
         manager: Optional[DeviceManager] = None,
     ):
-        self.PORT = options.get(
-            "port", "COM5"
-        )  # <-- change to your COM port (e.g., "/dev/ttyACM0" on Linux)
-        self.BAUD = options.get(
-            "baud", 9600
-        )  # CDC ignores baud, but pyserial wants a value
-        self.timeout = options.get("timeout", 1.0)
-        self._ser = None
-        self._lock = threading.Lock()
-        self._last_tx = 0.0
-        self._min_gap = 0.02  # 20 ms between commands
+        """
+        Initialize Boostik driver.
+
+        Config options:
+            port: Serial port (e.g., "COM5" or "/dev/ttyUSB0")
+            baud: Baud rate (default: 9600)
+            timeout: Communication timeout in seconds (default: 1.0)
+        """
         super().__init__(dev_id, options, manager)
 
-    async def connect(self) -> None:
+        self.PORT = options.get("port", "COM5")
+        self.BAUD = options.get("baud", 9600)
+        self.timeout = options.get("timeout", 1.0)
+        self._ser = None
+        self._last_tx = 0.0
+        self._min_gap = 0.02  # 20 ms minimum gap between commands
 
-        def _connect():
-            _ser = serial.Serial(
+    # --- Lifecycle ---
+
+    def connect(self) -> bool:
+        """
+        Connect to Boostik device.
+
+        Returns:
+            True if connection successful, False otherwise
+        """
+        try:
+            self._ser = serial.Serial(
                 port=self.PORT,
                 baudrate=self.BAUD,
                 bytesize=serial.EIGHTBITS,
@@ -44,17 +62,29 @@ class Boostik(Device):
                 dsrdtr=False,
                 xonxoff=False,
             )
-            _ser.reset_input_buffer()
+            self._ser.reset_input_buffer()
             time.sleep(0.1)
-            return _ser
+            return True
+        except Exception as e:
+            logger.error(f"{self.id}: Failed to connect to Boostik on {self.PORT}: {e}")
+            return False
 
-        self._ser = await self._on_device(_connect)
+    def disconnect(self) -> bool:
+        """
+        Disconnect from device.
 
-    async def disconnect(self) -> None:
-        def _disconnect():
+        Returns:
+            True if disconnect successful, False otherwise
+        """
+        if not self._ser:
+            return True
+
+        try:
             self._ser.close()
-
-        await self._on_device(_disconnect)
+            return True
+        except Exception as e:
+            logger.error(f"{self.id}: Error during disconnect: {e}")
+            return False
 
     # --- low-level helpers ---
     def _send(self, cmd: str) -> str:
@@ -64,15 +94,20 @@ class Boostik(Device):
         return self._ser.readline().decode("ascii", errors="ignore").strip()
 
     def query(self, cmd: str) -> str:
+        """
+        Send command and read response with rate limiting.
+
+        Note: Rate limiting is safe without additional locking because
+        base class ensures exclusive access (async lock in poll_property/run_command).
+        """
         payload = (cmd + "\r").encode("ascii")
-        with self._lock:
-            dt = time.monotonic() - self._last_tx
-            if dt < self._min_gap:
-                time.sleep(self._min_gap - dt)
-            self._ser.write(payload)
-            self._ser.flush()
-            self._last_tx = time.monotonic()
-            return self._readline()
+        dt = time.monotonic() - self._last_tx
+        if dt < self._min_gap:
+            time.sleep(self._min_gap - dt)
+        self._ser.write(payload)
+        self._ser.flush()
+        self._last_tx = time.monotonic()
+        return self._readline()
 
     def _readline(self) -> str:
         # read one line terminated by CR/LF; return "" on timeout
@@ -94,26 +129,22 @@ class Boostik(Device):
                 return buf.decode("ascii", errors="ignore").strip()
             buf.extend(b)
 
-    # --- properties ---
+    # --- Properties ---
 
     @api_property()
-    @property
     def enabled(self) -> bool:
         """Emission on/off"""
         r = self.query("CDO")
-        # print("CDO return: " + r)
         return r == "1"
 
     @enabled.setter
     def enabled(self, on: bool) -> None:
         self.query(f"CDO {1 if on else 0}")
 
-    @api_property()
-    @property
+    @api_property(unit="A")
     def current_setpoint(self) -> float:
         """Current setpoint [A]"""
         r = self.query("ACC")
-        # print("ACC return: " + r)
         try:
             return float(r)
         except ValueError:
@@ -123,45 +154,37 @@ class Boostik(Device):
     def current_setpoint(self, amps: float) -> None:
         self.query(f"ACC {amps}")
 
-    @api_property()
-    @property
+    @api_property(unit="A")
     def actual_current(self) -> float:
-        """Actual current [A]"""
+        """Measured current [A]"""
         r = self.query("AMC")
-        # print("AMC return: " + r)
         try:
             return float(r)
         except ValueError:
             return -100.0
 
-    @api_property()
-    @property
+    @api_property(unit="°C")
     def diode_temp(self) -> float:
         """Temperature of diode booster [°C]"""
         r = self.query("AMT 1")
-        # print("AMT 1 return: " + r)
         try:
             return float(r)
         except ValueError:
             return -100.0
 
-    @api_property()
-    @property
+    @api_property(unit="°C")
     def ambient_temp(self) -> float:
         """Ambient temperature [°C]"""
         r = self.query("CMA")
-        # print("CMA return: " + r)
         try:
             return float(r)
         except ValueError:
             return -100.0
 
-    @api_property()
-    @property
+    @api_property(unit="mW")
     def input_power(self) -> float:
         """Input optical power [mW]"""
         r = self.query("CMP 1")
-        # print("CMP 1 return: " + r)
         try:
             return float(r) / 10
         except ValueError:

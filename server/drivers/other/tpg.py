@@ -1,13 +1,18 @@
-# hub_app/drivers/example_device.py
+"""TPG Pressure Sensor Driver"""
 from __future__ import annotations
-import asyncio, math, random
-from typing import Any, Dict, Optional, List, AsyncIterator
-import numpy as np
 import serial
 import time
-from ..base import Device, api_device, api_command, api_property, api_data, Frame
+import logging
+from typing import Any, Dict, Optional, TYPE_CHECKING
 
+from ..base import Device, api_device, api_command
 
+if TYPE_CHECKING:
+    from ...device_manager import DeviceManager
+
+logger = logging.getLogger(__name__)
+
+# Protocol constants
 ACK = b"\x06"
 NAK = b"\x15"
 CR = b"\r"
@@ -15,13 +20,9 @@ LF = b"\n"
 ENQ = b"\x05"
 
 
-@api_device("tpg")
-class TPG(Device):
-    """
-    TPG preassure sensor
-    """
-
-    kind = "tpg"
+@api_device()
+class tpg(Device):
+    """TPG pressure sensor (vacuum gauge)"""
 
     def __init__(
         self,
@@ -29,20 +30,32 @@ class TPG(Device):
         options: Dict[str, Any],
         manager: Optional[DeviceManager] = None,
     ):
-        self.PORT = options.get(
-            "port", "COM10"
-        )  # <-- change to your COM port (e.g., "/dev/ttyACM0" on Linux)
-        self.BAUD = options.get(
-            "baud", 9600
-        )  # CDC ignores baud, but pyserial wants a value
-        self.timeout = options.get("timeout", 1.0)
-        self.ser = None
+        """
+        Initialize TPG driver.
+
+        Config options:
+            port: Serial port (e.g., "COM10" or "/dev/ttyUSB0")
+            baud: Baud rate (default: 9600)
+            timeout: Communication timeout in seconds (default: 1.0)
+        """
         super().__init__(dev_id, options, manager)
 
-    async def connect(self) -> None:
+        self.PORT = options.get("port", "COM10")
+        self.BAUD = options.get("baud", 9600)
+        self.timeout = options.get("timeout", 1.0)
+        self.ser = None
 
-        def _connect():
-            ser = serial.Serial(
+    # --- Lifecycle ---
+
+    def connect(self) -> bool:
+        """
+        Connect to TPG device.
+
+        Returns:
+            True if connection successful, False otherwise
+        """
+        try:
+            self.ser = serial.Serial(
                 port=self.PORT,
                 baudrate=self.BAUD,
                 bytesize=serial.EIGHTBITS,
@@ -55,15 +68,27 @@ class TPG(Device):
                 xonxoff=False,
             )
             time.sleep(0.1)
-            return ser
+            return True
+        except Exception as e:
+            logger.error(f"{self.id}: Failed to connect to TPG on {self.PORT}: {e}")
+            return False
 
-        self.ser = await self._on_device(_connect)
+    def disconnect(self) -> bool:
+        """
+        Disconnect from device.
 
-    async def disconnect(self) -> None:
-        def _disconnect():
+        Returns:
+            True if disconnect successful, False otherwise
+        """
+        if not self.ser:
+            return True
+
+        try:
             self.ser.close()
-
-        await self._on_device(_disconnect)
+            return True
+        except Exception as e:
+            logger.error(f"{self.id}: Error during disconnect: {e}")
+            return False
 
     def expect_ack(self):
         # Read until CRLF; the device answers with ACK/NAK then CRLF
