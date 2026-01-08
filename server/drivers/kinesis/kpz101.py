@@ -57,6 +57,7 @@ class kpz101(KinesisDevice):
 
         # Device handle (set during connect())
         self._dev = None
+        self._voltage_input = 0
 
         logger.debug(f"Initialized KPZ101: serial={self.serial}, poll_ms={self.poll_ms}")
 
@@ -73,17 +74,17 @@ class kpz101(KinesisDevice):
         # Connect to device on Kinesis thread
         try: 
             self.DeviceManagerCLI.BuildDeviceList()
-            self.dev = self.KCubePiezo.CreateKCubePiezo(self.serial)
-            self.dev.Connect(self.serial)
-            self.dev.WaitForSettingsInitialized(2000)
-            self.dev.StartPolling(self.poll_ms)
+            self._dev = self.KCubePiezo.CreateKCubePiezo(self.serial)
+            self._dev.Connect(self.serial)
+            self._dev.WaitForSettingsInitialized(2000)
+            self._dev.StartPolling(self.poll_ms)
             time.sleep(max(0.25, self.poll_ms / 1000))
-            self.dev.EnableDevice()
+            self._dev.EnableDevice()
             time.sleep(0.25)
 
             # Initialize voltage settings
-            max_voltage = self.dev.GetMaxOutputVoltage()
-            self.dev.SetMaxOutputVoltage(max_voltage)
+            max_voltage = self._dev.GetMaxOutputVoltage()
+            self._dev.SetMaxOutputVoltage(max_voltage)
             logger.info(f"{self.id}: Connected to KPZ101 {self.serial}")
             return True
         except:
@@ -114,15 +115,28 @@ class kpz101(KinesisDevice):
     # --- Properties ---
 
     @api_property(min=0.0, max=150.0, unit="V")
+    def voltage_input(self) -> float:
+        """Output voltage in volts"""
+        return self._voltage_input
+
+    @voltage_input.setter
+    def voltage_input(self, value: float) -> None:
+        voltage_decimal = self._to_decimal(value)
+        self._dev.SetOutputVoltage(voltage_decimal)
+        self._voltage_input = value
+
+
+
+    @api_property(min=0.0, max=150.0, unit="V")
     def voltage(self) -> float:
         """Output voltage in volts"""
         voltage_decimal = self._dev.GetOutputVoltage()
         return self.Decimal.ToDouble(voltage_decimal)
 
-    @voltage.setter
-    def voltage(self, value: float) -> None:
-        voltage_decimal = self._to_decimal(value)
-        self._dev.SetOutputVoltage(voltage_decimal)
+    # @voltage.setter
+    # def voltage(self, value: float) -> None:
+    #     voltage_decimal = self._to_decimal(value)
+    #     self._dev.SetOutputVoltage(voltage_decimal)
 
     # --- Commands ---
 

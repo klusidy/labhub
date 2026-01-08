@@ -5,7 +5,7 @@ Thorlabs K10CR1 Stepper Motor Rotation Mount Driver
 from __future__ import annotations
 import time
 import logging
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from typing import Any, Dict, Optional, TYPE_CHECKING, Literal
 
 from ..base import api_device, api_command, api_property
 from ._kinesis_device import KinesisDevice
@@ -128,43 +128,100 @@ class k10cr1(KinesisDevice):
     @position.setter
     def position(self, value: float) -> None:
         conv = self._dev.UnitConverter
-        value_dec = self._to_decimal(value)
-        device_unit = conv.RealToDeviceUnit(value_dec, conv.UnitType.Length)
-        self._dev.SetMoveAbsolutePosition(device_unit)
-        self._dev.MoveAbsolute(5000)  # 5 second timeout
+        value_decimal = self._to_decimal(value)
+        self._dev.MoveTo(value_decimal, 60000)
 
     # --- Commands ---
 
     @api_command()
-    def identify(self) -> None:
-        """Flash device LED to identify physically"""
-        self._dev.IdentifyDevice()
+    def move_to(
+        self, value: float
+    ) -> None:  # todo when value is dict, update min/max/default etc
+        conv = self._dev.UnitConverter
+        value_decimal = self._to_decimal(value)
+        self._dev.MoveTo(
+            value_decimal, 60000
+        )  # TODO - should be async? (properties are not async...)
+        return value
+    
+
+
+    @api_command()
+    def drive_up(self, velocity: float) -> None:
+        fwd = self.MotorDirection.Forward  # todo add support for veocity!!
+        self._dev.MoveContinuous(fwd)
+        return
+
+    @api_command()
+    def drive_down(self, velocity: float) -> None:
+        bck = self.MotorDirection.Backward
+        self._dev.MoveContinuous(bck)
+        return
+
+    @drive_up.release()
+    @drive_down.release()
+    def drive_up_release(self, **kwargs) -> None:
+        self._dev.StopImmediate()
+        return
+    
 
     @api_command()
     def home(self) -> None:
-        """Home the device (move to zero position)"""
-        self._dev.Home(5000)  # 5 second timeout
+        self._dev.Home(60000)
+        return
+    
 
     @api_command()
-    def zero(self) -> None:
-        """Set current position as zero"""
-        self._dev.SetPositionAs(0)
+    def set_jog_parameters(
+        self,
+        jog_mode: Literal["single_step", "continuous_held", "continuous_unheld"],
+        step_size: float = 5,
+        acceleration: float = 15,
+        max_velocity: float = 15,
+    ) -> dict:
+        # min_velocity: float = 5)-> dict :#step_mode: str, max_velocity:int, acc:int) -> dict:
+        logger.debug("inside set_jog_parameters")
+        jog_params = self._dev.GetJogParams()
+        if step_size:
+            jog_params.StepSize = self._to_decimal(step_size)
+        if acceleration:
+            jog_params.VelocityParams.Acceleration = self._to_decimal(acceleration)
+        if max_velocity:
+            jog_params.VelocityParams.MaxVelocity = self._to_decimal(max_velocity)
+        if jog_mode == "single_step":
+            jog_params.JogMode = jog_params.JogModes.SingleStep
+        elif jog_mode == "continuous_held":
+            jog_params.JogMode = jog_params.JogModes.ContinuousHeld
+        elif jog_mode == "continuous_unheld":
+            jog_params.JogMode = jog_params.JogModes.ContinuousUnheld
 
-    @api_command()
-    def move_relative(self, distance: float) -> None:
-        """
-        Move relative to current position.
+        # self._dev.SetJogParams_DeviceUnit TODO - UNITS!!!
+        self._dev.SetJogParams(jog_params)
 
-        Args:
-            distance: Distance to move in degrees
-        """
-        conv = self._dev.UnitConverter
-        distance_dec = self._to_decimal(distance)
-        device_unit = conv.RealToDeviceUnit(distance_dec, conv.UnitType.Length)
-        self._dev.SetMoveRelativeDistance(device_unit)
-        self._dev.MoveRelative(5000)  # 5 second timeout
+        # if min_velocity:
+        #    jog_params.VelocityParams.MinVelocity = self._to_decimal(min_velocity)
 
-    @api_command()
-    def stop(self) -> None:
-        """Stop any ongoing motion"""
-        self._dev.Stop(500)  # 500ms timeout
+        r = {  # todo -read out from actual params
+            "step_size": self.Decimal.ToDouble(jog_params.StepSize),
+            "acceleration": self.Decimal.ToDouble(
+                jog_params.VelocityParams.Acceleration
+            ),
+            "max_velocity": self.Decimal.ToDouble(
+                jog_params.VelocityParams.MaxVelocity
+            ),
+            "jog_mode": (
+                "single_step"
+                if jog_params.JogMode == jog_params.JogModes.SingleStep
+                else (
+                    "continuous_held"
+                    if jog_params.JogMode == jog_params.JogModes.ContinuousHeld
+                    else (
+                        "continuous_unheld"
+                        if jog_params.JogMode == jog_params.JogModes.ContinuousUnheld
+                        else "unknown"
+                    )
+                )
+            ),
+        }
+        return r
+
