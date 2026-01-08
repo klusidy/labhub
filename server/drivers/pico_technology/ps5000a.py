@@ -27,6 +27,8 @@ import matplotlib.pyplot as plt
 import time
 
 logger = logging.getLogger(__name__)
+logger = logging.getLogger("labhub.device_manager.pico_technologies.ps5000a")
+
 
 RANGE_VALUES = {
     "10MV": 0.01,
@@ -66,7 +68,9 @@ class PicoRawSource(DataSource):
 
     async def start(self, force_restart=False):
 
-        # Stash loop to enable restarting when some param changes
+        # S
+        # tash loop to enable restarting when some param changes
+        self._needs_restart = False # dont need restart at start, like ever
         self.loop = asyncio.get_running_loop()
         if self.running() and not force_restart:
             return
@@ -125,12 +129,8 @@ class PicoRawSource(DataSource):
                 async with self.driver._lock:
                     # Check if parameters changed - restart if needed
                     if self._needs_restart:
-                        logger.info("PicoRawSource: Parameter change detected, restarting...")
-                        self._needs_restart = False
-                        # Restart will happen automatically by breaking and calling start() again
-                        await self.stop()
-                        await self.start(force_restart=True)
-                        return  # Exit this poller, new one will start
+                        #logger.debug(">>>>> I do need restart")
+                        raise asyncio.CancelledError("Restart requested")
 
                     ready = ctypes.c_int16(0)
                     cmaxSamples = ctypes.c_int32(buffer_len)
@@ -174,15 +174,30 @@ class PicoRawSource(DataSource):
 
             self.driver.status["stop"] = ps.ps5000aStop(self.driver.chandle)
 
+        self._needs_restart = False # do not restart at start of a task
         self._task = asyncio.create_task(poller(), name=f"PicoscopeRawStream")
+
+        # def on_done(t: asyncio.Task):
+        #     try:
+        #         e = t.exception()
+        #         if e and not isinstance(e, asyncio.CancelledError):
+        #             logger.exception("Picoscope raw stream crashed")
+        #     except asyncio.CancelledError:
+        #         pass
 
         def on_done(t: asyncio.Task):
             try:
                 e = t.exception()
-                if e and not isinstance(e, asyncio.CancelledError):
-                    logger.exception("Picoscope raw stream crashed")
-            except asyncio.CancelledError:
-                pass
+                if e is not None:
+                    if isinstance(e, asyncio.CancelledError):
+                        logger.info("Task was cancelled.")
+                    else:
+                        logger.exception("Picoscope raw stream crashed")
+            finally:
+                # Check if a restart was requested, and start a new task
+                if self._needs_restart:
+                    logger.debug("Restarting task due to parameter change.")
+                    asyncio.create_task(self.start(force_restart=True)) 
 
         self._task.add_done_callback(on_done)
 
@@ -753,6 +768,8 @@ class ps5000a(Device):
 
         # optional: surface overflow/clipping info
         clipped = bool(overflow.value)
+
+        self._pico_raw_source._needs_restart = True
         return {
             "ok": True,
             "file": path,
