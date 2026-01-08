@@ -108,9 +108,6 @@ class Device:
                     "No doc provided. Fill in doc string of decorated property in device driver.",
                 )
                 data_source["has_plot"] = attr._plot_fn is not None
-                data_source["method"] = (
-                    name  # attribute name - is this necessary?? todo (should be the same as name anyway, why double it?)
-                )
                 data_sources[attr._api_data_name] = data_source
 
         cls._api_commands = commands
@@ -435,7 +432,7 @@ class Device:
             raise KeyError(
                 f"Unknown data source '{name}' for {self.__class__.__name__}"
             )
-        return getattr(self, spec["method"])
+        return getattr(self, name)
 
     # --- helpers ---
     @property

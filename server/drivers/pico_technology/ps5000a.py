@@ -187,12 +187,10 @@ class PicoRawSource(DataSource):
         self._task.add_done_callback(on_done)
 
 
-# @api_device("ps5000a")
+@api_device()
 class ps5000a(Device):
     """PicoScope 5000a series driver.
     This driver requires the PicoSDK to be installed."""
-
-    # kind = "ps5000a"  # to properly load device widget?? TODO -use driver name isntead
 
     def __init__(
         self,
@@ -635,9 +633,6 @@ class ps5000a(Device):
 
         return ret
 
-    # stop streaming!!
-    # @api_command()
-
     @api_command()
     async def acquire_to_file(
         self, folder: str, filename: str, acquisition_duration_s: Optional[float] = None
@@ -684,15 +679,9 @@ class ps5000a(Device):
                 ps.PS5000A_RATIO_MODE["PS5000A_RATIO_MODE_NONE"],
             )
 
-        # ---- run block with a tiny callback that only signals readiness ----
+        # ---- run block acquisition ----
         loop = asyncio.get_running_loop()
         done_evt = asyncio.Event()
-
-        # def _block_ready_cb(handle, status, pParameter):
-        #    # keep callback minimal; hop back to asyncio loop
-        #    loop.call_soon_threadsafe(done_evt.set)
-
-        # lp_ready = ps.BlockReadyType(_block_ready_cb)
 
         # pre = 0, post = acquisition_samples
         time_indisposed_ms = None
@@ -773,71 +762,6 @@ class ps5000a(Device):
             "fs_hz": sampling_frequency_hz,
             "clipped": clipped,
         }
-
-    ## TODO - TURN THIS INTO LONG ACQUISITION TO A FILE
-    # @api_command()
-    # def demo_wave(self) -> Frame:
-    #     """Simple block acquisition"""
-
-    #     # Start block acquisition
-    #     pre_trigger_samples = self._cache.get("pre_trigger_samples", 0)
-    #     post_trigger_samples = self._cache.get("post_trigger_samples", 5000)
-    #     total_samples = pre_trigger_samples + post_trigger_samples
-    #     timebase = self._timebase
-
-    #     self.status["runBlock"] = ps.ps5000aRunBlock(self.chandle,
-    #                                                  pre_trigger_samples,
-    #                                                  post_trigger_samples,
-    #                                                  timebase,
-    #                                                  None,
-    #                                                  0,
-    #                                                  None,
-    #                                                  None)
-
-    #     ready = ctypes.c_int16(0)
-    #     check = ctypes.c_int16(0)
-    #     while ready.value == check.value:
-    #         self.status["isReady"] = ps.ps5000aIsReady(self.chandle, ctypes.byref(ready))
-
-    #     print(" >>>>>> Acquisition complete")
-
-    #     # Set up data buffers for each enabled channel
-    #     buffers_raw, buffers_mv = {}, {}
-    #     for channel in ["A", "B", "C", "D"]:
-    #         ch = ps.PS5000A_CHANNEL[f"PS5000A_CHANNEL_{channel}"]
-    #         enabled = self._cache.get(f"channel_{channel}", {}).get("enable", 0)
-    #         if not enabled:
-    #             pass #do I need to set up buffer for all channels?
-    #             #continue
-
-    #         buffer_max = (ctypes.c_int16 * total_samples)()
-    #         buffer_min = (ctypes.c_int16 * total_samples)() # used for downsampling which isn't in the scope of this example
-
-    #         source = ps.PS5000A_CHANNEL[f"PS5000A_CHANNEL_{channel}"]
-    #         self.status[f"setDataBuffers{channel}"] = ps.ps5000aSetDataBuffers(self.chandle, source, ctypes.byref(buffer_max), ctypes.byref(buffer_min), total_samples, 0, 0)
-
-    #         buffers_raw[channel] = buffer_max
-
-    #     print(" >>>>>> buffer setup complete")
-
-    #     # get data from all buffers with one call
-    #     overflow = ctypes.c_int16() # overflow location
-    #     cmaxSamples = ctypes.c_int32(pre_trigger_samples + post_trigger_samples) # converted type maxSamples (wtf is this) # this ought to be set from before somehow??
-    #     self.status["getValues"] = ps.ps5000aGetValues(self.chandle, 0, ctypes.byref(cmaxSamples), 0, 0, 0, ctypes.byref(overflow))
-    #     assert_pico_ok(self.status["getValues"])
-
-    #     # convert raw data to mV
-    #     maxADC = ctypes.c_int16()
-    #     self.status["maximumValue"] = ps.ps5000aMaximumValue(self.chandle, ctypes.byref(maxADC))
-
-    #     return_series = []
-    #     for channel, raw_data in buffers_raw.items():
-    #         data_decoded = np.frombuffer(raw_data, dtype=np.int16)
-    #         break
-
-    #     #return { "series": return_series }
-    #     return {"data": data_decoded.tolist()}
-    #     #return {"data": np.random.rand(pre_trigger_samples + post_trigger_samples).tolist() }
 
     @api_data()
     async def time_stream(self) -> AsyncIterator[Frame]:
