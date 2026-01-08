@@ -47,7 +47,7 @@ class KinesisDevice(Device):
     """
 
     # Shared class variables for all Kinesis devices
-    _LOADED = False  # Whether .NET DLLs have been loaded
+    _LOADED_TYPES: set = set()  # Track which device types have loaded their DLLs
     _THREAD_ID: int | None = None  # ID of the Kinesis thread
     _EXEC = ThreadPoolExecutor(max_workers=1, thread_name_prefix="kinesis")
     _LOADED_CLASSES: Dict[str, Any] = {}  # Cache of loaded .NET classes
@@ -83,7 +83,9 @@ class KinesisDevice(Device):
         Raises:
             RuntimeError: If DLL files not found or import fails
         """
-        if cls._LOADED:
+        # Check if this specific device type has already loaded its DLLs
+        device_type = cls.__name__
+        if device_type in cls._LOADED_TYPES:
             return
 
         try:
@@ -96,16 +98,15 @@ class KinesisDevice(Device):
         base = Path(kinesis_path)
         logger.info(f"Loading Kinesis DLLs from {base}")
 
-        # Collect all DLL requirements from common + all subclasses
+        # Collect DLL requirements from common + this specific device class
         all_dlls = set(cls._COMMON_DLL_REQUIREMENTS["dlls"])
         all_imports = dict(cls._COMMON_DLL_REQUIREMENTS["imports"])
 
-        # Scan all KinesisDevice subclasses for their requirements
-        for subclass in cls.__subclasses__():
-            if hasattr(subclass, "_DLL_REQUIREMENTS"):
-                reqs = subclass._DLL_REQUIREMENTS
-                all_dlls.update(reqs.get("dlls", []))
-                all_imports.update(reqs.get("imports", {}))
+        # Add this device's specific requirements
+        if hasattr(cls, "_DLL_REQUIREMENTS"):
+            reqs = cls._DLL_REQUIREMENTS
+            all_dlls.update(reqs.get("dlls", []))
+            all_imports.update(reqs.get("imports", {}))
 
         # Load DLL files
         logger.debug(f"Loading {len(all_dlls)} DLL(s)")
@@ -142,9 +143,9 @@ class KinesisDevice(Device):
                 ) from e
 
         cls._THREAD_ID = threading.get_ident()
-        cls._LOADED = True
+        cls._LOADED_TYPES.add(device_type)
         logger.info(
-            f"Kinesis .NET runtime loaded (thread={cls._THREAD_ID}, "
+            f"Kinesis {device_type} loaded (thread={cls._THREAD_ID}, "
             f"{len(all_dlls)} DLLs, {len(all_imports)} classes)"
         )
 
@@ -196,8 +197,11 @@ class KinesisDevice(Device):
 
         Runs _load_dotnet_sync on the Kinesis thread if not already loaded.
         """
-        if not self._LOADED:
-            await self._run_blocking_in_thread(lambda: self._load_dotnet_sync(self.kinesis_path))
+        device_type = self.__class__.__name__
+        if device_type not in self._LOADED_TYPES:
+            await self._run_blocking_in_thread(
+                lambda: self.__class__._load_dotnet_sync(self.kinesis_path)
+            )
 
     async def _run_blocking_in_thread(self, fn):
         """
