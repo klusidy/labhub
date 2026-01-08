@@ -71,29 +71,26 @@ class kpz101(KinesisDevice):
         await self._ensure_kinesis_loaded()
 
         # Connect to device on Kinesis thread
-        def _connect():
+        try: 
             self.DeviceManagerCLI.BuildDeviceList()
-            dev = self.KCubePiezo.CreateKCubePiezo(self.serial)
-            dev.Connect(self.serial)
-            dev.WaitForSettingsInitialized(2000)
-            dev.StartPolling(self.poll_ms)
+            self.dev = self.KCubePiezo.CreateKCubePiezo(self.serial)
+            self.dev.Connect(self.serial)
+            self.dev.WaitForSettingsInitialized(2000)
+            self.dev.StartPolling(self.poll_ms)
             time.sleep(max(0.25, self.poll_ms / 1000))
-            dev.EnableDevice()
+            self.dev.EnableDevice()
             time.sleep(0.25)
 
             # Initialize voltage settings
-            max_voltage = dev.GetMaxOutputVoltage()
-            dev.SetMaxOutputVoltage(max_voltage)
-            return dev
-
-        try:
-            self._dev = await self._run_blocking_in_thread(_connect)
+            max_voltage = self.dev.GetMaxOutputVoltage()
+            self.dev.SetMaxOutputVoltage(max_voltage)
             logger.info(f"{self.id}: Connected to KPZ101 {self.serial}")
             return True
-        except Exception as e:
+        except:
             logger.error(f"{self.id}: Failed to connect to KPZ101 {self.serial}: {e}")
             return False
-
+        
+            
     async def disconnect(self) -> bool:
         """
         Disconnect from device and clean up.

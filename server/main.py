@@ -128,7 +128,7 @@ if WEB_DIST.exists():
 
 # todo - gui for picoscope should not be specified separately - not extensible
 GUI_PICOSCOPE_DIST = (
-    Path(__file__).parent.parent.parent
+    Path(__file__).parent.parent
     / "gui"
     / "devices"
     / "picoscope"
