@@ -130,12 +130,15 @@ class Launcher:
         self.act_edit_profile.triggered.connect(self.edit_profile)
         self.act_change_profile = QAction("Change profile", self.menu)
         self.act_change_profile.triggered.connect(self.change_profile)
+        
 
         # self.act_status = QAction("Show status", self.menu); self.act_status.triggered.connect(self.show_status)
         self.act_docs = QAction("Open API docs", self.menu)
         self.act_docs.triggered.connect(self.open_docs)
         self.act_launch_gui = QAction("Launch GUI", self.menu)
         self.act_launch_gui.triggered.connect(self.open_gui)
+        self.act_launch_pico = QAction("Picoscope GUI", self.menu)
+        self.act_launch_pico.triggered.connect(self.open_picoscope)
         self.act_quit = QAction("Quit", self.menu)
         self.act_quit.triggered.connect(self.quit)
         # for a in (self.act_start, self.act_stop, self.act_reload, self.act_open_cfg, self.act_edit_cfg, self.act_docs, self.act_launch_gui):
@@ -155,6 +158,7 @@ class Launcher:
         self.menu.addAction(self.act_stop)
         self.menu.addSeparator()
         self.menu.addAction(self.act_launch_gui)
+        self.menu.addAction(self.act_launch_pico)
         self.menu.addAction(self.act_docs)
         # self.menu.addSeparator() does not work yet
         # self.menu.addMenu(self.config_menu)
@@ -379,6 +383,11 @@ class Launcher:
         import webbrowser
 
         webbrowser.open(f"{self.host_full}/ui")
+
+    def open_picoscope(self): # TODO - ideally auto-generate for all devices with custom guis
+        import webbrowser
+
+        webbrowser.open(f"{self.host_full}/picoscope")
 
     def open_config_folder(self):
         try:
