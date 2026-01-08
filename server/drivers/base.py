@@ -342,8 +342,23 @@ class Device:
                 continue
             await self.set_property(k, v)
 
+        # Call post-apply hook for drivers with composite/derived properties
+        await self._post_apply_properties(properties)
+
         # read back concurrently (optional)
         return await self.read_state()
+
+    async def _post_apply_properties(self, properties: dict) -> None:
+        """
+        Hook for drivers to handle special cases after profile properties are applied.
+
+        Override this in subclasses to restore composite properties (like channel
+        settings) that are published in read_state() but not actual api_properties.
+
+        Args:
+            properties: The properties dict that was just applied
+        """
+        pass
 
     def _coerce_clamp(self, spec: Dict[str, Any], value: Any) -> Any:
         # best-effort type + bounds + choices enforcement

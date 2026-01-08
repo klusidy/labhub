@@ -534,7 +534,6 @@ class ps5000a(Device):
         return ret
 
     # Add channels settings to state to support the display in the UI
-    # TODO - maybe add get_channels_settings as a command for scripting usage
     async def read_state(self) -> Dict[str, Any]:  # override
         state = await super().read_state()
         state["_channel_settings"] = {
@@ -544,6 +543,39 @@ class ps5000a(Device):
             self._trigger
         )  # dict of last values for set_simple_trigger
         return state
+
+    async def _post_apply_properties(self, properties: dict) -> None:
+        """Restore channel and trigger settings from profile."""
+        # Restore channel settings if present in profile
+        if "_channel_settings" in properties:
+            channel_settings = properties["_channel_settings"]
+            for ch, settings in channel_settings.items():
+                if settings:  # Only restore if channel was configured
+                    try:
+                        await self.set_channel(
+                            channel=ch,
+                            enable=bool(settings.get("enable", 0)),
+                            coupling_type=settings.get("coupling_type_str", "DC"),
+                            range=settings.get("range_str", "1V"),
+                        )
+                    except Exception as e:
+                        logger.warning(f"{self.id}: Failed to restore channel {ch} settings: {e}")
+
+        # Restore trigger settings if present in profile
+        if "_trigger_settings" in properties:
+            trigger = properties["_trigger_settings"]
+            if trigger:  # Only restore if trigger was configured
+                try:
+                    await self.set_simple_trigger(
+                        enable=bool(trigger.get("enable", 0)),
+                        source=trigger.get("source_str", "A"),
+                        threshold_mV=trigger.get("threshold_mV", 0.0),
+                        direction=trigger.get("direction_str", "RISING"),
+                        delay=trigger.get("delay", 0),
+                        auto_trigger_ms=trigger.get("auto_trigger_ms", 1000),
+                    )
+                except Exception as e:
+                    logger.warning(f"{self.id}: Failed to restore trigger settings: {e}")
 
     @api_command()
     async def set_simple_trigger(
