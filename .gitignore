@@ -7,4 +7,5 @@ package-lock.json
 .obsidian
 profile*yaml
 /hub/*
-.vscode
+doc/next steps.md
+.vscode/*
