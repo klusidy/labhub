@@ -54,6 +54,7 @@ class PicoRawSource(DataSource):
         self.driver = driver
         self.loop: asyncio.AbstractEventLoop | None = None
         self.interval = 0.1  # todo figure out how to update this mid-acquisition
+        self._needs_restart = False  # Dirty flag for parameter changes
         super().__init__("pico raw source")
 
     async def stop(self):
@@ -115,56 +116,63 @@ class PicoRawSource(DataSource):
 
         async def poller():
             while True:
-
+                # Check if we have subscribers (DataSource lock)
                 async with self._lock:
                     if len(self._subscribers) == 0:
                         break
 
-                ready = ctypes.c_int16(0)
-                cmaxSamples = ctypes.c_int32(buffer_len)
+                # Acquire Device lock for hardware access
+                async with self.driver._lock:
+                    # Check if parameters changed - restart if needed
+                    if self._needs_restart:
+                        logger.info("PicoRawSource: Parameter change detected, restarting...")
+                        self._needs_restart = False
+                        # Restart will happen automatically by breaking and calling start() again
+                        await self.stop()
+                        await self.start(force_restart=True)
+                        return  # Exit this poller, new one will start
 
-                self.driver.status["runBlock"] = ps.ps5000aRunBlock(
-                    self.driver.chandle,
-                    pre_trigger_samples,
-                    post_trigger_samples,
-                    timebase,
-                    None,
-                    0,
-                    None,
-                    None,
-                )
+                    ready = ctypes.c_int16(0)
+                    cmaxSamples = ctypes.c_int32(buffer_len)
 
-                while ready.value == check.value:  # TODO - callback instead of polling
-                    self.driver.status["isReady"] = ps.ps5000aIsReady(
-                        self.driver.chandle, ctypes.byref(ready)
+                    # All hardware operations protected by Device lock
+                    self.driver.status["runBlock"] = ps.ps5000aRunBlock(
+                        self.driver.chandle,
+                        pre_trigger_samples,
+                        post_trigger_samples,
+                        timebase,
+                        None,
+                        0,
+                        None,
+                        None,
                     )
-                    await asyncio.sleep(0.001)
 
-                # Copy data to buffers and construct a frame (dict of channel: np.array), then distribute it to subscribers
-                self.driver.status["getValues"] = ps.ps5000aGetValues(
-                    self.driver.chandle,
-                    0,
-                    ctypes.byref(cmaxSamples),
-                    0,
-                    0,
-                    0,
-                    ctypes.byref(overflow),
-                )
+                    while ready.value == check.value:
+                        self.driver.status["isReady"] = ps.ps5000aIsReady(
+                            self.driver.chandle, ctypes.byref(ready)
+                        )
+                        await asyncio.sleep(0.001)  # Yield event loop, keep lock
 
-                frame = {}
-                for ch, buffer in buffers_raw.items():  # todo - transform to V
-                    frame[ch] = np.frombuffer(
-                        buffer, dtype=np.int16
-                    )  # no .tolist() - keep it in numpy for calculating transformations
+                    self.driver.status["getValues"] = ps.ps5000aGetValues(
+                        self.driver.chandle,
+                        0,
+                        ctypes.byref(cmaxSamples),
+                        0,
+                        0,
+                        0,
+                        ctypes.byref(overflow),
+                    )
 
+                    # Construct frame while holding lock
+                    frame = {}
+                    for ch, buffer in buffers_raw.items():
+                        frame[ch] = np.frombuffer(buffer, dtype=np.int16)
+
+                # Fan-out outside Device lock (don't hold HW during distribution)
                 await self._fan_out(frame)
-                await asyncio.sleep(
-                    self.interval
-                )  # TODO - figure out interval dynamically
+                await asyncio.sleep(self.interval)
 
-            self.driver.status["stop"] = ps.ps5000aStop(
-                self.driver.chandle
-            )  # TODO - stop here or in stop()?
+            self.driver.status["stop"] = ps.ps5000aStop(self.driver.chandle)
 
         self._task = asyncio.create_task(poller(), name=f"PicoscopeRawStream")
 
@@ -356,17 +364,8 @@ class ps5000a(Device):
 
         return self._sampling_frequency
 
-    #    @PicoRawSource.dependency(self._pico_raw_source)
     @sampling_frequency.setter
     def sampling_frequency(self, value: float) -> None:
-
-        start_raw_source = False
-        if self._pico_raw_source.running():
-            self._pico_raw_source.loop.call_soon_threadsafe(
-                asyncio.create_task, self._pico_raw_source.stop()
-            )
-            start_raw_source = True
-
         timeIntervalns = ctypes.c_float()
         returnedMaxSamples = ctypes.c_int32()
 
@@ -396,10 +395,8 @@ class ps5000a(Device):
         actual_frequency = 1e9 / timeIntervalns.value
         self._sampling_frequency = actual_frequency
 
-        if start_raw_source:
-            self._pico_raw_source.loop.call_soon_threadsafe(
-                asyncio.create_task, self._pico_raw_source.start()
-            )
+        # Signal data source to restart with new parameters
+        self._pico_raw_source._needs_restart = True
 
         return actual_frequency
 
@@ -423,13 +420,15 @@ class ps5000a(Device):
         """Number of pre-trigger samples in the current acquisition."""
         return self._pre_trigger_samples
 
-    @pre_trigger_samples.setter  # TODO raw stream dependency
+    @pre_trigger_samples.setter
     def pre_trigger_samples(self, value: int) -> None:
         if not (0 <= value <= self._max_samples):
             raise ValueError(
                 f"pre_trigger_samples must be between 0 and {self._max_samples}"
             )
         self._pre_trigger_samples = value
+        # Signal data source to restart with new parameters
+        self._pico_raw_source._needs_restart = True
         return value
 
     @api_property()
@@ -438,16 +437,14 @@ class ps5000a(Device):
         return self._post_trigger_samples
 
     @post_trigger_samples.setter
-    def post_trigger_samples(
-        self, value: int
-    ) -> (
-        None
-    ):  # TODO RAW STREAM DEPENDENCY (all properties that affect acquisition should somehow notify the raw source to resatart)
+    def post_trigger_samples(self, value: int) -> None:
         if not (0 <= value <= self._max_samples):
             raise ValueError(
                 f"post_trigger_samples must be between 0 and {self._max_samples}"
             )
         self._post_trigger_samples = value
+        # Signal data source to restart with new parameters
+        self._pico_raw_source._needs_restart = True
         return value
 
     @api_property(unit="s")
@@ -462,13 +459,15 @@ class ps5000a(Device):
         """Number of pre-trigger samples in the current acquisition."""
         return self._pre_trigger_samples
 
-    @pre_trigger_samples.setter  # TODO raw stream dependency
+    @pre_trigger_samples.setter
     def pre_trigger_samples(self, value: int) -> None:
         if not (0 <= value <= self._max_samples):
             raise ValueError(
                 f"pre_trigger_samples must be between 0 and {self._max_samples}"
             )
         self._pre_trigger_samples = value
+        # Signal data source to restart with new parameters
+        self._pico_raw_source._needs_restart = True
         return value
 
     @api_property()
@@ -481,7 +480,7 @@ class ps5000a(Device):
         self._downsample_window = value
         return value
 
-    @api_command()  # todo - raw stream dependency
+    @api_command()
     async def set_channel(
         self,
         channel: Literal["A", "B", "C", "D"],
@@ -528,6 +527,10 @@ class ps5000a(Device):
             "coupling_type_str": coupling_type,
         }
         setattr(self, f"channel_{channel}", ret)
+
+        # Signal data source to restart with new channel configuration
+        self._pico_raw_source._needs_restart = True
+
         return ret
 
     # Add channels settings to state to support the display in the UI
@@ -542,7 +545,6 @@ class ps5000a(Device):
         )  # dict of last values for set_simple_trigger
         return state
 
-    # raw stream dependency
     @api_command()
     async def set_simple_trigger(
         self,
@@ -595,6 +597,10 @@ class ps5000a(Device):
         }
 
         self._trigger = ret
+
+        # Signal data source to restart with new trigger configuration
+        self._pico_raw_source._needs_restart = True
+
         return ret
 
     # stop streaming!!
