@@ -80,12 +80,22 @@ export interface PicoscopeDevice {
   state: PicoscopeState
 }
 
-export type Frame = {
+// Regular data frame with channel data
+export type DataFrameType = {
   source: string
   seq: number
   ts: number
   multiplier?: number
 } & Partial<Record<ChannelId, number[]>>
+
+// Plot metadata frame (sent on stream start/restart)
+export type PlotMetadataFrame = {
+  type: 'plot_metadata'
+  plot: PlotSpec
+}
+
+// Union type for all possible frames
+export type Frame = DataFrameType | PlotMetadataFrame
 
 //
 // ─────────────────────────────────────────────────────────────────────────────

@@ -96,7 +96,7 @@
   import { usePlotSettingsStore } from 'stores/plotSettings'
   import type { PlotSettings } from 'src/types/plotSettings'
   import { getFrame, openDataStream } from 'src/api/picoscope' // adjust path
-  import type { Frame, ChannelId, PlotSpec } from 'src/api/picoscope'
+  import type { Frame, DataFrameType, ChannelId, PlotSpec } from 'src/api/picoscope'
   import { last } from 'lodash-es'
 
   const ps = usePicoscopeStore()
@@ -106,7 +106,7 @@
 
   let ws: WebSocket | null = null
 
-  const lastFrame = ref<Frame | null>(null)
+  const lastFrame = ref<DataFrameType | null>(null)
 
   const props = defineProps<{
     name: string
@@ -150,7 +150,7 @@
 
   // frame is whatever I get from frame API/WS
   // data is what plotly needs
-  function buildDataFromFrame(frame: Frame): Data[] {
+  function buildDataFromFrame(frame: DataFrameType): Data[] {
     const xVals = spec.value?.['x-values']
     const chanKeys: ChannelId[] = (['A', 'B', 'C', 'D'] as ChannelId[])
       .filter((ch) => ps.channels()?.[ch].enable === 1) // only enabled channels
@@ -268,7 +268,7 @@
     }
   }
 
-  async function updatePlotFromFrame(frame: Frame) {
+  async function updatePlotFromFrame(frame: DataFrameType) {
     if (!el.value) return
 
     const data = buildDataFromFrame(frame)
@@ -311,7 +311,7 @@
   async function fetchAndUpdateOnce() {
     // getPlot specs as well!!!
     const spec: PlotSpec = await ps.fetchPlotSpec(props.name)
-    const frame: Frame = await getFrame(props.name)
+    const frame: DataFrameType = await getFrame(props.name) as DataFrameType
     lastFrame.value = frame
     await updatePlotFromFrame(frame)
   }
@@ -443,8 +443,18 @@
             typeof ev.data === 'string' ? ev.data : new TextDecoder().decode(ev.data as ArrayBuffer)
 
           const frame = JSON.parse(raw) as Frame
-          lastFrame.value = frame
-          void updatePlotFromFrame(frame)
+
+          // Type guard: check if it's a plot metadata frame
+          if ('type' in frame && frame.type === 'plot_metadata') {
+            // Update plot spec in store (watch will update local spec.value)
+            ps.plotSpecs[props.name] = frame.plot
+            console.log('Plot metadata updated for', props.name, ':', frame.plot)
+          } else {
+            // Regular data frame (TypeScript knows it's DataFrameType here)
+            const dataFrame = frame as DataFrameType
+            lastFrame.value = dataFrame
+            void updatePlotFromFrame(dataFrame)
+          }
         } catch (e) {
           console.error('failed to parse stream frame', e)
         }

@@ -29,6 +29,8 @@ import time
 logger = logging.getLogger(__name__)
 logger = logging.getLogger("labhub.device_manager.pico_technologies.ps5000a")
 
+# Sentinel object to signal stream start/restart to subscribers
+FIRST_FRAME = object()
 
 RANGE_VALUES = {
     "10MV": 0.01,
@@ -173,6 +175,9 @@ class PicoRawSource(DataSource):
                 await asyncio.sleep(self.interval)
 
             self.driver.status["stop"] = ps.ps5000aStop(self.driver.chandle)
+
+        # Signal stream start/restart to subscribers (triggers plot metadata refresh)
+        await self._fan_out(FIRST_FRAME)
 
         self._needs_restart = False # do not restart at start of a task
         self._task = asyncio.create_task(poller(), name=f"PicoscopeRawStream")
@@ -795,7 +800,17 @@ class ps5000a(Device):
         try:
             while True:
                 frame = await q.get()
-                yield {ch: mapper(data) for ch, data in frame.items()}
+
+                # Check for stream start/restart signal
+                if frame is FIRST_FRAME:
+                    # Yield plot metadata to inform subscribers of new x-axis
+                    yield {
+                        "type": "plot_metadata",
+                        "plot": self.time_stream_plot(),
+                    }
+                else:
+                    # Regular data frame
+                    yield {ch: mapper(data) for ch, data in frame.items()}
         finally:
             await self._pico_raw_source.unsubscribe(q)
 
@@ -840,7 +855,17 @@ class ps5000a(Device):
         try:
             while True:
                 frame = await q.get()
-                yield {ch: mapper(data) for ch, data in frame.items()}
+
+                # Check for stream start/restart signal
+                if frame is FIRST_FRAME:
+                    # Yield plot metadata to inform subscribers of new frequency axis
+                    yield {
+                        "type": "plot_metadata",
+                        "plot": self.psd_stream_plot(),
+                    }
+                else:
+                    # Regular data frame
+                    yield {ch: mapper(data) for ch, data in frame.items()}
         finally:
             await self._pico_raw_source.unsubscribe(q)
 
@@ -904,7 +929,17 @@ class ps5000a(Device):
         try:
             while True:
                 frame = await q.get()
-                yield {ch: mapper(data) for ch, data in frame.items()}
+
+                # Check for stream start/restart signal
+                if frame is FIRST_FRAME:
+                    # Yield plot metadata to inform subscribers of new frequency axis
+                    yield {
+                        "type": "plot_metadata",
+                        "plot": self.psd_stream_downsample_plot(),
+                    }
+                else:
+                    # Regular data frame
+                    yield {ch: mapper(data) for ch, data in frame.items()}
         finally:
             await self._pico_raw_source.unsubscribe(q)
 
