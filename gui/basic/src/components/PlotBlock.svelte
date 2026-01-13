@@ -183,6 +183,59 @@
   }
 
   // ----- websocket -----
+  function handlePlotMetadata(plotSpec: any) {
+    // Update spec metadata
+    spec = plotSpec || {};
+    title = spec?.title || source;
+    xLabel = spec?.["x-label"] || "";
+    yLabel = spec?.["y-label"] || "";
+
+    // Update x-values (authoritative from new spec)
+    const xv = spec?.["x-values"];
+    const newXData = Array.isArray(xv) ? xv.slice() : [];
+    const xLenChanged = newXData.length !== xData.length;
+    xData = newXData;
+
+    // Update channel metadata for scaling + labels
+    const cs = spec?.channel_settings ?? {};
+    chanMeta = {};
+    for (const [ch, info] of Object.entries(cs)) {
+      const mult = Number((info as any)?.multiplier ?? 1);
+      const rangeStr = String((info as any)?.range_str ?? "");
+      const coup = String((info as any)?.coupling_type_str ?? "");
+      const tag =
+        rangeStr && coup ? ` [${rangeStr}/${coup}]` :
+        rangeStr          ? ` [${rangeStr}]` :
+        coup              ? ` [${coup}]` :
+                            "";
+      chanMeta[ch] = {
+        multiplier: Number.isFinite(mult) ? mult : 1,
+        label: `${ch}${tag}`,
+      };
+    }
+
+    // Rebuild chart with new spec (preserve zoom if x-axis length unchanged)
+    const keepZoom = !xLenChanged;
+    const keep = keepZoom ? captureLimits() : null;
+
+    unifyLengths();
+    destroyChart();
+    if (open && plotEl) mountChart();
+
+    if (u) {
+      const aligned: uPlot.AlignedData = [xData, ...(seriesData.length ? seriesData : [[]])];
+      u.setData(aligned);
+
+      // Restore zoom only if x-axis length unchanged
+      if (keepZoom && keep) {
+        if (keep?.x) u.setScale("x", { min: keep.x.min, max: keep.x.max });
+        if (keep?.y) u.setScale("y", { min: keep.y.min, max: keep.y.max });
+      }
+
+      updateAxisLabels();
+    }
+  }
+
   function openWS(rate: number) {
     try {
       ws = openDataStream(deviceId, source, rate);
@@ -190,8 +243,16 @@
       ws.onmessage = (ev) => {
         try {
           const fr = typeof ev.data === "string" ? JSON.parse(ev.data) : JSON.parse(new TextDecoder().decode(ev.data));
-          applyIncoming(fr);
-          redraw();
+
+          // Check if this is a plot metadata frame (sent on stream start/restart)
+          if (fr?.type === 'plot_metadata' && fr?.plot) {
+            console.log('Plot metadata updated:', fr.plot);
+            handlePlotMetadata(fr.plot);
+          } else {
+            // Regular data frame
+            applyIncoming(fr);
+            redraw();
+          }
         } catch {}
       };
       ws.onerror = () => { lastError = "stream error"; };
