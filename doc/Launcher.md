@@ -36,11 +36,11 @@ This file stores a list of devices that LabHub server will connect to. Ideally, 
 Each device must come with a unique identificator (a name) and a path to a [driver](Drivers). The default `config_default.yaml` looks like this:
 ```yaml
 devices:
-  - id: "foo"                  # <-- unique name for a device
-    driver: "example_device"   # <-- driver (device type)
-    serial_number: "EX123"     # <-- other parameters for successfull connection
-  - id: "bar"                  # <-- different device of the same type
-    driver: "example_device"
+  - id: "foo"                          # <-- unique name for a device
+    driver: "example.example_device"   # <-- driver (device type)
+    serial_number: "EX123"             # <-- other parameters for successfull connection
+  - id: "bar"                          # <-- different device of the same type
+    driver: "example.example_device"
     serial_number: "EX456"
 ```
 Each driver comes with a list of parameters which are required for successfull connection. Look for example configuration in the driver file, copy-paste it and edit correct specific values.
