@@ -212,3 +212,74 @@ class AdiClockEvalBridge:
         src = bytes([addr]) + pbytes
         #print(f" -- constructed payload: {src}")
         return self.spi_write_bytes(dev_id, src)
+
+    def spi_read_hex(self, dev_id: int, write_hex: str, read_len: int, bit_shift: int = 0) -> tuple[int, bytes]:
+        """
+        Send hex data and read back bytes via SPI.
+
+        Args:
+            dev_id: Device index
+            write_hex: Hex string to write (e.g., '80' for read command)
+            read_len: Number of bytes to read back
+            bit_shift: Optional bit shift parameter (default 0)
+
+        Returns:
+            Tuple of (return_code, read_bytes)
+        """
+        resp = self._send_line(f"SPI_READ_HEX {dev_id} {write_hex} {read_len} {bit_shift}")
+        payload = self._ok_payload(resp)
+        toks = payload.split()
+
+        if len(toks) < 1:
+            raise BridgeError(f"Unexpected SPI_READ_HEX payload: {payload}")
+
+        rc = int(toks[0])
+
+        # Parse hex bytes (already reversed by C++ code)
+        if len(toks) > 1:
+            hex_bytes = bytes(int(tok, 16) for tok in toks[1:])
+        else:
+            hex_bytes = b''
+
+        return rc, hex_bytes
+
+    def spi_read_bytes(self, dev_id: int, write_data: Union[bytes, bytearray, Iterable[int]], read_len: int, bit_shift: int = 0) -> tuple[int, bytes]:
+        """
+        Convenience method to send bytes and read back bytes via SPI.
+
+        Args:
+            dev_id: Device index
+            write_data: Bytes to write
+            read_len: Number of bytes to read back
+            bit_shift: Optional bit shift parameter (default 0)
+
+        Returns:
+            Tuple of (return_code, read_bytes)
+        """
+        if not isinstance(write_data, (bytes, bytearray)):
+            write_data = bytes(int(b) & 0xFF for b in write_data)
+        write_hex = self._bytes_to_hex_blob(write_data)
+        return self.spi_read_hex(dev_id, write_hex, read_len, bit_shift)
+
+    def spi_read_addr(self, dev_id: int, addr: int, read_len: int, bit_shift: int = 0) -> tuple[int, bytes]:
+        """
+        High-level convenience: read from a register address.
+
+        Constructs read command (0x80 | addr) and reads back data.
+        Matches the pattern from your ctypes example.
+
+        Args:
+            dev_id: Device index
+            addr: Register address (0-127)
+            read_len: Number of bytes to read back
+            bit_shift: Optional bit shift parameter (default 0)
+
+        Returns:
+            Tuple of (return_code, read_bytes)
+        """
+        if not (0 <= addr <= 0x7F):
+            raise ValueError("addr must be 0..127 for read command")
+
+        # Construct read command: MSB=1 means read
+        read_cmd = 0x80 | (addr & 0x7F)
+        return self.spi_read_bytes(dev_id, bytes([read_cmd]), read_len, bit_shift)
