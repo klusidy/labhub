@@ -213,7 +213,7 @@ class AdiClockEvalBridge:
         #print(f" -- constructed payload: {src}")
         return self.spi_write_bytes(dev_id, src)
 
-    def spi_read_hex(self, dev_id: int, write_hex: str, read_len: int, bit_shift: int = 0) -> tuple[int, bytes]:
+    def spi_read_hex(self, dev_id: int, write_hex: str, read_len: int, bit_shift: int = 0) -> tuple[bytes]:
         """
         Send hex data and read back bytes via SPI.
 
@@ -226,22 +226,16 @@ class AdiClockEvalBridge:
         Returns:
             Tuple of (return_code, read_bytes)
         """
-        resp = self._send_line(f"SPI_READ_HEX {dev_id} {write_hex} {read_len} {bit_shift}")
+        resp = self._send_line(f"SPI_READ_HEX {dev_id} 0X{write_hex} {read_len} {bit_shift}")
         payload = self._ok_payload(resp)
-        toks = payload.split()
+        #toks = payload.split()
 
-        if len(toks) < 1:
+        if len(payload) < 1:
             raise BridgeError(f"Unexpected SPI_READ_HEX payload: {payload}")
-
-        rc = int(toks[0])
-
-        # Parse hex bytes (already reversed by C++ code)
-        if len(toks) > 1:
-            hex_bytes = bytes(int(tok, 16) for tok in toks[1:])
-        else:
-            hex_bytes = b''
-
-        return rc, hex_bytes
+        
+        hex_bytes = bytes.fromhex(payload)
+        
+        return hex_bytes
 
     def spi_read_bytes(self, dev_id: int, write_data: Union[bytes, bytearray, Iterable[int]], read_len: int, bit_shift: int = 0) -> tuple[int, bytes]:
         """

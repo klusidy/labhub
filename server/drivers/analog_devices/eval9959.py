@@ -152,9 +152,7 @@ class eval9959(Device):
         Returns:
             Bytes read from the register
         """
-        rc, data = self.bridge.spi_read_addr(self.device_index, reg_addr, num_bytes)
-        if rc != 0:
-            logger.warning(f"{self.id}: SPI read returned code {rc}")
+        data = self.bridge.spi_read_addr(self.device_index, reg_addr, num_bytes)
         return data
 
     # --- Properties ---

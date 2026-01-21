@@ -87,10 +87,14 @@ def spi_read(reg_addr, nbytes, dev_id=0, bit_shift=0):
     rc = dll.SpiRead(dev_id, reg_buf, 1, out_buf, nbytes, c_uint8(bit_shift))
     return bytes(reversed(out_buf))
 
-what_channel = 0x10 # 0x80 = ch3
-spi_write(0x00,  [what_channel, ]) 
+#what_channel = 0x10 # 0x80 = ch3
+#spi_write(0x00,  [what_channel, ]) 
 
 r = spi_read(0x4, 4, dev_id=0, bit_shift=0)
+r
+
+r = spi_read(0x1, 3, dev_id=0, bit_shift=0)
+r
 
 
 
