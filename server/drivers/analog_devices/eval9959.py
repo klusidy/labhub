@@ -141,6 +141,20 @@ class eval9959(Device):
         """Select channel(s) for subsequent operations via channel mask"""
         self.bridge.spi_write_addr_payload(self.device_index, 0x00, [channel_mask])
 
+    def read_register(self, reg_addr: int, num_bytes: int) -> bytes:
+        """
+        Read from a register.
+
+        Args:
+            reg_addr: Register address (0x00-0x7F)
+            num_bytes: Number of bytes to read
+
+        Returns:
+            Bytes read from the register
+        """
+        data = self.bridge.spi_read_addr(self.device_index, reg_addr, num_bytes)
+        return data
+
     # --- Properties ---
 
     @api_property(step=1, unit="Hz")
@@ -323,3 +337,19 @@ class eval9959(Device):
     @channel3_amplitude.setter
     def channel3_amplitude(self, value: float):
         self._channel3_amplitude = self.set_channel_amplitude(0x80, value)
+
+
+    @api_command()
+    def read_register_bytes(self, reg_addr: int, num_bytes: int = 1) -> str:
+        """
+        Read bytes from a register and return as hex string.
+
+        Args:
+            reg_addr: Register address (0x00-0x7F)
+            num_bytes: Number of bytes to read (default: 1)
+
+        Returns:
+            Hex string of read data (e.g., 'A3F012')
+        """
+        data = self.read_register(reg_addr, num_bytes)
+        return data.hex().upper()

@@ -3,7 +3,7 @@
 //  -o adiclockeval_spi_bridge.exe adiclockeval_spi_bridge.cpp
 // Define Windows version for SetDllDirectoryA (XP SP1+)
 // C:\MinGW\bin\gcc.exe -m32 -lstdc++-static -o adiclockeval_spi_bridge.exe adiclockeval_spi_bridge.cpp
-// C:\MinGW\bin\g++.exe -m32 -O2 -s -o adiclockeval_spi_bridge.exe adiclockeval_spi_bridge.cpp
+// C:\MinGW\bin\g++.exe -m32 -O2 -s -o adiclockeval_spi_bridge_2101chat.exe adiclockeval_spi_bridge_1901chat.cpp
 
 #ifndef _WIN32_WINNT
 #define _WIN32_WINNT 0x0502
@@ -24,6 +24,8 @@ typedef uint32_t (WINAPI *GetVendorIDFunc)(int);
 typedef uint32_t (WINAPI *GetProductIDFunc)(int);
 typedef int      (WINAPI *SpiWriteFunc)(int, void*, int);
 typedef int      (WINAPI *SetPortValueFunc)(int, uint32_t, uint32_t);
+// int SpiRead(int dev_id, uint8_t* reg_value, int reg_len, uint8_t* out, int len_readback, uint8_t bit_shift)
+typedef int      (WINAPI *SpiReadFunc)(int, uint8_t*, int, uint8_t*, int, uint8_t);
 
 // Globals
 static HMODULE           g_hDll = NULL;
@@ -32,6 +34,7 @@ static GetVendorIDFunc   g_GetVendorID   = NULL;
 static GetProductIDFunc  g_GetProductID  = NULL;
 static SpiWriteFunc      g_SpiWrite      = NULL;
 static SetPortValueFunc  g_SetPortValue  = NULL;
+static SpiReadFunc       g_SpiRead       = NULL;
 
 static void trim_crlf(std::string &s) {
     while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) s.pop_back();
@@ -79,6 +82,7 @@ static bool load_dll_and_symbols(const char* dll_fullpath) {
     g_GetVendorID  = (GetVendorIDFunc) GetProcAddress(g_hDll, "GetVendorID");
     g_GetProductID = (GetProductIDFunc)GetProcAddress(g_hDll, "GetProductID");
     g_SpiWrite     = (SpiWriteFunc)     GetProcAddress(g_hDll, "SpiWrite");
+    g_SpiRead      = (SpiReadFunc)      GetProcAddress(g_hDll, "SpiRead");
     g_SetPortValue = (SetPortValueFunc) GetProcAddress(g_hDll, "SetPortValue");
 
     bool ok = true;
@@ -86,6 +90,7 @@ static bool load_dll_and_symbols(const char* dll_fullpath) {
     ok &= need((FARPROC)g_GetVendorID,  "GetVendorID");
     ok &= need((FARPROC)g_GetProductID, "GetProductID");
     ok &= need((FARPROC)g_SpiWrite,     "SpiWrite");
+    ok &= need((FARPROC)g_SpiRead,      "SpiRead");
     ok &= need((FARPROC)g_SetPortValue, "SetPortValue");
     return ok;
 }
@@ -239,6 +244,58 @@ static void cmd_spi_write_hex(const std::vector<std::string>& t) {
     std::fflush(stdout);
 }
 
+// SPI_READ <dev_id> <read_cmd_byte> <nbytes> [bit_shift]
+// Example: SPI_READ 0 0x81 4  ->  OK 01A80000
+static void cmd_spi_read(const std::vector<std::string>& t) {
+    if (t.size() < 4) {
+        std::printf("ERROR SPI_READ_HEX dev_id read_cmd nbytes [bit_shift]\n");
+        return;
+    }
+
+    int dev_id = (int)std::strtol(t[1].c_str(), nullptr, 0);
+
+    uint32_t cmd_u32 = 0, nbytes_u32 = 0;
+    if (!parse_u32(t[2].c_str(), cmd_u32) || !parse_u32(t[3].c_str(), nbytes_u32)) {
+        std::printf("ERROR Bad read_cmd/nbytes\n");
+        return;
+    }
+    if (cmd_u32 > 0xFF) {
+        std::printf("ERROR read_cmd must fit in a byte\n");
+        return;
+    }
+    if (nbytes_u32 == 0 || nbytes_u32 > 4096) {
+        std::printf("ERROR Bad nbytes (1..4096)\n");
+        return;
+    }
+
+    uint32_t bit_shift_u32 = 0;
+    if (t.size() >= 5) {
+        if (!parse_u32(t[4].c_str(), bit_shift_u32) || bit_shift_u32 > 0xFF) {
+            std::printf("ERROR Bad bit_shift (0..255)\n");
+            return;
+        }
+    }
+
+    uint8_t reg_buf[1];
+    reg_buf[0] = (uint8_t)cmd_u32;
+
+    std::vector<uint8_t> out((size_t)nbytes_u32, 0);
+    int rc = g_SpiRead(dev_id, reg_buf, 1, out.data(), (int)out.size(), (uint8_t)bit_shift_u32);
+    if (rc != 0) {
+        std::printf("ERROR %d\n", rc);
+        return;
+    }
+
+    // Match Python helper behavior: bytes(reversed(out_buf))
+    std::printf("OK ");
+    for (size_t i = 0; i < out.size(); ++i) {
+        uint8_t b = out[out.size() - 1 - i];
+        std::printf("%02X", (unsigned)b);
+    }
+    std::printf("\n");
+    std::fflush(stdout);
+}
+
 
 static void process_line(const std::string& line) {
     auto t = split_ws(line);
@@ -256,6 +313,8 @@ static void process_line(const std::string& line) {
         cmd_set_port_value(t);
     } else if (ieq(t[0].c_str(), "SPI_WRITE_HEX")) {
         cmd_spi_write_hex(t);
+    } else if (ieq(t[0].c_str(), "SPI_READ_HEX")) {
+        cmd_spi_read(t);
     } else if (ieq(t[0].c_str(), "QUIT")) {
         std::printf("OK Goodbye\n");
         std::fflush(stdout);
