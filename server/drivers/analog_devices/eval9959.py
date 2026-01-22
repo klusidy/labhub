@@ -155,7 +155,7 @@ class eval9959(Device):
     @ref_clk.setter
     def ref_clk(self, value: int):
         # option 1: when changing ref clock, try to keep sys clock the same
-        prev_sys_clk = self.sys_clk_hz
+        prev_sys_clk = self.sys_clk
         self._ref_clk_hz = value
         self.sys_clk = prev_sys_clk
 
@@ -242,7 +242,7 @@ class eval9959(Device):
         self.select_channel(channel_mask)
 
         # Calculate frequency tuning word (32-bit)
-        ftw = int(round(frequency * (1 << 32) / self.sys_clk_hz)) & 0xFFFFFFFF
+        ftw = int(round(frequency * (1 << 32) / self.sys_clk)) & 0xFFFFFFFF
 
         # Write to CFTW0 register (address 0x04)
         self.bridge.spi_write_addr_payload(
@@ -250,7 +250,7 @@ class eval9959(Device):
         )
 
         # Calculate actual frequency
-        actual_freq = ftw * self.sys_clk_hz / (1 << 32)
+        actual_freq = ftw * self.sys_clk / (1 << 32)
         self.io_update()
         return actual_freq
 
