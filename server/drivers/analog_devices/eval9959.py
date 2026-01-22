@@ -1,4 +1,5 @@
 """Analog Devices EVAL-AD9959 DDS Evaluation Board Driver"""
+
 from __future__ import annotations
 import logging
 import time
@@ -54,17 +55,6 @@ class eval9959(Device):
         self.vid = options.get("vid", 0x0456)
         self.pid = options.get("pid", 0xEE25)
         self._ref_clk_hz = options.get("ref_clk_hz", 40_000_000)
-        self._sys_clk_hz = options.get("sys_clk_hz", 400_000_000)
-
-        # Cached channel state (no readback support from hardware)
-        self._channel0_frequency = 0.0
-        self._channel1_frequency = 0.0
-        self._channel2_frequency = 0.0
-        self._channel3_frequency = 0.0
-        self._channel0_amplitude = 0.0
-        self._channel1_amplitude = 0.0
-        self._channel2_amplitude = 0.0
-        self._channel3_amplitude = 0.0
 
         self.device_index = 0  # Support only first device for now
         self.bridge = None
@@ -164,14 +154,25 @@ class eval9959(Device):
 
     @ref_clk.setter
     def ref_clk(self, value: int):
+        # option 1: when changing ref clock, try to keep sys clock the same
+        prev_sys_clk = self.sys_clk_hz
         self._ref_clk_hz = value
-        # Re-apply system clock setting with new reference clock
-        self.sys_clk = self._sys_clk_hz
+        self.sys_clk = prev_sys_clk
+
+        # option 2: when changing ref clock, keep multiplier the same
+        # self._ref_clk_hz = value
+        # sys_clk readout will reflect new ref clock with same multiplier
 
     @api_property(step=1, unit="Hz")
     def sys_clk(self) -> int:
         """System clock [Hz] of internal DDS (reference clock × integer multiplier)"""
-        return self._sys_clk_hz
+
+        # use read_register
+        data = self.read_register(0x01, 3)
+        fr1_val = int.from_bytes(data, "big")
+        multiplier = (fr1_val >> 18) & 0x1F
+
+        return self._ref_clk_hz * multiplier
 
     @sys_clk.setter
     def sys_clk(self, value: int):
@@ -181,17 +182,17 @@ class eval9959(Device):
         The DDS requires an integer multiplier of the reference clock.
         Valid ranges: 100-255 MHz or 255-500 MHz.
         """
-        multiplier = int(round(value / self._ref_clk_hz))
-        self._sys_clk_hz = self._ref_clk_hz * multiplier
+        multiplier = min(max(int(round(value / self._ref_clk_hz)), 1), 31)
+        value_clipped = self._ref_clk_hz * multiplier
 
         # Determine VCO range
-        if 255_000_000 <= self._sys_clk_hz <= 500_000_000:
+        if 255_000_000 <= value_clipped <= 500_000_000:
             vco_flag = True
-        elif 100_000_000 <= self._sys_clk_hz <= 255_000_000:
+        elif 100_000_000 <= value_clipped <= 255_000_000:
             vco_flag = False
         else:
             logger.warning(
-                f"{self.id}: System clock {self._sys_clk_hz} Hz is out of "
+                f"{self.id}: System clock {value_clipped} Hz is out of "
                 f"guaranteed operation range (100-255 MHz or 255-500 MHz)"
             )
             return
@@ -209,6 +210,24 @@ class eval9959(Device):
     # --- Commands ---
 
     @api_command()
+    def get_channel_frequency(self, channel_mask: int) -> float:
+        """
+        Get frequency (Hz) for one or more channels.
+
+        Args:
+            channel_mask: Channel selection (ch0: 0x10, ch1: 0x20, ch2: 0x40, ch3: 0x80)
+        Returns:
+            Frequency in Hz
+        """
+
+        self.select_channel(channel_mask)
+        data = self.bridge.spi_read_addr(self.device_index, 0x04, 4)
+        ftw = int.from_bytes(data, "big")
+
+        frequency = ftw * self.sys_clk / (1 << 32)
+        return frequency
+
+    @api_command()
     def set_channel_frequency(self, channel_mask: int, frequency: float) -> float:
         """
         Set frequency (Hz) for one or more channels.
@@ -223,7 +242,7 @@ class eval9959(Device):
         self.select_channel(channel_mask)
 
         # Calculate frequency tuning word (32-bit)
-        ftw = int(round(frequency * (1 << 32) / self._sys_clk_hz)) & 0xFFFFFFFF
+        ftw = int(round(frequency * (1 << 32) / self.sys_clk_hz)) & 0xFFFFFFFF
 
         # Write to CFTW0 register (address 0x04)
         self.bridge.spi_write_addr_payload(
@@ -231,9 +250,27 @@ class eval9959(Device):
         )
 
         # Calculate actual frequency
-        actual_freq = ftw * self._sys_clk_hz / (1 << 32)
+        actual_freq = ftw * self.sys_clk_hz / (1 << 32)
         self.io_update()
         return actual_freq
+
+    @api_command()
+    def get_channel_amplitude(self, channel_mask: int) -> float:
+        """
+        Get amplitude for one or more channels.
+
+        Args:
+            channel_mask: Channel selection (ch0: 0x10, ch1: 0x20, ch2: 0x40, ch3: 0x80)
+        Returns:
+            Amplitude (0.0-1.0)
+        """
+        self.select_channel(channel_mask)
+        data = self.bridge.spi_read_addr(self.device_index, 0x06, 3)
+        acr_val = int.from_bytes(data, "big")
+
+        amplitude_int = acr_val & 0x3FF  # Lower 10 bits
+        amplitude = amplitude_int / 1024
+        return amplitude
 
     @api_command()
     def set_channel_amplitude(self, channel_mask: int, amplitude: float) -> float:
@@ -269,75 +306,75 @@ class eval9959(Device):
     @api_property(unit="Hz")
     def channel0_frequency(self) -> float:
         """Frequency [Hz] of channel 0"""
-        return self._channel0_frequency
+        return self.get_channel_frequency(0x10)
+        # return self._channel0_frequency
 
     @channel0_frequency.setter
     def channel0_frequency(self, value: float):
-        self._channel0_frequency = self.set_channel_frequency(0x10, value)
+        self.set_channel_frequency(0x10, value)
 
     @api_property()
     def channel0_amplitude(self) -> float:
         """Amplitude (0.0-1.0) of channel 0"""
-        return self._channel0_amplitude
+        return self.get_channel_amplitude(0x10)
 
     @channel0_amplitude.setter
     def channel0_amplitude(self, value: float):
-        self._channel0_amplitude = self.set_channel_amplitude(0x10, value)
+        self.set_channel_amplitude(0x10, value)
 
     @api_property(unit="Hz")
     def channel1_frequency(self) -> float:
         """Frequency [Hz] of channel 1"""
-        return self._channel1_frequency
+        return self.get_channel_frequency(0x20)
 
     @channel1_frequency.setter
     def channel1_frequency(self, value: float):
-        self._channel1_frequency = self.set_channel_frequency(0x20, value)
+        self.set_channel_frequency(0x20, value)
 
     @api_property()
     def channel1_amplitude(self) -> float:
         """Amplitude (0.0-1.0) of channel 1"""
-        return self._channel1_amplitude
+        return self.get_channel_amplitude(0x20)
 
     @channel1_amplitude.setter
     def channel1_amplitude(self, value: float):
-        self._channel1_amplitude = self.set_channel_amplitude(0x20, value)
+        self.set_channel_amplitude(0x20, value)
 
     @api_property(unit="Hz")
     def channel2_frequency(self) -> float:
         """Frequency [Hz] of channel 2"""
-        return self._channel2_frequency
+        return self.get_channel_frequency(0x40)
 
     @channel2_frequency.setter
     def channel2_frequency(self, value: float):
-        self._channel2_frequency = self.set_channel_frequency(0x40, value)
+        self.set_channel_frequency(0x40, value)
 
     @api_property()
     def channel2_amplitude(self) -> float:
         """Amplitude (0.0-1.0) of channel 2"""
-        return self._channel2_amplitude
+        return self.get_channel_amplitude(0x40)
 
     @channel2_amplitude.setter
     def channel2_amplitude(self, value: float):
-        self._channel2_amplitude = self.set_channel_amplitude(0x40, value)
+        self.set_channel_amplitude(0x40, value)
 
     @api_property(unit="Hz")
     def channel3_frequency(self) -> float:
         """Frequency [Hz] of channel 3"""
-        return self._channel3_frequency
+        return self.get_channel_frequency(0x80)
 
     @channel3_frequency.setter
     def channel3_frequency(self, value: float):
-        self._channel3_frequency = self.set_channel_frequency(0x80, value)
+        self.set_channel_frequency(0x80, value)
 
     @api_property()
     def channel3_amplitude(self) -> float:
         """Amplitude (0.0-1.0) of channel 3"""
-        return self._channel3_amplitude
+        return self.get_channel_amplitude(0x80)
 
     @channel3_amplitude.setter
     def channel3_amplitude(self, value: float):
-        self._channel3_amplitude = self.set_channel_amplitude(0x80, value)
-
+        self.set_channel_amplitude(0x80, value)
 
     @api_command()
     def read_register_bytes(self, reg_addr: int, num_bytes: int = 1) -> str:
