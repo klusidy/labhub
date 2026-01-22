@@ -36,7 +36,16 @@ icon_red_base64 = b"iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAACXBIWXMAAAT/
 
 class Launcher:
     def __init__(
-        self, host, port, config_path, profile_path, log_level=None, log_file=None
+        self,
+        host,
+        port,
+        config_path,
+        profile_path,
+        log_level=None,
+        log_file=None,
+        influx_exe=None,
+        influx_url=None,
+        disable_influx=False,
     ):
         self.host = host
         self.port = port
@@ -45,6 +54,13 @@ class Launcher:
         self.profile_path = profile_path
         self.log_level = log_level  # e.g., "INFO", "DEBUG"
         self.log_file = log_file  # Optional path to log file
+
+        # InfluxDB management
+        self.influx_exe = influx_exe  # Override exe path from CLI
+        self.influx_url = influx_url  # Override URL from CLI
+        self.disable_influx = disable_influx  # Disable InfluxDB even if configured
+        self.influx_proc: Optional[subprocess.Popen] = None
+        self.influx_config = self._load_influx_config()
         self.app = QApplication(sys.argv)
         QApplication.setQuitOnLastWindowClosed(False)
         if not QSystemTrayIcon.isSystemTrayAvailable():
@@ -96,6 +112,131 @@ class Launcher:
         # Left click (single) or double click → open the menu
         if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
             self.menu.popup(QCursor.pos())
+
+    # ======= InfluxDB Management =======
+
+    def _load_influx_config(self) -> Optional[dict]:
+        """Load influx config from config.yaml."""
+        try:
+            with open(self.config_path, "r") as f:
+                cfg = yaml.safe_load(f) or {}
+            return cfg.get("influx")
+        except Exception as e:
+            logger.warning(f"Failed to load influx config: {e}")
+            return None
+
+    def _check_influxdb_health(self, url: str, timeout: float = 2.0) -> bool:
+        """Check if InfluxDB is healthy via /health endpoint."""
+        try:
+            r = httpx.get(f"{url}/health", timeout=timeout)
+            if r.status_code == 200:
+                data = r.json()
+                return data.get("status") == "pass"
+            return False
+        except Exception:
+            return False
+
+    def _start_influxdb(self) -> bool:
+        """Start InfluxDB if configured and not running. Returns True if OK to proceed."""
+        if self.disable_influx:
+            logger.info("InfluxDB disabled via --no-influx flag")
+            return True
+
+        if not self.influx_config:
+            return True  # Not configured, OK
+
+        if not self.influx_config.get("enabled", False):
+            return True  # Disabled in config, OK
+
+        # Determine URL and exe path (CLI overrides config)
+        url = self.influx_url or self.influx_config.get("url", "http://localhost:8086")
+        exe_path = self.influx_exe or self.influx_config.get("exe_path")
+
+        # Check if already running
+        if self._check_influxdb_health(url):
+            logger.info(f"InfluxDB already running at {url}")
+            return True
+
+        # Start if exe_path provided
+        if not exe_path:
+            logger.warning(f"InfluxDB not running at {url} and no exe_path configured")
+            self.tray.showMessage(
+                "LabHub",
+                "InfluxDB not running and no exe_path configured. Telemetry disabled.",
+                QSystemTrayIcon.Warning,
+                3000,
+            )
+            return True  # Continue anyway - InfluxDB is optional
+
+        exe_path = Path(exe_path)
+        if not exe_path.exists():
+            logger.error(f"InfluxDB executable not found: {exe_path}")
+            self.tray.showMessage(
+                "LabHub",
+                f"InfluxDB executable not found: {exe_path}",
+                QSystemTrayIcon.Warning,
+                3000,
+            )
+            return True  # Continue anyway
+
+        logger.info(f"Starting InfluxDB from {exe_path}...")
+        try:
+            self.influx_proc = subprocess.Popen(
+                [str(exe_path)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+
+            # Wait for it to become healthy (up to 30 seconds)
+            for _ in range(30):
+                time.sleep(1)
+                if self._check_influxdb_health(url):
+                    logger.info("InfluxDB started successfully")
+                    return True
+
+                # Check if process died
+                if self.influx_proc.poll() is not None:
+                    logger.error("InfluxDB process exited unexpectedly")
+                    self.tray.showMessage(
+                        "LabHub",
+                        "InfluxDB process exited unexpectedly. Telemetry disabled.",
+                        QSystemTrayIcon.Warning,
+                        3000,
+                    )
+                    return True
+
+            logger.error("InfluxDB failed to become healthy within timeout")
+            self.tray.showMessage(
+                "LabHub",
+                "InfluxDB failed to start. Telemetry disabled.",
+                QSystemTrayIcon.Warning,
+                3000,
+            )
+            return True  # Continue anyway
+
+        except Exception as e:
+            logger.error(f"Failed to start InfluxDB: {e}")
+            self.tray.showMessage(
+                "LabHub",
+                f"Failed to start InfluxDB: {e}",
+                QSystemTrayIcon.Warning,
+                3000,
+            )
+            return True  # Continue anyway
+
+    def _stop_influxdb(self):
+        """Stop InfluxDB if we started it."""
+        if self.influx_proc and self.influx_proc.poll() is None:
+            logger.info("Stopping InfluxDB...")
+            try:
+                self.influx_proc.terminate()
+                self.influx_proc.wait(timeout=10)
+                logger.info("InfluxDB stopped")
+            except subprocess.TimeoutExpired:
+                self.influx_proc.kill()
+                logger.warning("InfluxDB killed after timeout")
+            except Exception as e:
+                logger.warning(f"Error stopping InfluxDB: {e}")
 
     def _on_new_connection(self):
         sock = self._server.nextPendingConnection()
@@ -220,6 +361,9 @@ class Launcher:
             )
             return
 
+        # Start InfluxDB if configured (optional, non-blocking)
+        self._start_influxdb()
+
         env = os.environ.copy()
         env["LABHUB_CONFIG"] = str(self.config_path)
 
@@ -303,6 +447,9 @@ class Launcher:
                 self.proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 self.proc.kill()
+            # Stop InfluxDB if we started it
+            self._stop_influxdb()
+
             self.tray.setIcon(self.icon_red)
             self.tray.setToolTip("LabHub: stopped")
             self.tray.showMessage(
@@ -532,6 +679,26 @@ def main():
         default=None,
         help="Optional path to log file (logs to console + file if specified)",
     )
+
+    # InfluxDB options
+    parser.add_argument(
+        "--influx-exe",
+        type=str,
+        default=None,
+        help="Path to influxd executable for auto-start (overrides config.yaml)",
+    )
+    parser.add_argument(
+        "--influx-url",
+        type=str,
+        default=None,
+        help="InfluxDB URL (overrides config.yaml)",
+    )
+    parser.add_argument(
+        "--no-influx",
+        action="store_true",
+        help="Disable InfluxDB integration even if configured",
+    )
+
     args = parser.parse_args()
 
     # Determine config path
@@ -561,6 +728,9 @@ def main():
         profile_path,
         log_level=args.log_level,
         log_file=args.log_file,
+        influx_exe=args.influx_exe,
+        influx_url=args.influx_url,
+        disable_influx=args.no_influx,
     ).run()
 
 

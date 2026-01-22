@@ -6,8 +6,12 @@ Manages device initialization, polling, state tracking, and API operations.
 
 from __future__ import annotations
 import asyncio
-from typing import Dict, List, Type, Any
+import time
+from typing import Dict, List, Type, Any, Optional, TYPE_CHECKING
 from concurrent.futures import ThreadPoolExecutor
+
+if TYPE_CHECKING:
+    from .influx import InfluxWriter
 
 from .schemas import DeviceInfo, DeviceSpec
 from .events import EventBus
@@ -52,6 +56,10 @@ class DeviceManager:
         self.executor = ThreadPoolExecutor(
             max_workers=max_workers, thread_name_prefix="device_worker"
         )
+
+        # InfluxDB writer (optional, set by main.py if configured)
+        self.influx: Optional[InfluxWriter] = None
+
         logger.debug(f"Initialized device manager with {max_workers} worker threads")
 
     async def initialize_devices(self, cfg) -> None:
@@ -400,7 +408,26 @@ class DeviceManager:
         logger.debug(f"Applying {len(properties)} propert(ies) to '{dev_id}'")
         dev = self.devices[dev_id]
 
+        # Capture old values for InfluxDB logging
+        old_values: Dict[str, Any] = {}
+        if self.influx:
+            for prop_name in properties:
+                old_values[prop_name] = dev.get_cached(prop_name)
+
         st = await dev.apply_properties(properties)
+
+        # Log property changes to InfluxDB
+        if self.influx:
+            for prop_name, new_value in properties.items():
+                old_value = old_values.get(prop_name)
+                await self.influx.write_property_set(
+                    device_id=dev_id,
+                    driver=dev._api_driver,
+                    property_name=prop_name,
+                    old_value=old_value,
+                    new_value=new_value,
+                    source="api",
+                )
 
         # Broadcast updated state
         await self.event_bus.publish(
@@ -446,8 +473,35 @@ class DeviceManager:
             logger.error(f"Device '{dev_id}' does not support commands")
             raise RuntimeError("Commands not supported")
 
-        res = await dev.run_command(name, args)
-        logger.debug(f"Command '{name}' completed for '{dev_id}'")
+        # Execute command with timing for InfluxDB
+        start_time = time.monotonic()
+        success = True
+        error_msg: Optional[str] = None
+        res = None
+
+        try:
+            res = await dev.run_command(name, args)
+        except Exception as e:
+            success = False
+            error_msg = str(e)
+            raise
+        finally:
+            duration_ms = (time.monotonic() - start_time) * 1000
+
+            # Log command execution to InfluxDB
+            if self.influx:
+                await self.influx.write_command_exec(
+                    device_id=dev_id,
+                    driver=dev._api_driver,
+                    command_name=name,
+                    args=args,
+                    result=res,
+                    duration_ms=duration_ms,
+                    success=success,
+                    error=error_msg,
+                )
+
+        logger.debug(f"Command '{name}' completed for '{dev_id}' in {duration_ms:.1f}ms")
 
         # Broadcast updated state so clients see changes
         st = await dev.read_state()

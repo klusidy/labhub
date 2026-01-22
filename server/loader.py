@@ -10,8 +10,8 @@ import os
 import asyncio
 import logging
 from pathlib import Path
-from dataclasses import dataclass
-from typing import Dict, List, Any
+from dataclasses import dataclass, field
+from typing import Dict, List, Any, Optional
 
 import yaml
 
@@ -30,10 +30,27 @@ class DeviceCfg:
 
 
 @dataclass
+class InfluxCfg:
+    """InfluxDB configuration."""
+
+    enabled: bool = False
+    url: str = "http://localhost:8086"
+    token: str = ""
+    org: str = "labhub"
+    bucket: str = "labhub"
+    exe_path: Optional[str] = None  # Path to influxd executable for auto-start
+    batch_size: int = 100  # Max points before flush
+    flush_interval_ms: int = 1000  # Max time before flush
+    max_retries: int = 3  # Retry attempts for failed writes
+    snapshot_interval: float = 10.0  # Seconds between state snapshots
+
+
+@dataclass
 class HubCfg:
     """Complete hub configuration."""
 
     devices: List[DeviceCfg]
+    influx: Optional[InfluxCfg] = None
 
 
 def get_config_path() -> str:
@@ -89,7 +106,27 @@ def load_config(config_path: str | None = None) -> HubCfg:
         devices.append(DeviceCfg(id=d["id"], driver=d["driver"], options=d))
 
     logger.info(f"Loaded {len(devices)} device(s) from config")
-    return HubCfg(devices=devices)
+
+    # Parse InfluxDB configuration (optional)
+    influx_cfg: Optional[InfluxCfg] = None
+    influx_raw = raw.get("influx")
+    if influx_raw and isinstance(influx_raw, dict):
+        influx_cfg = InfluxCfg(
+            enabled=influx_raw.get("enabled", False),
+            url=influx_raw.get("url", "http://localhost:8086"),
+            token=influx_raw.get("token", ""),
+            org=influx_raw.get("org", "labhub"),
+            bucket=influx_raw.get("bucket", "labhub"),
+            exe_path=influx_raw.get("exe_path"),
+            batch_size=influx_raw.get("batch_size", 100),
+            flush_interval_ms=influx_raw.get("flush_interval_ms", 1000),
+            max_retries=influx_raw.get("max_retries", 3),
+            snapshot_interval=influx_raw.get("snapshot_interval", 10.0),
+        )
+        if influx_cfg.enabled:
+            logger.info(f"InfluxDB configured: {influx_cfg.url} (bucket={influx_cfg.bucket})")
+
+    return HubCfg(devices=devices, influx=influx_cfg)
 
 
 # ===== Profile System =====

@@ -216,6 +216,32 @@ async def set_loglevel(level: str, logger_name: str | None = None):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.get("/influx/status")
+async def get_influx_status(manager=Depends(get_manager)):
+    """
+    Get InfluxDB integration status and metrics.
+
+    Returns:
+        Dict with:
+            - enabled: Whether InfluxDB is configured
+            - running: Whether writer is active
+            - url: InfluxDB URL (if configured)
+            - bucket: Target bucket
+            - queue_size: Pending writes
+            - points_written: Total successful writes
+            - points_dropped: Dropped due to errors/queue full
+            - write_errors: Total write failures
+            - last_error: Most recent error message (if any)
+
+    Notes:
+        - Returns {"enabled": False} if InfluxDB not configured
+        - Useful for monitoring telemetry health
+    """
+    if not manager.influx:
+        return {"enabled": False, "reason": "not_configured"}
+    return manager.influx.get_status()
+
+
 @router.post("/apply_properties")
 async def apply_properties(req: ApplyPropertiesRequest, manager=Depends(get_manager)):
     """

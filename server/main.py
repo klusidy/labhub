@@ -24,6 +24,7 @@ from .events import EventBus
 from .utils import init_logging
 from .loader import get_config_path, load_config, get_profile_path
 from .monitor import ProfileMonitor
+from .influx import InfluxWriter, InfluxStateMonitor
 from . import admin
 
 # Initialize logging - reads LABHUB_LOG_LEVEL and LABHUB_LOG_FILE from environment
@@ -34,7 +35,7 @@ logger = logging.getLogger("labhub.main")  # Explicit name for proper hierarchy
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """FastAPI lifespan context manager for startup and shutdown."""
-    global lock, profile_monitor
+    global lock, profile_monitor, influx_writer, influx_monitor
 
     # --- Startup ---
     logger.info("LabHub server starting...")
@@ -63,7 +64,27 @@ async def lifespan(app: FastAPI):
     await manager.start_polling()
     logger.info("Device polling started")
 
-    # 4. Initialize profile monitor (for live state backup)
+    # 4. Initialize InfluxDB integration (optional)
+    if cfg.influx and cfg.influx.enabled:
+        logger.info("Initializing InfluxDB integration...")
+        try:
+            influx_writer = InfluxWriter(cfg.influx)
+            await influx_writer.start()
+
+            # Wire to manager for property/command hooks
+            manager.influx = influx_writer
+
+            # Start state snapshot monitor
+            influx_monitor = InfluxStateMonitor(
+                influx_writer, manager, cfg.influx.snapshot_interval
+            )
+            await influx_monitor.start()
+
+            logger.info("InfluxDB integration ready")
+        except Exception as e:
+            logger.warning(f"InfluxDB failed to initialize: {e} - continuing without telemetry")
+
+    # 5. Initialize profile monitor (for live state backup)
     await asyncio.sleep(2.0)  # Allow polling to populate initial states
 
     profile_path = get_profile_path()
@@ -81,6 +102,14 @@ async def lifespan(app: FastAPI):
 
     # --- Shutdown ---
     logger.info("LabHub server shutting down...")
+
+    # Stop InfluxDB (flush pending writes before other cleanup)
+    if influx_monitor:
+        await influx_monitor.stop()
+        logger.info("InfluxDB state monitor stopped")
+    if influx_writer:
+        await influx_writer.stop()
+        logger.info("InfluxDB writer stopped")
 
     # Stop profile monitor (saves pending changes)
     await profile_monitor.stop()
@@ -114,6 +143,10 @@ profile_monitor: ProfileMonitor | None = ProfileMonitor(
     event_bus, manager, save_interval=10.0
 )  # Profile auto-save monitor
 lock: FileLock | None = None  # Single-instance lock per CONFIG PATH
+
+# InfluxDB integration (optional, initialized in lifespan if configured)
+influx_writer: InfluxWriter | None = None
+influx_monitor: InfluxStateMonitor | None = None
 
 # Include admin router and set manager dependency
 admin.manager = manager
