@@ -72,7 +72,7 @@ class PicoRawSource(DataSource):
 
         # S
         # tash loop to enable restarting when some param changes
-        self._needs_restart = False # dont need restart at start, like ever
+        self._needs_restart = False  # dont need restart at start, like ever
         self.loop = asyncio.get_running_loop()
         if self.running() and not force_restart:
             return
@@ -131,7 +131,7 @@ class PicoRawSource(DataSource):
                 async with self.driver._lock:
                     # Check if parameters changed - restart if needed
                     if self._needs_restart:
-                        #logger.debug(">>>>> I do need restart")
+                        # logger.debug(">>>>> I do need restart")
                         raise asyncio.CancelledError("Restart requested")
 
                     ready = ctypes.c_int16(0)
@@ -179,7 +179,7 @@ class PicoRawSource(DataSource):
         # Signal stream start/restart to subscribers (triggers plot metadata refresh)
         await self._fan_out(FIRST_FRAME)
 
-        self._needs_restart = False # do not restart at start of a task
+        self._needs_restart = False  # do not restart at start of a task
         self._task = asyncio.create_task(poller(), name=f"PicoscopeRawStream")
 
         # def on_done(t: asyncio.Task):
@@ -192,17 +192,20 @@ class PicoRawSource(DataSource):
 
         def on_done(t: asyncio.Task):
             try:
-                e = t.exception()
-                if e is not None:
-                    if isinstance(e, asyncio.CancelledError):
-                        logger.info("Task was cancelled.")
-                    else:
+                if t.cancelled():
+                    logger.debug("Picoscope raw stream task was cancelled.")
+                else:
+                    e = t.exception()
+                    if e is not None:
                         logger.exception("Picoscope raw stream crashed")
+            except asyncio.CancelledError:
+                # t.exception() raises CancelledError if task was cancelled
+                logger.debug("Picoscope raw stream task was cancelled.")
             finally:
                 # Check if a restart was requested, and start a new task
                 if self._needs_restart:
                     logger.debug("Restarting task due to parameter change.")
-                    asyncio.create_task(self.start(force_restart=True)) 
+                    asyncio.create_task(self.start(force_restart=True))
 
         self._task.add_done_callback(on_done)
 
@@ -577,7 +580,9 @@ class ps5000a(Device):
                             range=settings.get("range_str", "1V"),
                         )
                     except Exception as e:
-                        logger.warning(f"{self.id}: Failed to restore channel {ch} settings: {e}")
+                        logger.warning(
+                            f"{self.id}: Failed to restore channel {ch} settings: {e}"
+                        )
 
         # Restore trigger settings if present in profile
         if "_trigger_settings" in properties:
@@ -593,7 +598,9 @@ class ps5000a(Device):
                         auto_trigger_ms=trigger.get("auto_trigger_ms", 1000),
                     )
                 except Exception as e:
-                    logger.warning(f"{self.id}: Failed to restore trigger settings: {e}")
+                    logger.warning(
+                        f"{self.id}: Failed to restore trigger settings: {e}"
+                    )
 
     @api_command()
     async def set_simple_trigger(

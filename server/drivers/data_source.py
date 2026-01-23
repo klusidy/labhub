@@ -55,8 +55,12 @@ class DataSource:
 
     async def once(self) -> Frame:
         async with aclosing(self.generator()) as frame_generator:
-            frame = await anext(frame_generator)
-        return self._envelope(frame)
+            async for frame in frame_generator:
+                # Skip metadata frames (e.g., plot_metadata), return first data frame
+                if isinstance(frame, dict) and frame.get("type") == "plot_metadata":
+                    continue
+                return self._envelope(frame)
+        raise StopAsyncIteration("No data frame received")
 
     async def subscribe(self, maxsize: int = 8) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue(maxsize=maxsize)

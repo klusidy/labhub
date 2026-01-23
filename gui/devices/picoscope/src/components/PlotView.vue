@@ -309,8 +309,10 @@
   }
 
   async function fetchAndUpdateOnce() {
-    // getPlot specs as well!!!
-    const spec: PlotSpec = await ps.fetchPlotSpec(props.name)
+    // Fetch plot spec and update store (watcher will update local spec.value)
+    const fetchedSpec: PlotSpec = await ps.fetchPlotSpec(props.name)
+    ps.plotSpecs[props.name] = fetchedSpec
+
     const frame: DataFrameType = await getFrame(props.name) as DataFrameType
     lastFrame.value = frame
     await updatePlotFromFrame(frame)
