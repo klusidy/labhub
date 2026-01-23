@@ -189,12 +189,13 @@ class InfluxWriter:
         Write property change event.
 
         Measurement: property_set
-        Tags: device_id, driver, property, source
-        Fields: old_value, new_value
+        Tags: device_id, driver, source
+        Fields: {property_name}_old, {property_name}_new (typed per property)
         """
         if not self._running:
             return
 
+        # Use property name as field prefix so each property has its own typed fields
         point = {
             "measurement": "property_set",
             "tags": {
@@ -204,8 +205,8 @@ class InfluxWriter:
                 "source": source,
             },
             "fields": {
-                "old_value": self._serialize_value(old_value),
-                "new_value": self._serialize_value(new_value),
+                f"{property_name}_old": self._serialize_value(old_value),
+                f"{property_name}_new": self._serialize_value(new_value),
             },
             "time": timestamp or datetime.now(timezone.utc),
         }
@@ -361,15 +362,37 @@ class InfluxWriter:
         return flat
 
     def _serialize_value(self, value: Any) -> Any:
-        """Convert value to InfluxDB-compatible type."""
+        """Convert value to InfluxDB-compatible type.
+
+        Note: All numeric values are converted to float to avoid type conflicts.
+        InfluxDB enforces strict field typing - once a field is written as float,
+        all subsequent writes must also be float.
+        """
         if value is None:
             return "null"
         if isinstance(value, bool):
+            # Must check bool before int, since bool is subclass of int
             return value
         if isinstance(value, (int, float)):
-            return value
+            # Always use float for numeric values to ensure type consistency
+            return float(value)
         if isinstance(value, str):
-            return value
+            # Try to convert numeric-looking strings to float to avoid type conflicts
+            # (clients sometimes send numbers as strings in JSON)
+            try:
+                return float(value)
+            except ValueError:
+                return value
+        if isinstance(value, (list, dict)):
+            return json.dumps(value)
+        return str(value)
+
+    def _to_string(self, value: Any) -> str:
+        """Convert any value to string for fields that may have mixed types."""
+        if value is None:
+            return "null"
+        if isinstance(value, bool):
+            return "true" if value else "false"
         if isinstance(value, (list, dict)):
             return json.dumps(value)
         return str(value)

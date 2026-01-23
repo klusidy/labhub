@@ -30,4 +30,12 @@ devices:
       direction: "RISING"
       delay: 0
       auto_trigger_ms: 1000
+influx:
+  enabled: true
+  url: "http://localhost:8086"
+  token: "wdB3AJlWGTtC04rig5KwT7CRAovJvttWCaT0sYlJTnZ-9JB0Yxa0EDl6d8JJOFd80DeTEz96wIvXAQE62GzxTw=="
+  org: "jk"
+  bucket: "labhub2"
+  exe_path: "C:/Program Files/InfluxData/influxdb2/influxd.exe"  # Optional
+  snapshot_interval: 10.0  # seconds
 

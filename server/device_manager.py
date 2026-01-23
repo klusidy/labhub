@@ -418,8 +418,10 @@ class DeviceManager:
 
         # Log property changes to InfluxDB
         if self.influx:
-            for prop_name, new_value in properties.items():
+            for prop_name in properties:
                 old_value = old_values.get(prop_name)
+                # Read the coerced value from cache (after _coerce_clamp), not the raw API value
+                new_value = dev.get_cached(prop_name)
                 await self.influx.write_property_set(
                     device_id=dev_id,
                     driver=dev._api_driver,

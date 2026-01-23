@@ -39,6 +39,7 @@ class InfluxCfg:
     org: str = "labhub"
     bucket: str = "labhub"
     exe_path: Optional[str] = None  # Path to influxd executable for auto-start
+    stop_on_exit: bool = False  # Stop InfluxDB when launcher exits (if we started it)
     batch_size: int = 100  # Max points before flush
     flush_interval_ms: int = 1000  # Max time before flush
     max_retries: int = 3  # Retry attempts for failed writes
@@ -118,13 +119,16 @@ def load_config(config_path: str | None = None) -> HubCfg:
             org=influx_raw.get("org", "labhub"),
             bucket=influx_raw.get("bucket", "labhub"),
             exe_path=influx_raw.get("exe_path"),
+            stop_on_exit=influx_raw.get("stop_on_exit", False),
             batch_size=influx_raw.get("batch_size", 100),
             flush_interval_ms=influx_raw.get("flush_interval_ms", 1000),
             max_retries=influx_raw.get("max_retries", 3),
             snapshot_interval=influx_raw.get("snapshot_interval", 10.0),
         )
         if influx_cfg.enabled:
-            logger.info(f"InfluxDB configured: {influx_cfg.url} (bucket={influx_cfg.bucket})")
+            logger.info(
+                f"InfluxDB configured: {influx_cfg.url} (bucket={influx_cfg.bucket})"
+            )
 
     return HubCfg(devices=devices, influx=influx_cfg)
 

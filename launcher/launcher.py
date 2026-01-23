@@ -225,18 +225,26 @@ class Launcher:
             return True  # Continue anyway
 
     def _stop_influxdb(self):
-        """Stop InfluxDB if we started it."""
-        if self.influx_proc and self.influx_proc.poll() is None:
-            logger.info("Stopping InfluxDB...")
-            try:
-                self.influx_proc.terminate()
-                self.influx_proc.wait(timeout=10)
-                logger.info("InfluxDB stopped")
-            except subprocess.TimeoutExpired:
-                self.influx_proc.kill()
-                logger.warning("InfluxDB killed after timeout")
-            except Exception as e:
-                logger.warning(f"Error stopping InfluxDB: {e}")
+        """Stop InfluxDB if we started it and stop_on_exit is enabled."""
+        if not self.influx_proc or self.influx_proc.poll() is not None:
+            return  # Not running or didn't start it
+
+        # Check if stop_on_exit is enabled (default: False)
+        stop_on_exit = self.influx_config.get("stop_on_exit", False) if self.influx_config else False
+        if not stop_on_exit:
+            logger.info("InfluxDB stop_on_exit=False, leaving InfluxDB running")
+            return
+
+        logger.info("Stopping InfluxDB...")
+        try:
+            self.influx_proc.terminate()
+            self.influx_proc.wait(timeout=10)
+            logger.info("InfluxDB stopped")
+        except subprocess.TimeoutExpired:
+            self.influx_proc.kill()
+            logger.warning("InfluxDB killed after timeout")
+        except Exception as e:
+            logger.warning(f"Error stopping InfluxDB: {e}")
 
     def _on_new_connection(self):
         sock = self._server.nextPendingConnection()
