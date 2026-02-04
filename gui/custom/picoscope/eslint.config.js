@@ -1,9 +1,9 @@
-import js from '@eslint/js';
-import globals from 'globals';
-import pluginVue from 'eslint-plugin-vue';
-import pluginQuasar from '@quasar/app-vite/eslint';
-import { defineConfigWithVueTs, vueTsConfigs } from '@vue/eslint-config-typescript';
-import prettierSkipFormatting from '@vue/eslint-config-prettier/skip-formatting';
+import js from '@eslint/js/types'
+import globals from 'globals'
+import pluginVue from 'eslint-plugin-vue/dist'
+import pluginQuasar from '@quasar/app-vite/exports/eslint/eslint'
+import { defineConfigWithVueTs, vueTsConfigs } from '@vue/eslint-config-typescript/dist/index.mjs'
+import prettierSkipFormatting from '@vue/eslint-config-prettier/skip-formatting'
 
 export default defineConfigWithVueTs(
   {
@@ -67,7 +67,7 @@ export default defineConfigWithVueTs(
 
       // allow debugger during development only
       'no-debugger': process.env.NODE_ENV === 'production' ? 'error' : 'off',
-      "@typescript-eslint/no-unused-vars": "off", // unused vars should be cleaned up at the very end of development...
+      '@typescript-eslint/no-unused-vars': 'off', // unused vars should be cleaned up at the very end of development...
     },
   },
 
@@ -80,5 +80,5 @@ export default defineConfigWithVueTs(
     },
   },
 
-  prettierSkipFormatting,
-);
+  prettierSkipFormatting
+)

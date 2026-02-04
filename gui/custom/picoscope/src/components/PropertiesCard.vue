@@ -40,7 +40,7 @@
 <script setup lang="ts">
   import { reactive, watch, nextTick, ref } from 'vue'
   import { usePicoscopeStore } from 'stores/picoscope'
-  import type { QInput } from 'quasar' // if you want typing
+  import type { QInput } from 'quasar/dist/types' // if you want typing
 
   const fieldEls = ref<Record<string, HTMLElement | null>>({})
   const ps = usePicoscopeStore()
