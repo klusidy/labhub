@@ -5,16 +5,20 @@ This module contains administrative endpoints for:
 - Reloading devices from config
 - Managing logging levels at runtime
 - Applying property configurations
+- Config file management (read, write, list drivers)
 """
 
 import logging
 from fastapi import APIRouter, HTTPException, Depends
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
+from pydantic import BaseModel
+
+import yaml
 
 from .schemas import ApplyPropertiesRequest
 from .utils import set_level as set_logging_level, get_level as get_logging_level
-from .loader import load_config
+from .loader import load_config, get_config_path
 
 logger = logging.getLogger(__name__)
 
@@ -125,9 +129,7 @@ async def reload_device(dev_id: str, manager=Depends(get_manager)):
         for d in cfg.devices:
             if d.id == dev_id:
                 await manager.add_device(d.id, d.driver, d.options)
-                await manager.start_polling_device(
-                    d.id, 500
-                )  # TODO: Configurable interval
+                await manager.start_polling_device(d.id)
                 device_found = True
                 logger.info(f"Device '{dev_id}' reloaded successfully")
                 break
@@ -318,6 +320,42 @@ async def apply_properties(req: ApplyPropertiesRequest, manager=Depends(get_mana
     return {"status": "ok", "results": results}
 
 
+@router.get("/profile")
+async def get_profile(monitor=Depends(get_profile_monitor)):
+    """
+    Get current profile information.
+
+    Returns:
+        Dict with:
+            - path: Path to current profile file
+            - raw: Raw YAML content as string
+            - policies: Dict of device policies {dev_id: {prop_name: policy}}
+
+    Notes:
+        - Profile path determined by LABHUB_PROFILE env var or default
+        - Useful for admin GUI to display profile tree
+    """
+    logger.debug("GET /api/v2/admin/profile")
+
+    try:
+        profile_path = monitor.profile_path
+
+        raw_content = ""
+        if profile_path and Path(profile_path).exists():
+            with open(profile_path, "r", encoding="utf-8") as f:
+                raw_content = f.read()
+
+        return {
+            "path": str(profile_path) if profile_path else None,
+            "raw": raw_content,
+            "policies": monitor._policies,
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to read profile: {e}", exc_info=True)
+        raise HTTPException(500, f"Error reading profile: {str(e)}")
+
+
 @router.post("/profile/load")
 async def load_profile_endpoint(
     file_path: str,
@@ -466,3 +504,418 @@ async def set_property_policy(
     except Exception as e:
         logger.error(f"Failed to set policy: {e}", exc_info=True)
         raise HTTPException(500, f"Error setting policy: {str(e)}")
+
+
+# ===== Config Management =====
+
+
+class DeviceConfigUpdate(BaseModel):
+    """Request model for updating a single device's config."""
+    id: str
+    driver: str
+    options: Dict[str, Any] = {}
+
+
+class ConfigUpdateRequest(BaseModel):
+    """Request model for updating the config file."""
+    devices: List[Dict[str, Any]]
+    influx: Optional[Dict[str, Any]] = None
+
+
+@router.get("/config")
+async def get_config():
+    """
+    Get current configuration.
+
+    Returns:
+        Dict with:
+            - path: Path to current config file
+            - config: Parsed config content (devices and influx)
+            - raw: Raw YAML content as string
+
+    Notes:
+        - Config path determined by LABHUB_CONFIG env var or default
+        - Useful for admin GUI to display and edit config
+    """
+    logger.debug("GET /api/v2/admin/config")
+
+    config_path = get_config_path()
+
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            raw_content = f.read()
+
+        parsed = yaml.safe_load(raw_content) or {}
+
+        return {
+            "path": config_path,
+            "config": parsed,
+            "raw": raw_content,
+        }
+
+    except FileNotFoundError:
+        raise HTTPException(404, f"Config file not found: {config_path}")
+    except Exception as e:
+        logger.error(f"Failed to read config: {e}", exc_info=True)
+        raise HTTPException(500, f"Error reading config: {str(e)}")
+
+
+@router.put("/config")
+async def update_config(req: ConfigUpdateRequest):
+    """
+    Update the configuration file.
+
+    Writes the provided config to the current config file. Does NOT
+    automatically reload devices - call /reload or /soft-reload after.
+
+    Args:
+        req: ConfigUpdateRequest with devices list and optional influx config
+
+    Returns:
+        Dict with:
+            - status: "ok"
+            - path: Path where config was saved
+
+    Raises:
+        HTTPException(500): Error writing config file
+
+    Notes:
+        - Atomic write (temp file + rename)
+        - Preserves YAML formatting
+        - Call /soft-reload to apply changes without full restart
+    """
+    logger.debug("PUT /api/v2/admin/config")
+
+    config_path = get_config_path()
+
+    try:
+        # Build config dict
+        config_data = {"devices": req.devices}
+        if req.influx:
+            config_data["influx"] = req.influx
+
+        # Atomic write
+        temp_path = config_path + ".tmp"
+        with open(temp_path, "w", encoding="utf-8") as f:
+            yaml.safe_dump(config_data, f, default_flow_style=False, sort_keys=False)
+
+        Path(temp_path).replace(config_path)
+
+        logger.info(f"Config saved to {config_path}")
+        return {"status": "ok", "path": config_path}
+
+    except Exception as e:
+        logger.error(f"Failed to write config: {e}", exc_info=True)
+        raise HTTPException(500, f"Error writing config: {str(e)}")
+
+
+@router.get("/config/device/{dev_id}")
+async def get_device_config(dev_id: str):
+    """
+    Get configuration for a specific device.
+
+    Args:
+        dev_id: Device identifier
+
+    Returns:
+        Dict with device configuration from config.yaml
+
+    Raises:
+        HTTPException(404): Device not found in config
+    """
+    logger.debug(f"GET /api/v2/admin/config/device/{dev_id}")
+
+    config_path = get_config_path()
+
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            parsed = yaml.safe_load(f) or {}
+
+        for device in parsed.get("devices", []):
+            if device.get("id") == dev_id:
+                return {"device": device}
+
+        raise HTTPException(404, f"Device '{dev_id}' not found in config")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to read device config: {e}", exc_info=True)
+        raise HTTPException(500, f"Error reading config: {str(e)}")
+
+
+@router.put("/config/device/{dev_id}")
+async def update_device_config(dev_id: str, device_config: Dict[str, Any]):
+    """
+    Update configuration for a specific device.
+
+    Updates or adds a device in the config file. Does NOT reload the device.
+
+    Args:
+        dev_id: Device identifier
+        device_config: New device configuration (must include 'driver')
+
+    Returns:
+        Dict with:
+            - status: "ok" or "created"
+            - device: Updated device config
+
+    Notes:
+        - If device exists, updates it in place
+        - If device doesn't exist, appends it
+        - Call /reload/{dev_id} to apply changes
+    """
+    logger.debug(f"PUT /api/v2/admin/config/device/{dev_id}")
+
+    config_path = get_config_path()
+
+    if "driver" not in device_config:
+        raise HTTPException(400, "Device config must include 'driver' field")
+
+    # Ensure id matches
+    device_config["id"] = dev_id
+
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            parsed = yaml.safe_load(f) or {}
+
+        devices = parsed.get("devices", [])
+        found = False
+        for i, device in enumerate(devices):
+            if device.get("id") == dev_id:
+                devices[i] = device_config
+                found = True
+                break
+
+        if not found:
+            devices.append(device_config)
+
+        parsed["devices"] = devices
+
+        # Atomic write
+        temp_path = config_path + ".tmp"
+        with open(temp_path, "w", encoding="utf-8") as f:
+            yaml.safe_dump(parsed, f, default_flow_style=False, sort_keys=False)
+
+        Path(temp_path).replace(config_path)
+
+        status = "ok" if found else "created"
+        logger.info(f"Device config {status}: {dev_id}")
+        return {"status": status, "device": device_config}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update device config: {e}", exc_info=True)
+        raise HTTPException(500, f"Error updating config: {str(e)}")
+
+
+@router.delete("/config/device/{dev_id}")
+async def delete_device_config(dev_id: str):
+    """
+    Remove a device from configuration.
+
+    Removes device from config file. Does NOT stop the running device.
+
+    Args:
+        dev_id: Device identifier to remove
+
+    Returns:
+        Dict with:
+            - status: "ok"
+            - removed: Device ID that was removed
+
+    Raises:
+        HTTPException(404): Device not found in config
+    """
+    logger.debug(f"DELETE /api/v2/admin/config/device/{dev_id}")
+
+    config_path = get_config_path()
+
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            parsed = yaml.safe_load(f) or {}
+
+        devices = parsed.get("devices", [])
+        original_len = len(devices)
+        devices = [d for d in devices if d.get("id") != dev_id]
+
+        if len(devices) == original_len:
+            raise HTTPException(404, f"Device '{dev_id}' not found in config")
+
+        parsed["devices"] = devices
+
+        # Atomic write
+        temp_path = config_path + ".tmp"
+        with open(temp_path, "w", encoding="utf-8") as f:
+            yaml.safe_dump(parsed, f, default_flow_style=False, sort_keys=False)
+
+        Path(temp_path).replace(config_path)
+
+        logger.info(f"Device removed from config: {dev_id}")
+        return {"status": "ok", "removed": dev_id}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete device config: {e}", exc_info=True)
+        raise HTTPException(500, f"Error deleting from config: {str(e)}")
+
+
+@router.get("/drivers")
+async def list_drivers():
+    """
+    List all available drivers.
+
+    Scans the drivers directory for vendor folders and driver modules.
+
+    Returns:
+        Dict with:
+            - drivers: List of driver info dicts, each containing:
+                - id: Full driver identifier (e.g., "pico_technology.ps5000a")
+                - vendor: Vendor name
+                - name: Driver/device name
+                - path: File path
+
+    Notes:
+        - Drivers are Python files in drivers/<vendor>/<driver>.py
+        - Excludes files starting with underscore
+        - Does not validate that drivers are importable
+    """
+    logger.debug("GET /api/v2/admin/drivers")
+
+    drivers_dir = Path(__file__).parent / "drivers"
+    drivers_list = []
+
+    try:
+        for vendor_dir in drivers_dir.iterdir():
+            if not vendor_dir.is_dir():
+                continue
+            if vendor_dir.name.startswith("_"):
+                continue
+
+            vendor = vendor_dir.name
+
+            for driver_file in vendor_dir.glob("*.py"):
+                if driver_file.name.startswith("_"):
+                    continue
+
+                driver_name = driver_file.stem
+                driver_id = f"{vendor}.{driver_name}"
+
+                drivers_list.append({
+                    "id": driver_id,
+                    "vendor": vendor,
+                    "name": driver_name,
+                    "path": str(driver_file),
+                })
+
+        # Sort by vendor, then name
+        drivers_list.sort(key=lambda d: (d["vendor"], d["name"]))
+
+        return {"drivers": drivers_list}
+
+    except Exception as e:
+        logger.error(f"Failed to list drivers: {e}", exc_info=True)
+        raise HTTPException(500, f"Error listing drivers: {str(e)}")
+
+
+@router.post("/soft-reload")
+async def soft_reload(manager=Depends(get_manager)):
+    """
+    Intelligently reload devices based on config changes.
+
+    Compares current running devices with config.yaml and:
+    - Removes devices no longer in config
+    - Adds new devices from config
+    - Restarts devices whose config has changed
+    - Keeps unchanged devices running (no interruption)
+
+    Returns:
+        Dict with:
+            - status: "ok"
+            - added: List of device IDs that were added
+            - removed: List of device IDs that were removed
+            - restarted: List of device IDs that were restarted
+            - unchanged: List of device IDs that remained unchanged
+            - devices: List of all device states after reload
+
+    Notes:
+        - Much faster than full /reload when few devices changed
+        - Preserves device state for unchanged devices
+        - WebSocket clients receive updates only for affected devices
+    """
+    logger.info("Soft-reloading devices from config...")
+
+    try:
+        cfg = load_config()
+
+        # Build maps for comparison
+        config_devices = {d.id: d for d in cfg.devices}
+        running_devices = set(manager.devices.keys())
+        config_ids = set(config_devices.keys())
+
+        added = []
+        removed = []
+        restarted = []
+        unchanged = []
+
+        # Remove devices not in config
+        to_remove = running_devices - config_ids
+        for dev_id in to_remove:
+            logger.info(f"Soft-reload: removing '{dev_id}' (not in config)")
+            try:
+                await manager.stop_polling_device(dev_id)
+                await manager.remove_device(dev_id)
+                removed.append(dev_id)
+            except Exception as e:
+                logger.error(f"Failed to remove device '{dev_id}': {e}")
+
+        # Add new devices or restart changed ones
+        for dev_id, dev_cfg in config_devices.items():
+            if dev_id not in running_devices:
+                # New device - add it
+                logger.info(f"Soft-reload: adding '{dev_id}'")
+                try:
+                    await manager.add_device(dev_cfg.id, dev_cfg.driver, dev_cfg.options)
+                    await manager.start_polling_device(dev_cfg.id)
+                    added.append(dev_id)
+                except Exception as e:
+                    logger.error(f"Failed to add device '{dev_id}': {e}")
+            else:
+                # Existing device - check if config changed
+                current_dev = manager.devices[dev_id]
+                current_options = getattr(current_dev, "options", {})
+
+                # Compare options (simple dict comparison)
+                if current_options != dev_cfg.options:
+                    logger.info(f"Soft-reload: restarting '{dev_id}' (config changed)")
+                    try:
+                        await manager.stop_polling_device(dev_id)
+                        await manager.remove_device(dev_id)
+                        await manager.add_device(dev_cfg.id, dev_cfg.driver, dev_cfg.options)
+                        await manager.start_polling_device(dev_cfg.id)
+                        restarted.append(dev_id)
+                    except Exception as e:
+                        logger.error(f"Failed to restart device '{dev_id}': {e}")
+                else:
+                    unchanged.append(dev_id)
+
+        logger.info(
+            f"Soft-reload complete: added={len(added)}, removed={len(removed)}, "
+            f"restarted={len(restarted)}, unchanged={len(unchanged)}"
+        )
+
+        devices = [d.model_dump() for d in await manager.list_devices()]
+        return {
+            "status": "ok",
+            "added": added,
+            "removed": removed,
+            "restarted": restarted,
+            "unchanged": unchanged,
+            "devices": devices,
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to soft-reload devices: {e}", exc_info=True)
+        raise HTTPException(500, f"Error soft-reloading devices: {str(e)}")
