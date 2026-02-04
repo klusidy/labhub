@@ -1,41 +1,38 @@
 devices:
-  # - id: "dummy_01"
-  #   driver: "dummy"
-  - id: "example_device_01"
-    driver: "example.example_device"
-  - id: "picoscope"
-    driver: "pico_technology.ps5000a"
-    resolution: 14 #8/12/14/15/16 bit
-    channels:
-      - id: "A"
-        coupling: "DC"
-        range: "1V"
-        enable: true
-      - id: "B"
-        coupling: "DC"
-        range: "1V"
-        enable: false
-      - id: "C"
-        coupling: "DC"
-        range: "1V"
-        enable: false
-      - id: "D"
-        coupling: "DC"
-        range: "1V"
-        enable: false
-    trigger: #will call set_simple_trigger()
-      enable: true
-      source: "A"
-      threshold_mV: 1
-      direction: "RISING"
-      delay: 0
-      auto_trigger_ms: 1000
+- id: example_device_01
+  driver: example.example_device
+- id: picoscope
+  driver: pico_technology.ps5000a
+  resolution: 14
+  channels:
+  - id: A
+    coupling: DC
+    range: 1V
+    enable: true
+  - id: B
+    coupling: DC
+    range: 1V
+    enable: false
+  - id: C
+    coupling: DC
+    range: 1V
+    enable: false
+  - id: D
+    coupling: DC
+    range: 1V
+    enable: false
+  trigger:
+    enable: true
+    source: A
+    threshold_mV: 1
+    direction: RISING
+    delay: 0
+    auto_trigger_ms: 1000
 influx:
   enabled: true
-  url: "http://localhost:8086"
-  token: "wdB3AJlWGTtC04rig5KwT7CRAovJvttWCaT0sYlJTnZ-9JB0Yxa0EDl6d8JJOFd80DeTEz96wIvXAQE62GzxTw=="
-  org: "jk"
-  bucket: "labhub2"
-  exe_path: "C:/Program Files/InfluxData/influxdb2/influxd.exe"  # Optional
-  snapshot_interval: 10.0  # seconds
-
+  url: http://localhost:8086
+  token: wdB3AJlWGTtC04rig5KwT7CRAovJvttWCaT0sYlJTnZ-9JB0Yxa0EDl6d8JJOFd80DeTEz96wIvXAQE62GzxTw==
+  org: jk
+  bucket: labhub2
+  exe_path: C:/Program Files/InfluxData/influxd.exe
+  snapshot_interval: 10.0
