@@ -9,3 +9,4 @@ profile*yaml
 /hub/*
 doc/next steps.md
 .vscode/*
+.vscode

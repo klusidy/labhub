@@ -1,0 +1,143 @@
+<template>
+  <q-card flat bordered class="property-table">
+    <q-card-section class="q-pa-none">
+      <q-markup-table flat dense wrap-cells class="property-markup-table">
+        <thead class="bg-light-blue-10 text-white" style="line-height: 30px">
+          <tr>
+            <th class="text-left">Name</th>
+            <th class="text-left">Type</th>
+            <th class="text-left">Current</th>
+            <th class="text-left">New Value</th>
+            <th style="width: 40px"></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="prop in properties" :key="prop.name" class="property-row">
+            <td class="text-weight-medium">
+              <div class="row items-center no-wrap">
+                <q-icon
+                  v-if="prop.read_only"
+                  name="lock"
+                  size="xs"
+                  color="grey-6"
+                  class="q-mr-xs"
+                />
+                <span>{{ prop.name }}</span>
+                <q-tooltip v-if="prop.doc" anchor="top middle" self="bottom middle">
+                  {{ prop.doc }}
+                </q-tooltip>
+              </div>
+            </td>
+            <td class="text-caption text-grey-7">{{ inferType(prop) }}</td>
+            <td>
+              <code class="current-value">{{
+                formatValue(deviceState?.[prop.name], prop.unit)
+              }}</code>
+            </td>
+            <td>
+              <PropertyInput
+                v-if="!prop.read_only"
+                :property="prop"
+                :value="deviceState?.[prop.name]"
+                @update="(val) => onUpdate(prop.name, val)"
+              />
+            </td>
+            <td>
+              <q-btn
+                v-if="!prop.read_only"
+                flat
+                dense
+                round
+                icon="drag_indicator"
+                size="sm"
+                color="grey"
+                draggable="true"
+                @dragstart="(e: DragEvent) => onDragStart(e, prop)"
+              >
+                <q-tooltip>Drag to workspace</q-tooltip>
+              </q-btn>
+            </td>
+          </tr>
+        </tbody>
+      </q-markup-table>
+
+      <div v-if="properties.length === 0" class="text-grey q-pa-sm">No properties available</div>
+    </q-card-section>
+  </q-card>
+</template>
+
+<script setup lang="ts">
+import { computed } from 'vue';
+import { useDevicesStore } from 'stores/devices';
+import { formatValue, inferType } from 'src/utils/formatter';
+import PropertyInput from './PropertyInput.vue';
+import type { PropertySpec } from 'src/api/devices';
+
+const props = defineProps<{
+  deviceId: string;
+  filterProp?: string; // If provided, only show this property
+}>();
+
+const store = useDevicesStore();
+
+const device = computed(() => store.deviceMap.get(props.deviceId));
+const spec = computed(() => store.getDeviceSpec(props.deviceId));
+const deviceState = computed(() => device.value?.state || {});
+
+const properties = computed(() => {
+  const all = spec.value?.properties || [];
+  if (props.filterProp) {
+    return all.filter((p) => p.name === props.filterProp);
+  }
+  return all;
+});
+
+async function onUpdate(propName: string, value: unknown) {
+  try {
+    await store.updateProperty(props.deviceId, propName, value);
+  } catch (e) {
+    console.error('Failed to update property:', e);
+  }
+}
+
+function onDragStart(e: DragEvent, prop: PropertySpec) {
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = 'copy';
+    e.dataTransfer.setData(
+      'application/json',
+      JSON.stringify({
+        type: 'property',
+        deviceId: props.deviceId,
+        itemName: prop.name,
+      }),
+    );
+  }
+}
+</script>
+
+<style scoped>
+.property-table {
+  margin-bottom: 12px;
+}
+
+.property-markup-table :deep(thead th) {
+  padding: 6px 8px;
+  font-weight: 500;
+}
+
+.property-markup-table :deep(tbody td) {
+  padding: 4px 8px;
+}
+
+.property-row:hover {
+  background-color: #f5f5f5;
+}
+
+.current-value {
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 13px;
+  background: #f5f5f5;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+</style>
