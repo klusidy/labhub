@@ -82,7 +82,9 @@ async def lifespan(app: FastAPI):
 
             logger.info("InfluxDB integration ready")
         except Exception as e:
-            logger.warning(f"InfluxDB failed to initialize: {e} - continuing without telemetry")
+            logger.warning(
+                f"InfluxDB failed to initialize: {e} - continuing without telemetry"
+            )
 
     # 5. Initialize profile monitor (for live state backup)
     await asyncio.sleep(2.0)  # Allow polling to populate initial states
@@ -153,26 +155,47 @@ admin.manager = manager
 app.include_router(admin.router)
 
 # ---- Static files / GUI ----
-WEB_DIST = Path(__file__).parent.parent / "gui" / "basic" / "dist"
-if WEB_DIST.exists():
+WEB_V1_DIST = Path(__file__).parent.parent / "gui" / "basic" / "dist"
+if WEB_V1_DIST.exists():
     app.mount(
-        "/ui", staticfiles.StaticFiles(directory=str(WEB_DIST), html=True), name="ui"
+        "/v1ui",
+        staticfiles.StaticFiles(directory=str(WEB_V1_DIST), html=True),
+        name="ui",
+    )
+
+WEB_V2_DIST = Path(__file__).parent.parent / "gui" / "basic2" / "dist" / "spa"
+if WEB_V2_DIST.exists():
+    app.mount(
+        "/ui", staticfiles.StaticFiles(directory=str(WEB_V2_DIST), html=True), name="ui"
     )
 
 # todo - gui for picoscope should not be specified separately - not extensible
 GUI_PICOSCOPE_DIST = (
-    Path(__file__).parent.parent
-    / "gui"
-    / "devices"
-    / "picoscope"
-    / "dist"
-    / "spa"
+    Path(__file__).parent.parent / "gui" / "custom" / "picoscope" / "dist" / "spa"
 )
 if GUI_PICOSCOPE_DIST.exists():
     app.mount(
         "/picoscope",
         staticfiles.StaticFiles(directory=str(GUI_PICOSCOPE_DIST), html=True),
         name="picoscope",
+    )
+
+# Admin/Config GUI
+GUI_DEVICES_DIST = Path(__file__).parent.parent / "gui" / "devices" / "dist" / "spa"
+if GUI_DEVICES_DIST.exists():
+    app.mount(
+        "/devices",
+        staticfiles.StaticFiles(directory=str(GUI_DEVICES_DIST), html=True),
+        name="devices",
+    )
+
+# Profile Admin GUI
+GUI_PROFILE_DIST = Path(__file__).parent.parent / "gui" / "profile" / "dist" / "spa"
+if GUI_PROFILE_DIST.exists():
+    app.mount(
+        "/profile",
+        staticfiles.StaticFiles(directory=str(GUI_PROFILE_DIST), html=True),
+        name="profile",
     )
 
 
