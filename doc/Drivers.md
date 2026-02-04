@@ -107,6 +107,3 @@ class portal_gun(Device):
 ```
 
 Both commands and property setters are run by labhub asynchronously in threads separate from the main one so that the server is not blocked by (potentially slow) execution.
-
-
-## Data sources
