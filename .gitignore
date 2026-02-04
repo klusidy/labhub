@@ -12,3 +12,4 @@ doc/next steps.md
 runtime
 .venv
 run.bat
+launcher/launcher_settings.yaml

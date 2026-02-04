@@ -538,10 +538,10 @@ class Launcher:
         self.act_launch_gui = QAction("Launch GUI", self.menu)
         self.act_launch_gui.triggered.connect(self.open_gui)
 
+        # "More" submenu actions
         self.act_launch_pico = QAction("Picoscope GUI", self.menu)
         self.act_launch_pico.triggered.connect(self.open_picoscope)
 
-        # "More" submenu actions
         self.act_old_gui = QAction("Old GUI", self.menu)
         self.act_old_gui.triggered.connect(self.open_old_gui)
 
@@ -563,10 +563,10 @@ class Launcher:
         self.menu.addAction(self.act_configure)
         self.menu.addSeparator()
         self.menu.addAction(self.act_launch_gui)
-        self.menu.addAction(self.act_launch_pico)
 
         # "More" submenu
         self.more_menu = QMenu("More", self.menu)
+        self.more_menu.addAction(self.act_launch_pico)
         self.more_menu.addAction(self.act_old_gui)
         self.more_menu.addAction(self.act_admin_gui)
         self.more_menu.addAction(self.act_profile_gui)
