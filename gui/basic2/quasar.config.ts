@@ -64,6 +64,20 @@ export default defineConfig((/* ctx */) => {
       // extendViteConf (viteConf) {},
       // viteVuePluginOptions: {},
 
+      // Fixed filenames without content hashes (for git tracking)
+      extendViteConf(viteConf) {
+        viteConf.build = viteConf.build || {};
+        viteConf.build.rollupOptions = viteConf.build.rollupOptions || {};
+        viteConf.build.rollupOptions.output = {
+          entryFileNames: 'assets/app.js',
+          chunkFileNames: 'assets/[name].js',
+          assetFileNames: (assetInfo) => {
+            if (assetInfo.name?.endsWith('.css')) return 'assets/app.css';
+            return 'assets/[name][extname]';
+          },
+        };
+      },
+
       vitePlugins: [
         [
           'vite-plugin-checker',

@@ -2,7 +2,7 @@ import { defineConfig } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 
 export default defineConfig(({ command }) => ({
-  base: command === "build" ? "/ui/" : "/",   // ← dev at '/', prod at '/ui/'
+  base: command === "build" ? "/v1ui/" : "/",   // ← dev at '/', prod at '/v1ui/'
   plugins: [svelte()],
   server: {
     host: '127.0.0.1',           // 👈 avoid ::1/IPv6 “happy eyeballs” delays
