@@ -1,8 +1,11 @@
 devices:
-  - id: "foo"
-    driver: "example_device"
-    serial_number: "EX123"
-  - id: "bar"
-    driver: "example_device"
-    serial_number: "EX456"
-
+- id: example_device_01
+  driver: example.example_device
+# influx:
+#   enabled: true
+#   url: http://localhost:8086
+#   token: your-token
+#   org: your-org
+#   bucket: your-bucket
+#   exe_path: C:/Program Files/InfluxData/influxd.exe
+#   snapshot_interval: 10.0

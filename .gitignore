@@ -8,5 +8,7 @@ package-lock.json
 profile*yaml
 /hub/*
 doc/next steps.md
-.vscode/*
-.vscode
+.vscode/
+runtime
+.venv
+run.bat
