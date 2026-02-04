@@ -20,11 +20,13 @@
 
       <!-- Property value display and edit -->
       <div v-if="item.type === 'property' && device && propertySpec">
-        <div class="row items-center no-wrap q-gutter-sm">
-          <code class="current-value">{{
-            formatValue(device.state?.[item.itemName], propertySpec.unit)
-          }}</code>
-          <div v-if="!propertySpec.read_only" class="col">
+        <div class="row items-center no-wrap q-gutter-sm property-row">
+          <div class="col-6">
+            <code class="current-value">{{
+              formatValue(device.state?.[item.itemName], propertySpec.unit)
+            }}</code>
+          </div>
+          <div v-if="!propertySpec.read_only" class="col-6">
             <PropertyInput
               :property="propertySpec"
               :value="device.state?.[item.itemName]"
@@ -202,14 +204,22 @@ function formatResult(r: unknown): string {
   font-family: 'Consolas', 'Monaco', monospace;
   font-size: 13px;
   background: #f0f0f0;
-  padding: 4px 10px;
+  padding: 6px 10px;
   border-radius: 4px;
-  min-width: 80px;
+  display: block;
   text-align: center;
+}
+
+.property-input-large {
+  width: 100%;
 }
 
 .property-input-large :deep(.q-field__control) {
   min-height: 36px;
+}
+
+.arg-input-large {
+  width: 100%;
 }
 
 .arg-input-large :deep(.q-field__control) {

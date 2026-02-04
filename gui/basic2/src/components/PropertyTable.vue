@@ -5,9 +5,9 @@
         <thead class="bg-light-blue-10 text-white" style="line-height: 30px">
           <tr>
             <th class="text-left">Name</th>
-            <th class="text-left">Type</th>
-            <th class="text-left">Current</th>
-            <th class="text-left">New Value</th>
+            <th class="text-left" style="width: 80px">Type</th>
+            <th class="text-left" style="width: 150px">Current</th>
+            <th class="text-left" style="width: 150px">New Value</th>
             <th style="width: 40px"></th>
           </tr>
         </thead>
@@ -18,14 +18,14 @@
                 <q-icon
                   v-if="prop.read_only"
                   name="lock"
-                  size="xs"
+                  size="sm"
                   color="grey-6"
                   class="q-mr-xs"
                 />
                 <span>{{ prop.name }}</span>
-                <q-tooltip v-if="prop.doc" anchor="top middle" self="bottom middle">
-                  {{ prop.doc }}
-                </q-tooltip>
+              </div>
+              <div v-if="prop.doc" class="text-caption text-grey-6 prop-doc">
+                {{ prop.doc }}
               </div>
             </td>
             <td class="text-caption text-grey-7">{{ inferType(prop) }}</td>
@@ -44,7 +44,6 @@
             </td>
             <td>
               <q-btn
-                v-if="!prop.read_only"
                 flat
                 dense
                 round
@@ -54,7 +53,7 @@
                 draggable="true"
                 @dragstart="(e: DragEvent) => onDragStart(e, prop)"
               >
-                <q-tooltip>Drag to workspace</q-tooltip>
+                <q-tooltip>Drag to shelf</q-tooltip>
               </q-btn>
             </td>
           </tr>
@@ -139,5 +138,17 @@ function onDragStart(e: DragEvent, prop: PropertySpec) {
   background: #f5f5f5;
   padding: 2px 6px;
   border-radius: 4px;
+  display: inline-block;
+  min-width: 100px;
+  text-align: right;
+}
+
+.prop-doc {
+  font-size: 11px;
+  line-height: 1.3;
+  margin-top: 2px;
+  overflow: hidden;
+  font-style: italic;
+  text-overflow: ellipsis;
 }
 </style>

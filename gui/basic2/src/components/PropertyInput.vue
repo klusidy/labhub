@@ -41,7 +41,7 @@
         :options="property.choices"
         dense
         outlined
-        style="min-width: 120px"
+        class="full-width"
         @update:model-value="onSet"
       />
     </template>
@@ -61,7 +61,7 @@
         :max="property.max"
         dense
         outlined
-        style="width: 120px"
+        class="full-width"
         @keyup.enter="onSet"
       >
         <template #append>
@@ -76,7 +76,7 @@
         v-model="editValue"
         dense
         outlined
-        style="min-width: 120px"
+        class="full-width"
         @keyup.enter="onSet"
       >
         <template #append>
@@ -159,5 +159,10 @@ function onSetComposite() {
 <style scoped>
 .property-input {
   min-width: 100px;
+  flex: 1;
+}
+
+.full-width {
+  width: 100%;
 }
 </style>
