@@ -3,9 +3,10 @@ import { ref, watch } from 'vue';
 
 export interface WorkspaceItem {
   id: string; // Unique ID for the item in workspace
-  type: 'property' | 'command';
+  type: 'property' | 'command' | 'macro';
   deviceId: string;
   itemName: string;
+  fileName?: string; // For macros: the source file
   addedAt: number;
 }
 
@@ -46,23 +47,30 @@ export const useWorkspaceStore = defineStore('workspace', () => {
 
   // Actions
   function addItem(
-    type: 'property' | 'command',
+    type: 'property' | 'command' | 'macro',
     deviceId: string,
-    itemName: string
+    itemName: string,
+    fileName?: string,
   ) {
-    // Check if item already exists
-    const existingId = `${deviceId}:${type}:${itemName}`;
+    const existingId =
+      type === 'macro'
+        ? `macro:${fileName}:${itemName}`
+        : `${deviceId}:${type}:${itemName}`;
     if (items.value.some((i) => i.id === existingId)) {
       return; // Don't add duplicates
     }
 
-    items.value.push({
+    const item: WorkspaceItem = {
       id: existingId,
       type,
       deviceId,
       itemName,
       addedAt: Date.now(),
-    });
+    };
+    if (fileName !== undefined) {
+      item.fileName = fileName;
+    }
+    items.value.push(item);
   }
 
   function removeItem(itemId: string) {

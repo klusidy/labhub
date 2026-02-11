@@ -76,6 +76,11 @@
           <q-tooltip>Download device states as JSON</q-tooltip>
         </q-btn>
 
+        <!-- REPL Terminal Toggle -->
+        <q-btn flat icon="terminal" label="Console" @click="replOpen = !replOpen">
+          <q-tooltip>{{ replOpen ? 'Hide' : 'Show' }} Python REPL</q-tooltip>
+        </q-btn>
+
         <!-- Help button -->
         <q-btn flat icon="help_outline" @click="showHelp = true">
           <q-tooltip>Help</q-tooltip>
@@ -83,9 +88,16 @@
       </q-toolbar>
     </q-header>
 
-    <!-- Left Drawer - Device Tree -->
+    <!-- Left Drawer - Device Tree & Macro Tree -->
     <q-drawer v-model="leftDrawerOpen" show-if-above bordered :width="240" :breakpoint="960">
-      <DeviceTree />
+      <div class="drawer-content">
+        <div class="drawer-section">
+          <DeviceTree />
+        </div>
+        <div class="drawer-section">
+          <MacroTree />
+        </div>
+      </div>
     </q-drawer>
 
     <!-- Right Drawer - Workspace -->
@@ -102,7 +114,14 @@
 
     <!-- Main content -->
     <q-page-container>
-      <router-view />
+      <div class="main-content-wrapper">
+        <div class="page-content" :class="{ 'with-repl': replOpen }">
+          <router-view />
+        </div>
+        <div v-if="replOpen" class="repl-container">
+          <ReplTerminal />
+        </div>
+      </div>
     </q-page-container>
 
     <!-- Help Dialog -->
@@ -185,14 +204,19 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue';
 import { useDevicesStore } from 'stores/devices';
+import { useMacrosStore } from 'stores/macros';
 import DeviceTree from 'components/DeviceTree.vue';
+import MacroTree from 'components/MacroTree.vue';
 import WorkspacePanel from 'components/WorkspacePanel.vue';
+import ReplTerminal from 'components/ReplTerminal.vue';
 
 const store = useDevicesStore();
+const macrosStore = useMacrosStore();
 
 const leftDrawerOpen = ref(false);
 const rightDrawerOpen = ref(false);
 const showHelp = ref(false);
+const replOpen = ref(false);
 
 function navigateTo(path: string) {
   window.location.href = path;
@@ -237,6 +261,7 @@ function onSnapshot() {
 onMounted(async () => {
   await store.loadDevices();
   store.startEventsListener();
+  await macrosStore.loadMacros();
 });
 
 onUnmounted(() => {
@@ -253,5 +278,38 @@ onUnmounted(() => {
   .lt-md {
     display: inline-flex;
   }
+}
+
+.main-content-wrapper {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 50px);
+}
+
+.page-content {
+  flex: 1;
+  overflow: auto;
+}
+
+.page-content.with-repl {
+  flex: 1;
+  max-height: 60vh;
+}
+
+.repl-container {
+  height: calc(40vh - 40px);
+  border-top: 2px solid rgba(0, 0, 0, 0.12);
+}
+
+.drawer-content {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.drawer-section {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 </style>

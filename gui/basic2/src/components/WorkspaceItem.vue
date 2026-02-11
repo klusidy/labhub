@@ -5,12 +5,13 @@
       <div class="row items-center no-wrap q-mb-xs">
         <q-icon name="drag_indicator" class="drag-handle q-mr-xs" color="grey-5" size="sm" />
         <q-icon
-          :name="item.type === 'property' ? 'tune' : 'bolt'"
-          :color="item.type === 'property' ? 'primary' : 'orange'"
+          :name="itemIcon"
+          :color="itemColor"
           size="xs"
           class="q-mr-xs"
         />
-        <span class="text-caption text-grey-6 q-mr-xs">{{ item.deviceId }} /</span>
+        <span v-if="item.type !== 'macro'" class="text-caption text-grey-6 q-mr-xs">{{ item.deviceId }} /</span>
+        <span v-else class="text-caption text-grey-6 q-mr-xs">{{ item.fileName }} /</span>
         <span class="text-weight-medium text-body2">{{ item.itemName }}</span>
         <q-space />
         <q-btn flat dense round size="sm" icon="close" color="grey" @click="emit('remove')">
@@ -49,7 +50,7 @@
             :loading="running"
             @click="onRunCommand"
           />
-          <div v-if="hasArgs" class="col">
+          <div v-if="hasCommandArgs" class="col">
             <q-btn
               flat
               dense
@@ -62,7 +63,7 @@
         </div>
 
         <!-- Arguments -->
-        <div v-if="showArgs && hasArgs" class="q-mt-xs">
+        <div v-if="showArgs && hasCommandArgs" class="q-mt-xs">
           <div v-for="arg in commandSpec.args" :key="arg.name" class="row items-center q-mb-xs">
             <div class="col-3 text-caption">{{ arg.name }}</div>
             <div class="col-9">
@@ -84,6 +85,50 @@
           <pre class="error-box">{{ cmdError }}</pre>
         </div>
       </div>
+
+      <!-- Macro execution -->
+      <div v-if="item.type === 'macro' && macroSpec">
+        <div class="row items-center q-gutter-sm">
+          <q-btn
+            unelevated
+            no-caps
+            color="pink-9"
+            label="Run"
+            padding="4px 16px"
+            :loading="running"
+            @click="onRunMacro"
+          />
+          <div v-if="hasMacroArgs" class="col">
+            <q-btn
+              flat
+              dense
+              size="sm"
+              :icon="showArgs ? 'expand_less' : 'expand_more'"
+              :label="showArgs ? 'Hide' : 'Args'"
+              @click="showArgs = !showArgs"
+            />
+          </div>
+        </div>
+
+        <!-- Arguments -->
+        <div v-if="showArgs && hasMacroArgs" class="q-mt-xs">
+          <div
+            v-for="arg in macroSpec.func.args"
+            :key="arg.name"
+            class="row items-center q-mb-xs"
+          >
+            <div class="col-3 text-caption">{{ arg.name }}</div>
+            <div class="col-9">
+              <ArgInput
+                :arg="toCommandArg(arg)"
+                :value="argValues[arg.name]"
+                class="arg-input-large"
+                @update="(v) => (argValues[arg.name] = v)"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
     </q-card-section>
   </q-card>
 </template>
@@ -91,6 +136,8 @@
 <script setup lang="ts">
 import { ref, computed, reactive } from 'vue';
 import { useDevicesStore } from 'stores/devices';
+import { useMacrosStore, type MacroArg } from 'stores/macros';
+import { useReplStore } from 'stores/repl';
 import type { WorkspaceItem } from 'stores/workspace';
 import type { CommandArg } from 'src/api/devices';
 import { formatValue } from 'src/utils/formatter';
@@ -107,23 +154,64 @@ const emit = defineEmits<{
 }>();
 
 const store = useDevicesStore();
+const macrosStore = useMacrosStore();
+const replStore = useReplStore();
 
 const device = computed(() => store.deviceMap.get(props.item.deviceId));
 const propertySpec = computed(() =>
   store.getPropertySpec(props.item.deviceId, props.item.itemName),
 );
 const commandSpec = computed(() => store.getCommandSpec(props.item.deviceId, props.item.itemName));
+const macroSpec = computed(() =>
+  props.item.fileName
+    ? macrosStore.getMacroFunction(props.item.fileName, props.item.itemName)
+    : null,
+);
 
-// Command state
+const itemIcon = computed(() => {
+  switch (props.item.type) {
+    case 'property': return 'tune';
+    case 'command': return 'bolt';
+    case 'macro': return 'functions';
+    default: return 'help';
+  }
+});
+
+const itemColor = computed(() => {
+  switch (props.item.type) {
+    case 'property': return 'primary';
+    case 'command': return 'orange';
+    case 'macro': return 'pink-9';
+    default: return 'grey';
+  }
+});
+
+// Shared state
 const showArgs = ref(false);
 const running = ref(false);
 const argValues = reactive<Record<string, unknown>>({});
 const cmdResult = ref<unknown>(null);
 const cmdError = ref<string | null>(null);
 
-const hasArgs = computed(
+const hasCommandArgs = computed(
   () => Array.isArray(commandSpec.value?.args) && commandSpec.value.args.length > 0,
 );
+
+const hasMacroArgs = computed(
+  () => (macroSpec.value?.func.args.length || 0) > 0,
+);
+
+function toCommandArg(arg: MacroArg): CommandArg {
+  const result: CommandArg = {
+    name: arg.name,
+    required: arg.required,
+    default: arg.default,
+  };
+  if (arg.type && ['int', 'float', 'bool', 'str'].includes(arg.type)) {
+    result.type = arg.type as 'int' | 'float' | 'bool' | 'str';
+  }
+  return result;
+}
 
 async function onUpdateProperty(value: unknown) {
   try {
@@ -141,7 +229,7 @@ async function onRunCommand() {
   cmdError.value = null;
 
   try {
-    const args = buildArgs();
+    const args = buildCommandArgs();
     cmdResult.value = await store.runCommand(props.item.deviceId, props.item.itemName, args);
   } catch (e) {
     cmdError.value = e instanceof Error ? e.message : String(e);
@@ -150,7 +238,24 @@ async function onRunCommand() {
   }
 }
 
-function buildArgs(): Record<string, unknown> {
+async function onRunMacro() {
+  if (!macroSpec.value) return;
+
+  running.value = true;
+  try {
+    await replStore.ensureConnected();
+    const callStr = buildMacroPythonCall();
+    replStore.executeCode(callStr);
+  } catch (e) {
+    console.error('Failed to run macro:', e);
+  } finally {
+    setTimeout(() => {
+      running.value = false;
+    }, 500);
+  }
+}
+
+function buildCommandArgs(): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   for (const arg of commandSpec.value?.args || []) {
     const val = argValues[arg.name];
@@ -175,6 +280,34 @@ function coerceArg(arg: CommandArg, value: unknown): unknown {
     default:
       return value;
   }
+}
+
+function formatPythonValue(arg: MacroArg, value: unknown): string {
+  if (value === null || value === undefined || value === '') {
+    if (!arg.required && arg.default !== undefined) return '';
+    return 'None';
+  }
+  const t = arg.type?.toLowerCase() || '';
+  if (t === 'bool') return value ? 'True' : 'False';
+  if (t === 'int' || t === 'float') return String(value as number);
+  const s = String(value as string | number);
+  return `'${s.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+}
+
+function buildMacroPythonCall(): string {
+  if (!macroSpec.value) return '';
+  const func = macroSpec.value.func;
+  const args: string[] = [];
+  for (const arg of func.args) {
+    const val = argValues[arg.name];
+    if (val === undefined || val === null || val === '') {
+      if (!arg.required) continue;
+    }
+    const pyVal = formatPythonValue(arg, val);
+    if (pyVal === '') continue;
+    args.push(`${arg.name}=${pyVal}`);
+  }
+  return `${func.name}(${args.join(', ')})`;
 }
 
 function formatResult(r: unknown): string {

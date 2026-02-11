@@ -22,6 +22,10 @@ class ApplyPropertiesRequest(BaseModel):
     file_path: Optional[str] = None
     properties: Optional[Dict[str, Dict[str, Any]]] = None
 
+class SaveMacroFileRequest(BaseModel):
+    """Request to save a macro file."""
+    content: str
+
 # ---------- NEW: richer /spec models ----------
 class ArgSpec(BaseModel):
     name: Optional[str] = None

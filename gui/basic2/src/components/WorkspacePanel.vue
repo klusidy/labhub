@@ -105,9 +105,13 @@ function onDrop(e: DragEvent) {
 
   try {
     const payload = JSON.parse(data);
-    if (payload.type === 'property' || payload.type === 'command') {
-      // Check if already in workspace
-      if (workspace.hasItem(payload.deviceId, payload.type, payload.itemName)) {
+    if (payload.type === 'property' || payload.type === 'command' || payload.type === 'macro') {
+      // Check duplicate by ID
+      const checkId =
+        payload.type === 'macro'
+          ? `macro:${payload.fileName}:${payload.itemName}`
+          : `${payload.deviceId}:${payload.type}:${payload.itemName}`;
+      if (workspace.items.some((i) => i.id === checkId)) {
         $q.notify({
           type: 'info',
           message: 'Item already in workspace',
@@ -115,7 +119,12 @@ function onDrop(e: DragEvent) {
         return;
       }
 
-      workspace.addItem(payload.type, payload.deviceId, payload.itemName);
+      workspace.addItem(
+        payload.type,
+        payload.deviceId || '',
+        payload.itemName,
+        payload.fileName,
+      );
       $q.notify({
         type: 'positive',
         message: `Added ${payload.type} to workspace`,

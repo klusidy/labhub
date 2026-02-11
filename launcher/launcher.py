@@ -19,6 +19,8 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QGroupBox,
+    QTabWidget,
+    QWidget,
 )
 
 from PySide6.QtGui import QIcon, QAction, QPixmap, QDesktopServices, QCursor
@@ -77,6 +79,14 @@ class ConfigureDialog(QDialog):
     def _build_ui(self):
         layout = QVBoxLayout(self)
 
+        # Tab widget
+        tabs = QTabWidget()
+        layout.addWidget(tabs)
+
+        # ===== General tab =====
+        general_tab = QWidget()
+        general_layout = QVBoxLayout(general_tab)
+
         # Server settings group
         server_group = QGroupBox("Server")
         server_layout = QFormLayout(server_group)
@@ -85,7 +95,7 @@ class ConfigureDialog(QDialog):
         self.port_edit = QLineEdit()
         server_layout.addRow("Host:", self.host_edit)
         server_layout.addRow("Port:", self.port_edit)
-        layout.addWidget(server_group)
+        general_layout.addWidget(server_group)
 
         # Config file group
         config_group = QGroupBox("Device Configuration")
@@ -109,7 +119,7 @@ class ConfigureDialog(QDialog):
         config_btn_layout.addWidget(btn_config_folder)
         config_btn_layout.addStretch()
         config_layout.addLayout(config_btn_layout)
-        layout.addWidget(config_group)
+        general_layout.addWidget(config_group)
 
         # Profile file group
         profile_group = QGroupBox("Profile")
@@ -133,7 +143,7 @@ class ConfigureDialog(QDialog):
         profile_btn_layout.addWidget(btn_profile_folder)
         profile_btn_layout.addStretch()
         profile_layout.addLayout(profile_btn_layout)
-        layout.addWidget(profile_group)
+        general_layout.addWidget(profile_group)
 
         # Logging group
         log_group = QGroupBox("Logging")
@@ -153,7 +163,88 @@ class ConfigureDialog(QDialog):
         log_file_layout.addWidget(btn_log_browse)
         log_file_layout.addWidget(btn_log_clear)
         log_layout.addRow("Log File:", log_file_layout)
-        layout.addWidget(log_group)
+        general_layout.addWidget(log_group)
+
+        general_layout.addStretch()
+        tabs.addTab(general_tab, "General")
+
+        # ===== Scripting tab =====
+        scripting_tab = QWidget()
+        scripting_layout = QVBoxLayout(scripting_tab)
+
+        # Macros folder group
+        macros_group = QGroupBox("Macros Folder")
+        macros_layout = QVBoxLayout(macros_group)
+
+        macros_path_layout = QHBoxLayout()
+        self.macros_edit = QLineEdit()
+        self.macros_edit.setReadOnly(True)
+        btn_macros_browse = QPushButton("Browse...")
+        btn_macros_browse.clicked.connect(self._browse_macros)
+        macros_path_layout.addWidget(self.macros_edit)
+        macros_path_layout.addWidget(btn_macros_browse)
+        macros_layout.addLayout(macros_path_layout)
+
+        macros_btn_layout = QHBoxLayout()
+        btn_macros_folder = QPushButton("Open Folder")
+        btn_macros_folder.clicked.connect(self._open_macros_folder)
+        btn_macros_clear = QPushButton("Clear")
+        btn_macros_clear.clicked.connect(lambda: self.macros_edit.clear())
+        macros_btn_layout.addWidget(btn_macros_folder)
+        macros_btn_layout.addWidget(btn_macros_clear)
+        macros_btn_layout.addStretch()
+        macros_layout.addLayout(macros_btn_layout)
+        scripting_layout.addWidget(macros_group)
+
+        # Python interpreter group
+        python_group = QGroupBox("Python Interpreter (for REPL)")
+        python_layout = QVBoxLayout(python_group)
+
+        python_path_layout = QHBoxLayout()
+        self.python_edit = QLineEdit()
+        self.python_edit.setReadOnly(True)
+        self.python_edit.setPlaceholderText("Default: .venv/Scripts/python.exe")
+        btn_python_browse = QPushButton("Browse...")
+        btn_python_browse.clicked.connect(self._browse_python)
+        python_path_layout.addWidget(self.python_edit)
+        python_path_layout.addWidget(btn_python_browse)
+        python_layout.addLayout(python_path_layout)
+
+        python_btn_layout = QHBoxLayout()
+        btn_python_clear = QPushButton("Clear (Use Default)")
+        btn_python_clear.clicked.connect(lambda: self.python_edit.clear())
+        python_btn_layout.addWidget(btn_python_clear)
+        python_btn_layout.addStretch()
+        python_layout.addLayout(python_btn_layout)
+        scripting_layout.addWidget(python_group)
+
+        # Startup folder group
+        startup_group = QGroupBox("Startup Folder (REPL working directory)")
+        startup_layout = QVBoxLayout(startup_group)
+
+        startup_path_layout = QHBoxLayout()
+        self.startup_folder_edit = QLineEdit()
+        self.startup_folder_edit.setReadOnly(True)
+        self.startup_folder_edit.setPlaceholderText("Default: temporary directory")
+        btn_startup_browse = QPushButton("Browse...")
+        btn_startup_browse.clicked.connect(self._browse_startup_folder)
+        startup_path_layout.addWidget(self.startup_folder_edit)
+        startup_path_layout.addWidget(btn_startup_browse)
+        startup_layout.addLayout(startup_path_layout)
+
+        startup_btn_layout = QHBoxLayout()
+        btn_startup_folder = QPushButton("Open Folder")
+        btn_startup_folder.clicked.connect(self._open_startup_folder)
+        btn_startup_clear = QPushButton("Clear (Use Temp)")
+        btn_startup_clear.clicked.connect(lambda: self.startup_folder_edit.clear())
+        startup_btn_layout.addWidget(btn_startup_folder)
+        startup_btn_layout.addWidget(btn_startup_clear)
+        startup_btn_layout.addStretch()
+        startup_layout.addLayout(startup_btn_layout)
+        scripting_layout.addWidget(startup_group)
+
+        scripting_layout.addStretch()
+        tabs.addTab(scripting_tab, "Scripting")
 
         # Buttons
         btn_layout = QHBoxLayout()
@@ -178,6 +269,15 @@ class ConfigureDialog(QDialog):
         )
         self.profile_edit.setText(
             str(self.launcher.profile_path) if self.launcher.profile_path else ""
+        )
+        self.macros_edit.setText(
+            str(self.launcher.macros_path) if self.launcher.macros_path else ""
+        )
+        self.python_edit.setText(
+            str(self.launcher.python_path) if self.launcher.python_path else ""
+        )
+        self.startup_folder_edit.setText(
+            str(self.launcher.startup_folder) if self.launcher.startup_folder else ""
         )
 
         if self.launcher.log_level and self.launcher.log_level in LOG_LEVELS:
@@ -249,6 +349,50 @@ class ConfigureDialog(QDialog):
             folder = str(Path(self.profile_edit.text()).parent.resolve())
             QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
 
+    def _browse_macros(self):
+        start_dir = (
+            str(self.macros_edit.text())
+            if self.macros_edit.text()
+            else str(LABHUB_DIR / "launcher" / "macros")
+        )
+        folder_path = QFileDialog.getExistingDirectory(
+            self, "Select Macros Folder", start_dir
+        )
+        if folder_path:
+            self.macros_edit.setText(folder_path)
+
+    def _browse_python(self):
+        start_dir = (
+            str(Path(self.python_edit.text()).parent)
+            if self.python_edit.text()
+            else str(LABHUB_DIR / ".venv" / "Scripts")
+        )
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Select Python Interpreter", start_dir, "Python Executable (python.exe);;All Files (*.*)"
+        )
+        if file_path:
+            self.python_edit.setText(file_path)
+
+    def _open_macros_folder(self):
+        if self.macros_edit.text():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(self.macros_edit.text()))
+
+    def _browse_startup_folder(self):
+        start_dir = (
+            str(self.startup_folder_edit.text())
+            if self.startup_folder_edit.text()
+            else str(LABHUB_DIR)
+        )
+        folder_path = QFileDialog.getExistingDirectory(
+            self, "Select Startup Folder", start_dir
+        )
+        if folder_path:
+            self.startup_folder_edit.setText(folder_path)
+
+    def _open_startup_folder(self):
+        if self.startup_folder_edit.text():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(self.startup_folder_edit.text()))
+
     def _apply_and_restart(self):
         # Validate
         try:
@@ -273,6 +417,15 @@ class ConfigureDialog(QDialog):
         profile_path = self.profile_edit.text()
         self.launcher.profile_path = Path(profile_path) if profile_path else None
 
+        macros_path = self.macros_edit.text()
+        self.launcher.macros_path = Path(macros_path) if macros_path else None
+
+        python_path = self.python_edit.text()
+        self.launcher.python_path = Path(python_path) if python_path else None
+
+        startup_folder = self.startup_folder_edit.text()
+        self.launcher.startup_folder = Path(startup_folder) if startup_folder else None
+
         self.launcher.log_level = self.log_level_combo.currentText()
 
         log_file = self.log_file_edit.text()
@@ -288,6 +441,15 @@ class ConfigureDialog(QDialog):
             "config_path": str(self.launcher.config_path),
             "profile_path": (
                 str(self.launcher.profile_path) if self.launcher.profile_path else None
+            ),
+            "macros_path": (
+                str(self.launcher.macros_path) if self.launcher.macros_path else None
+            ),
+            "python_path": (
+                str(self.launcher.python_path) if self.launcher.python_path else None
+            ),
+            "startup_folder": (
+                str(self.launcher.startup_folder) if self.launcher.startup_folder else None
             ),
             "log_level": self.launcher.log_level,
             "log_file": str(self.launcher.log_file) if self.launcher.log_file else None,
@@ -313,12 +475,18 @@ class Launcher:
         influx_exe=None,
         influx_url=None,
         disable_influx=False,
+        macros_path=None,
+        python_path=None,
+        startup_folder=None,
     ):
         self.host = host
         self.port = port
         self.host_full = f"http://{self.host}:{self.port}"
         self.config_path = config_path
         self.profile_path = profile_path
+        self.macros_path = macros_path
+        self.python_path = python_path
+        self.startup_folder = startup_folder
         self.log_level = log_level
         self.log_file = log_file
 
@@ -661,6 +829,15 @@ class Launcher:
         if self.profile_path:
             env["LABHUB_PROFILE"] = str(self.profile_path)
 
+        if self.macros_path:
+            env["LABHUB_MACROS"] = str(self.macros_path)
+
+        if self.python_path:
+            env["LABHUB_PYTHON_PATH"] = str(self.python_path)
+
+        if self.startup_folder:
+            env["LABHUB_STARTUP_FOLDER"] = str(self.startup_folder)
+
         cwd = str(LABHUB_DIR)
 
         cmd = [
@@ -816,6 +993,21 @@ def main():
         help="Path to profile.yaml (overrides persisted setting)",
     )
     parser.add_argument(
+        "--macros",
+        type=str,
+        help="Path to macros folder (overrides persisted setting)",
+    )
+    parser.add_argument(
+        "--python",
+        type=str,
+        help="Path to Python interpreter for REPL (overrides persisted setting)",
+    )
+    parser.add_argument(
+        "--startup-folder",
+        type=str,
+        help="Working directory for REPL sessions (overrides persisted setting)",
+    )
+    parser.add_argument(
         "--host",
         type=str,
         help="Host for the hub server (overrides persisted setting)",
@@ -894,6 +1086,39 @@ def main():
         logger.warning(f"Profile file not found: {profile_path}")
         profile_path = None
 
+    # Determine macros path
+    if args.macros:
+        macros_path = Path(args.macros)
+    elif settings.get("macros_path"):
+        macros_path = Path(settings["macros_path"])
+    else:
+        macros_path = Path(__file__).parent / "macros"
+
+    # Create default macros folder if it doesn't exist and using default path
+    if macros_path and not macros_path.exists() and not (args.macros or settings.get("macros_path")):
+        try:
+            macros_path.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Created default macros folder: {macros_path}")
+        except Exception as e:
+            logger.warning(f"Failed to create macros folder: {e}")
+            macros_path = None
+
+    # Determine Python interpreter path
+    python_path = None
+    if args.python:
+        python_path = Path(args.python)
+    elif settings.get("python_path"):
+        python_path = Path(settings["python_path"])
+    # Default is None, which will use the server's .venv interpreter
+
+    # Determine startup folder (REPL working directory)
+    startup_folder = None
+    if args.startup_folder:
+        startup_folder = Path(args.startup_folder)
+    elif settings.get("startup_folder"):
+        startup_folder = Path(settings["startup_folder"])
+    # Default is None, which will use a temporary directory
+
     Launcher(
         host,
         port,
@@ -904,6 +1129,9 @@ def main():
         influx_exe=args.influx_exe,
         influx_url=args.influx_url,
         disable_influx=args.no_influx,
+        macros_path=macros_path,
+        python_path=python_path,
+        startup_folder=startup_folder,
     ).run()
 
 

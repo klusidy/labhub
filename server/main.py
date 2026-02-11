@@ -1,7 +1,7 @@
 from __future__ import annotations
 import asyncio, json, os, tempfile, hashlib
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, staticfiles
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, staticfiles, Body
 from typing import Dict, List, Any
 from filelock import FileLock, Timeout
 import yaml
@@ -17,6 +17,7 @@ from .schemas import (
     DeviceSpec,
     CommandRequest,
     ApplyPropertiesRequest,
+    SaveMacroFileRequest,
 )
 
 from .device_manager import DeviceManager
@@ -25,6 +26,8 @@ from .utils import init_logging
 from .loader import get_config_path, load_config, get_profile_path
 from .monitor import ProfileMonitor
 from .influx import InfluxWriter, InfluxStateMonitor
+from .macros import MacroManager
+from .repl_session import ReplSessionManager
 from . import admin
 
 # Initialize logging - reads LABHUB_LOG_LEVEL and LABHUB_LOG_FILE from environment
@@ -35,7 +38,7 @@ logger = logging.getLogger("labhub.main")  # Explicit name for proper hierarchy
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """FastAPI lifespan context manager for startup and shutdown."""
-    global lock, profile_monitor, influx_writer, influx_monitor
+    global lock, profile_monitor, influx_writer, influx_monitor, macro_manager, repl_manager
 
     # --- Startup ---
     logger.info("LabHub server starting...")
@@ -98,12 +101,37 @@ async def lifespan(app: FastAPI):
     # Set profile_monitor for admin endpoints
     admin.profile_monitor = profile_monitor
 
+    # 6. Initialize macro manager (optional)
+    macros_path_str = os.environ.get("LABHUB_MACROS")
+    macros_path = None
+    if macros_path_str:
+        from pathlib import Path
+        macros_path = Path(macros_path_str)
+        macro_manager = MacroManager(macros_path)
+        logger.info(f"Macro manager initialized (path={macros_path})")
+    else:
+        logger.info("Macro manager not configured")
+
+    # 7. Initialize REPL session manager
+    python_path_str = os.environ.get("LABHUB_PYTHON_PATH")
+    python_path = Path(python_path_str) if python_path_str else None
+    startup_folder_str = os.environ.get("LABHUB_STARTUP_FOLDER")
+    startup_folder = Path(startup_folder_str) if startup_folder_str else None
+    project_root = Path(__file__).parent.parent
+    repl_manager = ReplSessionManager(python_path, project_root, macros_path, startup_folder)
+    logger.info(f"REPL session manager initialized (startup_folder={startup_folder})")
+
     logger.info("LabHub server ready")
 
     yield  # Server is running
 
     # --- Shutdown ---
     logger.info("LabHub server shutting down...")
+
+    # Stop all REPL sessions first
+    if repl_manager:
+        await repl_manager.close_all_sessions()
+        logger.info("All REPL sessions closed")
 
     # Stop InfluxDB (flush pending writes before other cleanup)
     if influx_monitor:
@@ -149,6 +177,12 @@ lock: FileLock | None = None  # Single-instance lock per CONFIG PATH
 # InfluxDB integration (optional, initialized in lifespan if configured)
 influx_writer: InfluxWriter | None = None
 influx_monitor: InfluxStateMonitor | None = None
+
+# Macro management (optional, initialized in lifespan if configured)
+macro_manager: MacroManager | None = None
+
+# REPL session management
+repl_manager: ReplSessionManager | None = None
 
 # Include admin router and set manager dependency
 admin.manager = manager
@@ -196,6 +230,15 @@ if GUI_PROFILE_DIST.exists():
         "/profile",
         staticfiles.StaticFiles(directory=str(GUI_PROFILE_DIST), html=True),
         name="profile",
+    )
+
+# Macros GUI
+GUI_MACROS_DIST = Path(__file__).parent.parent / "gui" / "macros" / "dist" / "spa"
+if GUI_MACROS_DIST.exists():
+    app.mount(
+        "/macros",
+        staticfiles.StaticFiles(directory=str(GUI_MACROS_DIST), html=True),
+        name="macros",
     )
 
 
@@ -740,3 +783,322 @@ async def ws_stream(ws: WebSocket, dev_id: str, source: str):
 #         pass
 #     finally:
 #         await event_bus.unsubscribe(q)
+
+
+# ---- Macro API ----
+@app.get("/api/v2/macros")
+async def list_macros() -> List[Dict[str, Any]]:
+    """
+    List all macro files with their function signatures.
+
+    Returns:
+        List of macro files with functions:
+            - filename: Name of the .py file
+            - functions: List of function definitions
+                - name: Function name
+                - args: List of argument definitions
+                - doc: Docstring (if present)
+            - error: Parse error (if any)
+
+    Raises:
+        HTTPException(503): Macros not configured
+    """
+    if macro_manager is None:
+        raise HTTPException(503, "Macros not configured")
+
+    logger.debug("GET /api/v2/macros - listing macro files")
+    try:
+        return macro_manager.list_files()
+    except Exception as e:
+        logger.error(f"Failed to list macros: {e}", exc_info=True)
+        raise HTTPException(500, f"Error listing macros: {str(e)}")
+
+
+@app.post("/api/v2/macros/refresh")
+async def refresh_macros() -> Dict[str, Any]:
+    """
+    Refresh the macro file list by rescanning the macros folder.
+
+    Returns:
+        Status message with count of files loaded.
+
+    Raises:
+        HTTPException(503): Macros not configured
+    """
+    if macro_manager is None:
+        raise HTTPException(503, "Macros not configured")
+
+    logger.debug("POST /api/v2/macros/refresh - refreshing macro list")
+    try:
+        macro_manager.refresh()
+        files = macro_manager.list_files()
+        return {"status": "ok", "files_loaded": len(files)}
+    except Exception as e:
+        logger.error(f"Failed to refresh macros: {e}", exc_info=True)
+        raise HTTPException(500, f"Error refreshing macros: {str(e)}")
+
+
+@app.get("/api/v2/macros/files/{filename}")
+async def get_macro_file(filename: str) -> Dict[str, Any]:
+    """
+    Get the source code of a macro file.
+
+    Args:
+        filename: Name of the macro file (e.g., "my_macros.py")
+
+    Returns:
+        Dict with:
+            - filename: Name of the file
+            - content: Source code as string
+
+    Raises:
+        HTTPException(503): Macros not configured
+        HTTPException(404): File not found
+    """
+    if macro_manager is None:
+        raise HTTPException(503, "Macros not configured")
+
+    logger.debug(f"GET /api/v2/macros/files/{filename}")
+
+    content = macro_manager.get_file_content(filename)
+    if content is None:
+        raise HTTPException(404, f"Macro file not found: {filename}")
+
+    return {"filename": filename, "content": content}
+
+
+@app.post("/api/v2/macros/files/{filename}")
+async def save_macro_file(filename: str, req: SaveMacroFileRequest) -> Dict[str, Any]:
+    """
+    Save the source code of a macro file.
+
+    Args:
+        filename: Name of the macro file (e.g., "my_macros.py")
+        req: Request body with content field
+
+    Returns:
+        Status message.
+
+    Raises:
+        HTTPException(503): Macros not configured
+        HTTPException(400): Invalid filename or save failed
+    """
+    if macro_manager is None:
+        raise HTTPException(503, "Macros not configured")
+
+    logger.debug(f"POST /api/v2/macros/files/{filename}")
+
+    success = macro_manager.save_file_content(filename, req.content)
+    if not success:
+        raise HTTPException(400, f"Failed to save macro file: {filename}")
+
+    return {"status": "ok", "filename": filename}
+
+
+@app.put("/api/v2/macros/files/{filename}")
+async def create_macro_file(filename: str) -> Dict[str, Any]:
+    """Create a new empty macro file."""
+    if macro_manager is None:
+        raise HTTPException(503, "Macros not configured")
+
+    logger.debug(f"PUT /api/v2/macros/files/{filename}")
+
+    success = macro_manager.create_file(filename)
+    if not success:
+        raise HTTPException(400, f"Failed to create macro file: {filename}")
+
+    return {"status": "ok", "filename": filename}
+
+
+@app.delete("/api/v2/macros/files/{filename}")
+async def delete_macro_file(filename: str) -> Dict[str, Any]:
+    """Delete a macro file."""
+    if macro_manager is None:
+        raise HTTPException(503, "Macros not configured")
+
+    logger.debug(f"DELETE /api/v2/macros/files/{filename}")
+
+    success = macro_manager.delete_file(filename)
+    if not success:
+        raise HTTPException(400, f"Failed to delete macro file: {filename}")
+
+    return {"status": "ok", "filename": filename}
+
+
+@app.post("/api/v2/macros/files/{filename}/rename")
+async def rename_macro_file(
+    filename: str, req: Dict[str, str] = Body(...)
+) -> Dict[str, Any]:
+    """Rename a macro file."""
+    if macro_manager is None:
+        raise HTTPException(503, "Macros not configured")
+
+    new_name = req.get("new_name", "")
+    if not new_name:
+        raise HTTPException(400, "new_name is required")
+
+    logger.debug(f"POST /api/v2/macros/files/{filename}/rename -> {new_name}")
+
+    success = macro_manager.rename_file(filename, new_name)
+    if not success:
+        raise HTTPException(400, f"Failed to rename macro file: {filename}")
+
+    return {"status": "ok", "old_name": filename, "new_name": new_name}
+
+
+# ======= REPL ENDPOINTS =======
+
+
+@app.post("/api/v2/repl/session/start")
+async def start_repl_session(client_id: str = Body(..., embed=True)) -> Dict[str, Any]:
+    """
+    Start a new REPL session or reconnect to existing one.
+
+    Args:
+        client_id: Unique identifier for the client (GUI instance)
+
+    Returns:
+        Session information including session_id and status
+
+    Raises:
+        HTTPException(500): Failed to create session
+    """
+    if repl_manager is None:
+        raise HTTPException(500, "REPL manager not initialized")
+
+    logger.info(f"POST /api/v2/repl/session/start (client_id={client_id})")
+
+    try:
+        session = await repl_manager.get_or_create_session(client_id)
+        return {
+            "session_id": session.session_id,
+            "status": "ready",
+            "created_at": session.created_at.isoformat(),
+        }
+    except Exception as e:
+        logger.error(f"Failed to start REPL session: {e}")
+        raise HTTPException(500, f"Failed to start REPL session: {str(e)}")
+
+
+@app.delete("/api/v2/repl/session/{session_id}")
+async def close_repl_session(session_id: str) -> Dict[str, Any]:
+    """
+    Close a REPL session.
+
+    Args:
+        session_id: Session identifier
+
+    Returns:
+        Success status
+
+    Raises:
+        HTTPException(404): Session not found
+    """
+    if repl_manager is None:
+        raise HTTPException(500, "REPL manager not initialized")
+
+    logger.info(f"DELETE /api/v2/repl/session/{session_id}")
+
+    session = repl_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(404, f"Session {session_id} not found")
+
+    await repl_manager.close_session(session_id)
+    return {"success": True}
+
+
+@app.websocket("/api/v2/repl/session/{session_id}/ws")
+async def repl_websocket(websocket: WebSocket, session_id: str):
+    """
+    WebSocket endpoint for REPL communication.
+
+    Handles bidirectional communication with REPL session:
+    - Receives commands from client
+    - Streams stdout/stderr output to client
+    """
+    await websocket.accept()
+    logger.info(f"WebSocket connected for REPL session {session_id}")
+
+    if repl_manager is None:
+        await websocket.send_json({"type": "error", "message": "REPL manager not initialized"})
+        await websocket.close()
+        return
+
+    session = repl_manager.get_session(session_id)
+    if not session:
+        await websocket.send_json({"type": "error", "message": f"Session {session_id} not found"})
+        await websocket.close()
+        return
+
+    # Send buffered output history for reconnection
+    for output in session.output_buffer:
+        await websocket.send_json({"type": "output", **output})
+
+    # Create tasks for reading stdout/stderr and handling client messages
+    async def read_stream(stream, stream_name: str):
+        """Read from process stream and send to WebSocket"""
+        try:
+            while True:
+                line = await stream.readline()
+                if not line:
+                    break
+
+                text = line.decode("utf-8", errors="replace")
+
+                # Buffer output for reconnection
+                session.add_output(stream_name, text)
+
+                # Send to client
+                await websocket.send_json({
+                    "type": "output",
+                    "stream": stream_name,
+                    "data": text,
+                })
+        except Exception as e:
+            logger.error(f"Error reading {stream_name}: {e}")
+
+    async def handle_client_messages():
+        """Handle incoming messages from client"""
+        try:
+            while True:
+                data = await websocket.receive_json()
+                msg_type = data.get("type")
+
+                if msg_type == "execute":
+                    # Execute code in REPL
+                    code = data.get("code", "")
+                    await repl_manager.execute_code(session_id, code)
+
+                elif msg_type == "interrupt":
+                    # Send interrupt signal (Ctrl+C)
+                    await repl_manager.send_interrupt(session_id)
+                    await websocket.send_json({
+                        "type": "output",
+                        "stream": "stdout",
+                        "data": "^C\n",
+                    })
+
+                elif msg_type == "ping":
+                    # Keep-alive ping
+                    await websocket.send_json({"type": "pong"})
+
+        except WebSocketDisconnect:
+            logger.info(f"Client disconnected from REPL session {session_id}")
+        except Exception as e:
+            logger.error(f"Error handling client message: {e}")
+
+    # Run tasks concurrently
+    try:
+        await asyncio.gather(
+            read_stream(session.process.stdout, "stdout"),
+            read_stream(session.process.stderr, "stderr"),
+            handle_client_messages(),
+        )
+    except Exception as e:
+        logger.error(f"WebSocket error for session {session_id}: {e}")
+    finally:
+        try:
+            await websocket.close()
+        except:
+            pass
+        logger.info(f"WebSocket closed for REPL session {session_id}")

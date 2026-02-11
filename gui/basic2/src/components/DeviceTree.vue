@@ -69,8 +69,10 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue';
 import { useDevicesStore, type TreeNode } from 'stores/devices';
+import { useMacrosStore } from 'stores/macros';
 
 const store = useDevicesStore();
+const macrosStore = useMacrosStore();
 const treeRef = ref();
 const filter = ref('');
 
@@ -92,6 +94,9 @@ function filterMethod(node: TreeNode, filter: string): boolean {
 }
 
 function onSelect(nodeId: string | null) {
+  if (nodeId) {
+    macrosStore.selectNode(null);
+  }
   store.selectNode(nodeId);
 }
 
@@ -117,7 +122,7 @@ function collapseAll() {
 
 .tree-scroll {
   flex: 1;
-  height: calc(100vh - 130px);
+  min-height: 0;
 }
 
 .tree-node {

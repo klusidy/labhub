@@ -1,12 +1,100 @@
 <template>
   <q-page class="device-page">
     <!-- No selection state -->
-    <div v-if="!store.selectedNodeId" class="no-selection">
+    <div v-if="!store.selectedNodeId && !macrosStore.selectedNodeId" class="no-selection">
       <q-icon name="touch_app" size="xl" color="grey-4" />
-      <div class="text-h6 text-grey-6 q-mt-md">Select a device</div>
+      <div class="text-h6 text-grey-6 q-mt-md">Select a device or macro</div>
       <div class="text-caption text-grey-5">
-        Click on a device or item in the tree to view details
+        Click on a device or macro in the tree to view details
       </div>
+    </div>
+
+    <!-- Macro function selected -->
+    <div v-else-if="macrosStore.selectedFunction" class="q-pa-md">
+      <div class="row items-center q-mb-md">
+        <q-icon name="functions" color="pink-9" size="md" class="q-mr-sm" />
+        <div>
+          <div class="text-h5">{{ macrosStore.selectedFunction.func.name }}</div>
+          <div class="text-caption text-grey-6">
+            {{ macrosStore.selectedFunction.file.filename }}
+          </div>
+        </div>
+      </div>
+      <MacroPanel
+        :filename="macrosStore.selectedFunction.file.filename"
+        :filter-func="macrosStore.selectedFunction.func.name"
+      />
+    </div>
+
+    <!-- Macro file selected (show editor + all functions) -->
+    <div v-else-if="macrosStore.selectedFile" class="q-pa-md">
+      <div class="row items-center q-mb-md">
+        <q-icon name="description" color="primary" size="md" class="q-mr-sm" />
+        <div class="col">
+          <div class="text-h5">{{ macrosStore.selectedFile.filename }}</div>
+          <div class="text-caption text-grey-6">
+            {{ macrosStore.selectedFile.functions.length }} function(s)
+            <span v-if="macrosStore.selectedFile.error" class="text-negative">
+              &mdash; {{ macrosStore.selectedFile.error }}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Functions in this file -->
+      <MacroPanel
+        v-if="macrosStore.selectedFile.functions.length > 0"
+        :filename="macrosStore.selectedFile.filename"
+        class="q-mb-md"
+      />
+
+      <!-- File editor -->
+      <q-card flat bordered>
+        <q-card-section class="q-py-sm">
+          <div class="row items-center justify-between">
+            <div class="text-subtitle2">Source Code</div>
+            <div class="row q-gutter-sm">
+              <q-badge
+                v-if="macrosStore.fileContentDirty"
+                color="warning"
+                label="Unsaved changes"
+              />
+              <q-btn
+                unelevated
+                no-caps
+                color="primary"
+                label="Save"
+                icon="save"
+                padding="4px 16px"
+                :loading="macrosStore.fileSaving"
+                :disable="!macrosStore.fileContentDirty"
+                @click="saveFile"
+              />
+            </div>
+          </div>
+        </q-card-section>
+        <q-separator />
+        <q-card-section class="q-pa-none">
+          <q-input
+            v-if="!macrosStore.fileContentLoading"
+            :model-value="macrosStore.fileContent"
+            type="textarea"
+            outlined
+            square
+            :input-style="{
+              fontFamily: 'Consolas, Monaco, monospace',
+              fontSize: '13px',
+              lineHeight: '1.5',
+              minHeight: '300px',
+            }"
+            @update:model-value="(v) => macrosStore.updateFileContent(String(v))"
+          />
+          <div v-else class="q-pa-md text-center text-grey">
+            <q-spinner size="sm" class="q-mr-xs" />
+            Loading...
+          </div>
+        </q-card-section>
+      </q-card>
     </div>
 
     <!-- Device selected - show full device view -->
@@ -79,12 +167,17 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
+import { useQuasar } from 'quasar';
 import { useDevicesStore } from 'stores/devices';
+import { useMacrosStore } from 'stores/macros';
 import PropertyTable from 'components/PropertyTable.vue';
 import CommandPanel from 'components/CommandPanel.vue';
 import DataSourcePanel from 'components/DataSourcePanel.vue';
+import MacroPanel from 'components/MacroPanel.vue';
 
+const $q = useQuasar();
 const store = useDevicesStore();
+const macrosStore = useMacrosStore();
 
 const selectedDevice = computed(() => store.selectedDevice);
 const selectedSpec = computed(() => store.selectedSpec);
@@ -147,6 +240,16 @@ function goBackToCategory() {
     store.selectNode(`${selectedDevice.value.id}:${cat}`);
   } else {
     store.selectNode(selectedDevice.value.id);
+  }
+}
+
+async function saveFile() {
+  if (!macrosStore.selectedFile) return;
+  try {
+    await macrosStore.saveFileContent(macrosStore.selectedFile.filename);
+    $q.notify({ type: 'positive', message: 'File saved', timeout: 1500 });
+  } catch {
+    $q.notify({ type: 'negative', message: 'Failed to save file' });
   }
 }
 </script>
