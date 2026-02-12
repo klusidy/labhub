@@ -77,7 +77,7 @@
         </q-btn>
 
         <!-- REPL Terminal Toggle -->
-        <q-btn flat icon="terminal" label="Console" @click="replOpen = !replOpen">
+        <q-btn flat icon="terminal" label="Python" @click="replOpen = !replOpen">
           <q-tooltip>{{ replOpen ? 'Hide' : 'Show' }} Python REPL</q-tooltip>
         </q-btn>
 
@@ -119,10 +119,25 @@
           <router-view />
         </div>
         <div v-if="replOpen" class="repl-container">
-          <ReplTerminal />
+          <ReplTerminal @close="replOpen = false" />
         </div>
       </div>
     </q-page-container>
+
+    <!-- Floating button to reopen console -->
+
+    <q-page-sticky position="bottom-right" :offset="[64, 8]">
+      <q-btn
+        v-if="!replOpen"
+        fab-mini
+        icon="terminal"
+        color="blue-grey-8"
+        class="repl-fab"
+        @click="replOpen = true"
+      >
+        <q-tooltip>Open Python REPL</q-tooltip>
+      </q-btn>
+    </q-page-sticky>
 
     <!-- Help Dialog -->
     <q-dialog v-model="showHelp">
@@ -202,7 +217,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, watch, onMounted, onUnmounted } from 'vue';
 import { useDevicesStore } from 'stores/devices';
 import { useMacrosStore } from 'stores/macros';
 import DeviceTree from 'components/DeviceTree.vue';
@@ -216,7 +231,11 @@ const macrosStore = useMacrosStore();
 const leftDrawerOpen = ref(false);
 const rightDrawerOpen = ref(false);
 const showHelp = ref(false);
-const replOpen = ref(false);
+const replOpen = ref(localStorage.getItem('labhub_repl_open') === 'true');
+
+watch(replOpen, (val) => {
+  localStorage.setItem('labhub_repl_open', val ? 'true' : 'false');
+});
 
 function navigateTo(path: string) {
   window.location.href = path;
@@ -299,6 +318,13 @@ onUnmounted(() => {
 .repl-container {
   height: calc(40vh - 40px);
   border-top: 2px solid rgba(0, 0, 0, 0.12);
+}
+
+.repl-fab {
+  position: fixed;
+  bottom: 16px;
+  left: 16px;
+  z-index: 100;
 }
 
 .drawer-content {

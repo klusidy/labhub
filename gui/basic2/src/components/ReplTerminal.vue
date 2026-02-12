@@ -1,15 +1,16 @@
 <template>
   <div class="repl-terminal">
     <!-- Header -->
-    <div class="terminal-header q-pa-sm bg-grey-9 text-white">
+    <div class="terminal-header q-pa-sm bg-blue-grey-8 text-white">
       <div class="row items-center justify-between">
-        <div class="row items-center">
-          <q-icon name="terminal" size="sm" class="q-mr-xs" />
-          <span class="text-subtitle2">Python REPL</span>
+        <div class="row items-center q-gutter-xs">
+          <q-icon name="terminal" size="sm" />
+          <span class="text-subtitle2 q-mr-sm">Python REPL</span>
           <q-badge
-            :color="store.connected ? 'positive' : 'grey'"
-            :label="store.connected ? 'Connected' : 'Disconnected'"
-            class="q-ml-sm"
+            :color="store.connected ? 'positive' : store.connecting ? 'warning' : 'grey'"
+            :label="
+              store.connecting ? 'Connecting...' : store.connected ? 'Connected' : 'Disconnected'
+            "
           />
         </div>
         <div class="row q-gutter-xs">
@@ -17,9 +18,20 @@
             flat
             dense
             size="sm"
-            icon="clear"
+            icon="restart_alt"
+            @click="restartSession"
+            :loading="restarting"
+          >
+            <q-tooltip>Restart session</q-tooltip>
+          </q-btn>
+
+          <q-btn
+            flat
+            dense
+            size="sm"
+            icon="delete_sweep"
             @click="store.clearOutput"
-            :disable="!store.connected"
+            :disable="store.output.length === 0"
           >
             <q-tooltip>Clear output</q-tooltip>
           </q-btn>
@@ -34,15 +46,9 @@
           >
             <q-tooltip>Interrupt (Ctrl+C)</q-tooltip>
           </q-btn>
-          <q-btn
-            flat
-            dense
-            size="sm"
-            :icon="store.connected ? 'link_off' : 'link'"
-            @click="toggleConnection"
-            :loading="store.connecting"
-          >
-            <q-tooltip>{{ store.connected ? 'Disconnect' : 'Connect' }}</q-tooltip>
+
+          <q-btn flat dense size="sm" icon="close" @click="emit('close')">
+            <q-tooltip>Hide console</q-tooltip>
           </q-btn>
         </div>
       </div>
@@ -59,7 +65,7 @@
         >
           {{ line.data }}
         </div>
-        <div v-if="!store.connected && !store.connecting" class="text-grey-6 q-pa-md">
+        <div v-if="!store.connected && !store.connecting" class="text-blue-grey-9 q-pa-md">
           Not connected. Click the connect button to start a REPL session.
         </div>
         <div v-if="store.connecting" class="text-grey-6 q-pa-md">
@@ -87,7 +93,7 @@
           flat
           dense
           icon="send"
-          color="primary"
+          color="white"
           @click="executeCommand"
           :disable="!store.connected || !command.trim()"
         >
@@ -99,11 +105,22 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, nextTick } from 'vue';
+import { ref, watch, nextTick, onMounted } from 'vue';
 import { useReplStore } from 'stores/repl';
 import { QScrollArea } from 'quasar';
 
+const emit = defineEmits<{ close: [] }>();
+
 const store = useReplStore();
+
+const restarting = ref(false);
+
+// Auto-connect when console is opened
+onMounted(() => {
+  if (!store.connected && !store.connecting) {
+    void store.connect();
+  }
+});
 const scrollArea = ref<QScrollArea>();
 const command = ref('');
 const commandHistory = ref<string[]>([]);
@@ -118,7 +135,7 @@ watch(
       const scrollTarget = scrollArea.value.getScrollTarget();
       scrollTarget.scrollTop = scrollTarget.scrollHeight;
     }
-  }
+  },
 );
 
 // Execute command
@@ -189,12 +206,17 @@ function handleInterrupt() {
   }
 }
 
-// Toggle connection
-async function toggleConnection() {
-  if (store.connected) {
+// Restart session (disconnect, clear, reconnect)
+async function restartSession() {
+  restarting.value = true;
+  try {
     await store.disconnect();
-  } else {
+    store.clearOutput();
     await store.connect();
+  } catch (err) {
+    console.error('Failed to restart session:', err);
+  } finally {
+    restarting.value = false;
   }
 }
 </script>
