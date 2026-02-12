@@ -36,7 +36,7 @@
       >
         <template #default-header="prop">
           <div
-            class="row items-center tree-node"
+            class="row items-center tree-node full-width"
             :class="{ 'selected-node': prop.node.id === selectedNode }"
           >
             <q-icon
@@ -46,7 +46,16 @@
               size="xs"
               class="q-mr-xs"
             />
-            <span class="tree-label">{{ prop.node.label }}</span>
+            <span class="tree-label col">{{ prop.node.label }}</span>
+            <!-- Context menu for device nodes -->
+            <q-menu v-if="prop.node.nodeType === 'device'" context-menu>
+              <q-list dense style="min-width: 150px">
+                <q-item clickable v-close-popup @click="onDisconnect(prop.node.deviceId)">
+                  <q-item-section avatar><q-icon name="link_off" size="xs" color="orange" /></q-item-section>
+                  <q-item-section>Disconnect</q-item-section>
+                </q-item>
+              </q-list>
+            </q-menu>
           </div>
         </template>
       </q-tree>
@@ -68,9 +77,11 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue';
+import { useQuasar } from 'quasar';
 import { useDevicesStore, type TreeNode } from 'stores/devices';
 import { useMacrosStore } from 'stores/macros';
 
+const $q = useQuasar();
 const store = useDevicesStore();
 const macrosStore = useMacrosStore();
 const treeRef = ref();
@@ -106,6 +117,19 @@ function expandAll() {
 
 function collapseAll() {
   treeRef.value?.collapseAll();
+}
+
+function onDisconnect(deviceId: string) {
+  store.disconnectDevice(deviceId)
+    .then(() => {
+      $q.notify({ type: 'positive', message: `Device '${deviceId}' disconnected` });
+    })
+    .catch((e: unknown) => {
+      $q.notify({
+        type: 'negative',
+        message: `Failed to disconnect: ${e instanceof Error ? e.message : String(e)}`,
+      });
+    });
 }
 </script>
 

@@ -226,6 +226,29 @@ export const useDevicesStore = defineStore('devices', () => {
     return api.runCommand(deviceId, cmdName, args);
   }
 
+  async function disconnectDevice(deviceId: string) {
+    await api.disconnectDevice(deviceId);
+    // Remove from local state immediately; WebSocket will confirm
+    devices.value = devices.value.filter((d) => d.id !== deviceId);
+    specs.value.delete(deviceId);
+  }
+
+  async function connectDevice(deviceId: string) {
+    const result = await api.connectDevice(deviceId);
+    // Refresh device list from response
+    if (result.devices) {
+      devices.value = result.devices;
+      // Load spec for newly connected device
+      for (const d of result.devices) {
+        if (!specs.value.has(d.id)) {
+          void api.getDeviceSpec(d.id).then((spec) => {
+            specs.value.set(d.id, spec);
+          });
+        }
+      }
+    }
+  }
+
   function selectNode(nodeId: string | null) {
     selectedNodeId.value = nodeId;
   }
@@ -343,6 +366,8 @@ export const useDevicesStore = defineStore('devices', () => {
     loadDevices,
     updateProperty,
     runCommand,
+    disconnectDevice,
+    connectDevice,
     selectNode,
     getDeviceSpec,
     getPropertySpec,

@@ -131,6 +131,23 @@ export async function getFrame(id: string, source: string): Promise<unknown> {
   return r.json();
 }
 
+// Admin API functions
+export async function disconnectDevice(id: string): Promise<{ status: string; devices: DeviceState[] }> {
+  const r = await fetch(`${API_BASE}/admin/device/${encodeURIComponent(id)}/disconnect`, {
+    method: 'POST',
+  });
+  if (!r.ok) throw new Error(`Failed to disconnect device: ${r.status}`);
+  return r.json();
+}
+
+export async function connectDevice(id: string): Promise<{ status: string; devices: DeviceState[] }> {
+  const r = await fetch(`${API_BASE}/admin/device/${encodeURIComponent(id)}/connect`, {
+    method: 'POST',
+  });
+  if (!r.ok) throw new Error(`Failed to connect device: ${r.status}`);
+  return r.json();
+}
+
 // WebSocket functions
 export function openEventsWebSocket(ids: string[] = [], rate?: number): WebSocket {
   const qs = new URLSearchParams();

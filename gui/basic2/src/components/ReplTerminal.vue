@@ -47,7 +47,7 @@
             <q-tooltip>Interrupt (Ctrl+C)</q-tooltip>
           </q-btn>
 
-          <q-btn flat dense size="sm" icon="close" @click="emit('close')">
+          <q-btn flat dense size="sm" icon="minimize" @click="emit('close')">
             <q-tooltip>Hide console</q-tooltip>
           </q-btn>
         </div>
