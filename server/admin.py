@@ -71,11 +71,11 @@ async def reload_all(manager=Depends(get_manager)):
         await manager.stop_polling()
         await manager.remove_all()
 
-        # Reinitialize devices from config
+        # Reinitialize devices from config (respects should_connect)
         cfg = load_config()
         await manager.initialize_devices(cfg)
 
-        await manager.start_polling(500)  # TODO: Make polling interval configurable
+        await manager.start_polling()
         logger.info("Reload complete")
 
         devices = [d.model_dump() for d in await manager.list_devices()]
@@ -146,6 +146,126 @@ async def reload_device(dev_id: str, manager=Depends(get_manager)):
     except Exception as e:
         logger.error(f"Failed to reload device '{dev_id}': {e}", exc_info=True)
         raise HTTPException(500, f"Error reloading device: {str(e)}")
+
+
+def _set_should_connect(dev_id: str, should_connect: bool) -> None:
+    """Update should_connect for a device in the config file."""
+    config_path = get_config_path()
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        parsed = yaml.safe_load(f) or {}
+
+    devices = parsed.get("devices", [])
+    for device in devices:
+        if device.get("id") == dev_id:
+            device["should_connect"] = should_connect
+            break
+
+    temp_path = config_path + ".tmp"
+    with open(temp_path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(parsed, f, default_flow_style=False, sort_keys=False)
+
+    Path(temp_path).replace(config_path)
+    logger.info(f"Config updated: {dev_id} should_connect={should_connect}")
+
+
+@router.post("/device/{dev_id}/connect")
+async def connect_device(
+    dev_id: str,
+    manager=Depends(get_manager),
+    monitor=Depends(get_profile_monitor),
+):
+    """
+    Connect a device (set should_connect=true, add to manager, apply profile).
+
+    Args:
+        dev_id: Device identifier
+
+    Returns:
+        Dict with status and device states
+
+    Raises:
+        HTTPException(404): Device not found in config
+        HTTPException(409): Device already connected
+        HTTPException(500): Connection error
+    """
+    logger.info(f"Connecting device: {dev_id}")
+
+    if dev_id in manager.devices:
+        raise HTTPException(409, f"Device '{dev_id}' is already connected")
+
+    try:
+        # Update config file
+        _set_should_connect(dev_id, True)
+
+        # Find device in config and connect
+        cfg = load_config()
+        device_found = False
+        for d in cfg.devices:
+            if d.id == dev_id:
+                await manager.add_device(d.id, d.driver, d.options)
+                await manager.start_polling_device(d.id)
+                device_found = True
+                break
+
+        if not device_found:
+            raise HTTPException(404, f"Device '{dev_id}' not found in config")
+
+        # Apply profile (restore write-policy properties)
+        if monitor:
+            try:
+                await monitor.apply_profile_to_device(dev_id)
+            except Exception as e:
+                logger.warning(f"Failed to apply profile to '{dev_id}': {e}")
+
+        logger.info(f"Device '{dev_id}' connected successfully")
+        devices = [d.model_dump() for d in await manager.list_devices()]
+        return {"status": "ok", "devices": devices}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to connect device '{dev_id}': {e}", exc_info=True)
+        raise HTTPException(500, f"Error connecting device: {str(e)}")
+
+
+@router.post("/device/{dev_id}/disconnect")
+async def disconnect_device(dev_id: str, manager=Depends(get_manager)):
+    """
+    Disconnect a device (stop polling, remove from manager, set should_connect=false).
+
+    Args:
+        dev_id: Device identifier
+
+    Returns:
+        Dict with status
+
+    Raises:
+        HTTPException(404): Device not running
+        HTTPException(500): Disconnection error
+    """
+    logger.info(f"Disconnecting device: {dev_id}")
+
+    if dev_id not in manager.devices:
+        raise HTTPException(404, f"Device '{dev_id}' is not currently connected")
+
+    try:
+        # Stop polling and disconnect
+        await manager.stop_polling_device(dev_id)
+        await manager.remove_device(dev_id)
+
+        # Update config file
+        _set_should_connect(dev_id, False)
+
+        logger.info(f"Device '{dev_id}' disconnected successfully")
+        devices = [d.model_dump() for d in await manager.list_devices()]
+        return {"status": "ok", "devices": devices}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to disconnect device '{dev_id}': {e}", exc_info=True)
+        raise HTTPException(500, f"Error disconnecting device: {str(e)}")
 
 
 @router.get("/loglevel")
@@ -855,15 +975,21 @@ async def soft_reload(manager=Depends(get_manager)):
         running_devices = set(manager.devices.keys())
         config_ids = set(config_devices.keys())
 
+        # Separate devices that should connect from those that shouldn't
+        should_connect_ids = {d.id for d in cfg.devices if d.should_connect}
+        should_skip_ids = {d.id for d in cfg.devices if not d.should_connect}
+
         added = []
         removed = []
         restarted = []
         unchanged = []
+        skipped = []
 
-        # Remove devices not in config
-        to_remove = running_devices - config_ids
+        # Remove devices not in config OR with should_connect=false
+        to_remove = (running_devices - config_ids) | (running_devices & should_skip_ids)
         for dev_id in to_remove:
-            logger.info(f"Soft-reload: removing '{dev_id}' (not in config)")
+            reason = "not in config" if dev_id not in config_ids else "should_connect=false"
+            logger.info(f"Soft-reload: removing '{dev_id}' ({reason})")
             try:
                 await manager.stop_polling_device(dev_id)
                 await manager.remove_device(dev_id)
@@ -871,8 +997,14 @@ async def soft_reload(manager=Depends(get_manager)):
             except Exception as e:
                 logger.error(f"Failed to remove device '{dev_id}': {e}")
 
-        # Add new devices or restart changed ones
+        # Add new devices or restart changed ones (only those with should_connect=true)
         for dev_id, dev_cfg in config_devices.items():
+            if not dev_cfg.should_connect:
+                if dev_id not in running_devices:
+                    skipped.append(dev_id)
+                    logger.info(f"Soft-reload: skipping '{dev_id}' (should_connect=false)")
+                continue
+
             if dev_id not in running_devices:
                 # New device - add it
                 logger.info(f"Soft-reload: adding '{dev_id}'")
@@ -903,7 +1035,8 @@ async def soft_reload(manager=Depends(get_manager)):
 
         logger.info(
             f"Soft-reload complete: added={len(added)}, removed={len(removed)}, "
-            f"restarted={len(restarted)}, unchanged={len(unchanged)}"
+            f"restarted={len(restarted)}, unchanged={len(unchanged)}, "
+            f"skipped={len(skipped)}"
         )
 
         devices = [d.model_dump() for d in await manager.list_devices()]
@@ -913,6 +1046,7 @@ async def soft_reload(manager=Depends(get_manager)):
             "removed": removed,
             "restarted": restarted,
             "unchanged": unchanged,
+            "skipped": skipped,
             "devices": devices,
         }
 

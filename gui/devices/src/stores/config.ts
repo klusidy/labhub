@@ -156,6 +156,37 @@ export const useConfigStore = defineStore('config', () => {
     }
   }
 
+  async function connectDevice(devId: string) {
+    loading.value = true;
+    try {
+      await api.connectDevice(devId);
+      // Update local should_connect
+      const device = devices.value.find((d) => d.id === devId);
+      if (device) device.should_connect = true;
+      await loadDeviceStates();
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function disconnectDevice(devId: string) {
+    loading.value = true;
+    try {
+      await api.disconnectDevice(devId);
+      // Update local should_connect
+      const device = devices.value.find((d) => d.id === devId);
+      if (device) device.should_connect = false;
+      await loadDeviceStates();
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  function isDeviceConnected(devId: string): boolean {
+    const state = deviceStates.value.get(devId);
+    return state?.status === 'connected' || state?.status === 'unhealthy';
+  }
+
   async function softReloadAll() {
     loading.value = true;
     try {
@@ -233,6 +264,9 @@ export const useConfigStore = defineStore('config', () => {
     deleteDevice,
     addDevice,
     reloadDevice,
+    connectDevice,
+    disconnectDevice,
+    isDeviceConnected,
     softReloadAll,
     saveAllDevices,
     downloadConfigFile,

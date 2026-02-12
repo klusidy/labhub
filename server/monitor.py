@@ -364,6 +364,64 @@ class ProfileMonitor:
         # Force immediate save to persist change
         await self._save_profile()
 
+    async def apply_profile_to_device(self, dev_id: str) -> None:
+        """
+        Apply profile (write-policy properties) to a single device.
+
+        Used when a device is connected mid-session to restore its
+        last-known property values from the profile.
+
+        Args:
+            dev_id: Device identifier
+        """
+        dev = self.manager.devices.get(dev_id)
+        if not dev:
+            logger.warning(f"Cannot apply profile: device '{dev_id}' not in manager")
+            return
+
+        # Load current profile from file for stale values
+        try:
+            profile = load_profile(self.profile_path)
+        except Exception as e:
+            logger.warning(f"Failed to load profile for device '{dev_id}': {e}")
+            return
+
+        # Find this device's profile entry
+        dev_profile = None
+        for dp in profile.devices:
+            if dp.id == dev_id:
+                dev_profile = dp
+                break
+
+        if not dev_profile:
+            logger.info(f"No profile entry for device '{dev_id}', skipping profile apply")
+            return
+
+        # Collect write-policy properties
+        write_properties = {}
+        for prop_name, prop_profile in dev_profile.properties.items():
+            if prop_profile.policy == "write":
+                write_properties[prop_name] = prop_profile.value
+
+        if write_properties:
+            try:
+                await self.manager.apply_properties(dev_id, write_properties)
+                logger.info(
+                    f"Applied {len(write_properties)} write-policy properties "
+                    f"to '{dev_id}' from profile"
+                )
+            except Exception as e:
+                logger.error(
+                    f"Failed to apply profile properties to '{dev_id}': {e}",
+                    exc_info=True,
+                )
+
+        # Restore policies for this device
+        dev_policies = {}
+        for prop_name, prop_profile in dev_profile.properties.items():
+            dev_policies[prop_name] = prop_profile.policy
+        self._policies[dev_id] = dev_policies
+
     async def force_save(self) -> None:
         """
         Force immediate profile save.

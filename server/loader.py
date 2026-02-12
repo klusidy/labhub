@@ -27,6 +27,7 @@ class DeviceCfg:
     options: Dict[
         str, Any
     ]  # Full dict from config.yaml for that device (incl. id and driver)
+    should_connect: bool = True  # Whether to connect on startup (default True)
 
 
 @dataclass
@@ -104,7 +105,12 @@ def load_config(config_path: str | None = None) -> HubCfg:
         if "id" not in d or "driver" not in d:
             logger.warning(f"Skipping device with missing 'id' or 'driver': {d}")
             continue
-        devices.append(DeviceCfg(id=d["id"], driver=d["driver"], options=d))
+        devices.append(DeviceCfg(
+            id=d["id"],
+            driver=d["driver"],
+            options=d,
+            should_connect=d.get("should_connect", True),
+        ))
 
     logger.info(f"Loaded {len(devices)} device(s) from config")
 

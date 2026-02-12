@@ -1,6 +1,7 @@
 devices:
 - id: example_device_01
   driver: example.example_device
+  should_connect: true
 - id: picoscope
   driver: pico_technology.ps5000a
   resolution: 14

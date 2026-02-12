@@ -88,19 +88,30 @@
         @click="$emit('save', localDevice.id)"
       />
       <q-btn
-        color="secondary"
-        icon="refresh"
-        label="Reload"
-        :loading="reloading"
-        @click="$emit('reload', localDevice.id)"
+        v-if="isConnected"
+        color="orange"
+        icon="link_off"
+        label="Disconnect"
+        :loading="toggling"
+        @click="$emit('disconnect', localDevice.id)"
       >
-        <q-tooltip>Save config and reload device</q-tooltip>
+        <q-tooltip>Disconnect device (keeps config)</q-tooltip>
+      </q-btn>
+      <q-btn
+        v-else
+        color="positive"
+        icon="link"
+        label="Connect"
+        :loading="toggling"
+        @click="$emit('connect', localDevice.id)"
+      >
+        <q-tooltip>Connect device</q-tooltip>
       </q-btn>
       <q-space />
       <q-btn
         color="negative"
         icon="delete"
-        label="Delete"
+        label="Remove"
         @click="$emit('delete', localDevice.id)"
       />
     </div>
@@ -130,12 +141,18 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'update', config: DeviceConfig): void;
   (e: 'save', devId: string): void;
-  (e: 'reload', devId: string): void;
+  (e: 'connect', devId: string): void;
+  (e: 'disconnect', devId: string): void;
   (e: 'delete', devId: string): void;
 }>();
 
 const saving = ref(false);
-const reloading = ref(false);
+const toggling = ref(false);
+
+const isConnected = computed(() => {
+  const status = props.deviceState?.status;
+  return status === 'connected' || status === 'unhealthy';
+});
 const yamlError = ref<string | null>(null);
 
 // Local copy of device for editing
@@ -190,7 +207,7 @@ const statusIcon = computed(() => {
 
 function deviceToYaml(device: DeviceConfig): string {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { id, driver, ...options } = device;
+  const { id, driver, should_connect, ...options } = device;
   if (Object.keys(options).length === 0) return '';
   try {
     return yaml.dump(options, { indent: 2, lineWidth: -1 });

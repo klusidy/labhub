@@ -150,6 +150,32 @@ export async function reloadDevice(
 }
 
 /**
+ * Connect a device (set should_connect=true, start device)
+ */
+export async function connectDevice(
+  devId: string
+): Promise<{ status: string; devices: DeviceState[] }> {
+  const r = await fetch(`${API_BASE}/admin/device/${devId}/connect`, {
+    method: 'POST',
+  });
+  if (!r.ok) throw new Error(`Failed to connect device: ${r.status}`);
+  return r.json();
+}
+
+/**
+ * Disconnect a device (stop device, set should_connect=false)
+ */
+export async function disconnectDevice(
+  devId: string
+): Promise<{ status: string; devices: DeviceState[] }> {
+  const r = await fetch(`${API_BASE}/admin/device/${devId}/disconnect`, {
+    method: 'POST',
+  });
+  if (!r.ok) throw new Error(`Failed to disconnect device: ${r.status}`);
+  return r.json();
+}
+
+/**
  * Download config as YAML file
  */
 export function downloadConfig(raw: string, filename = 'config.yaml'): void {

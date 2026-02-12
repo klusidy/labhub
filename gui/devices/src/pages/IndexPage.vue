@@ -65,7 +65,8 @@
           :drivers="store.drivers"
           @update="onDeviceUpdate"
           @save="onSaveDevice"
-          @reload="onReloadDevice"
+          @connect="onConnectDevice"
+          @disconnect="onDisconnectDevice"
           @delete="onDeleteDevice"
         />
       </template>
@@ -330,33 +331,45 @@ async function onSaveDevice(devId: string) {
   }
 }
 
-async function onReloadDevice(devId: string) {
+async function onConnectDevice(devId: string) {
   try {
-    await store.reloadDevice(devId);
-    $q.notify({ type: 'positive', message: `Device '${devId}' reloaded` });
+    await store.connectDevice(devId);
+    $q.notify({ type: 'positive', message: `Device '${devId}' connected` });
   } catch (e) {
     $q.notify({
       type: 'negative',
-      message: `Failed to reload: ${e instanceof Error ? e.message : String(e)}`,
+      message: `Failed to connect: ${e instanceof Error ? e.message : String(e)}`,
+    });
+  }
+}
+
+async function onDisconnectDevice(devId: string) {
+  try {
+    await store.disconnectDevice(devId);
+    $q.notify({ type: 'positive', message: `Device '${devId}' disconnected` });
+  } catch (e) {
+    $q.notify({
+      type: 'negative',
+      message: `Failed to disconnect: ${e instanceof Error ? e.message : String(e)}`,
     });
   }
 }
 
 function onDeleteDevice(devId: string) {
   $q.dialog({
-    title: 'Delete Device',
-    message: `Are you sure you want to delete '${devId}'?`,
+    title: 'Remove Device',
+    message: `Are you sure you want to remove '${devId}' from the configuration?`,
     cancel: true,
     persistent: true,
   }).onOk(() => {
     store.deleteDevice(devId)
       .then(() => {
-        $q.notify({ type: 'positive', message: `Device '${devId}' deleted` });
+        $q.notify({ type: 'positive', message: `Device '${devId}' removed` });
       })
       .catch((e: unknown) => {
         $q.notify({
           type: 'negative',
-          message: `Failed to delete: ${e instanceof Error ? e.message : String(e)}`,
+          message: `Failed to remove: ${e instanceof Error ? e.message : String(e)}`,
         });
       });
   });

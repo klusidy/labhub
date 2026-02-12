@@ -69,11 +69,21 @@ class DeviceManager:
         Loads config.yaml, creates devices in parallel, and handles errors gracefully.
         """
 
-        logger.info(f"Initializing {len(cfg.devices)} device(s)...")
+        # Filter to devices that should connect
+        to_connect = [d for d in cfg.devices if d.should_connect]
+        skipped = [d for d in cfg.devices if not d.should_connect]
+
+        for d in skipped:
+            logger.info(f"  - Skipping device '{d.id}' (should_connect=false)")
+
+        logger.info(
+            f"Initializing {len(to_connect)} device(s) "
+            f"({len(skipped)} skipped with should_connect=false)..."
+        )
 
         # Create all devices in parallel
         tasks = []
-        for d in cfg.devices:
+        for d in to_connect:
             tasks.append(self.add_device(d.id, d.driver, d.options))
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
