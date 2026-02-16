@@ -81,6 +81,11 @@
           <q-tooltip>{{ replOpen ? 'Hide' : 'Show' }} Python REPL</q-tooltip>
         </q-btn>
 
+        <!-- Server Settings button -->
+        <q-btn flat icon="settings" @click="showSettings = true">
+          <q-tooltip>Server Settings</q-tooltip>
+        </q-btn>
+
         <!-- Help button -->
         <q-btn flat icon="help_outline" @click="showHelp = true">
           <q-tooltip>Help</q-tooltip>
@@ -138,6 +143,60 @@
         <q-tooltip>Open Python REPL</q-tooltip>
       </q-btn>
     </q-page-sticky>
+
+    <!-- Settings Dialog -->
+    <q-dialog v-model="showSettings">
+      <q-card style="min-width: 500px; max-width: 700px">
+        <q-card-section class="row items-center q-pb-none">
+          <div>
+            <div class="text-h6">Server Settings</div>
+            <div v-if="configStore.configPath" class="text-caption text-grey-6">
+              {{ configStore.configPath }}
+            </div>
+          </div>
+          <q-space />
+          <q-btn icon="close" flat round dense v-close-popup />
+        </q-card-section>
+
+        <q-card-section>
+          <div class="text-subtitle2 q-mb-xs">Additional Config (YAML)</div>
+          <div class="text-caption text-grey-7 q-mb-sm">
+            Extra configuration (e.g., InfluxDB settings)
+          </div>
+          <q-input
+            v-model="settingsYaml"
+            type="textarea"
+            outlined
+            dense
+            :rows="12"
+            class="settings-textarea"
+            placeholder="# Example:
+influx:
+  enabled: true
+  url: http://localhost:8086
+  token: your-token
+  org: your-org
+  bucket: labhub"
+            :error="!!settingsYamlError"
+            :error-message="settingsYamlError ?? undefined"
+            @update:model-value="onSettingsYamlChange"
+          />
+        </q-card-section>
+
+        <q-card-actions align="right">
+          <q-btn flat label="Cancel" v-close-popup />
+          <q-btn
+            unelevated
+            color="primary"
+            label="Save"
+            icon="save"
+            :disable="!!settingsYamlError"
+            :loading="configStore.loading"
+            @click="saveSettings"
+          />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
 
     <!-- Help Dialog -->
     <q-dialog v-model="showHelp">
@@ -218,19 +277,27 @@
 
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted } from 'vue';
+import { useQuasar } from 'quasar';
+import yaml from 'js-yaml';
 import { useDevicesStore } from 'stores/devices';
 import { useMacrosStore } from 'stores/macros';
+import { useConfigStore } from 'stores/config';
 import DeviceTree from 'components/DeviceTree.vue';
 import MacroTree from 'components/MacroTree.vue';
 import WorkspacePanel from 'components/WorkspacePanel.vue';
 import ReplTerminal from 'components/ReplTerminal.vue';
 
+const $q = useQuasar();
 const store = useDevicesStore();
 const macrosStore = useMacrosStore();
+const configStore = useConfigStore();
 
 const leftDrawerOpen = ref(false);
 const rightDrawerOpen = ref(false);
 const showHelp = ref(false);
+const showSettings = ref(false);
+const settingsYaml = ref('');
+const settingsYamlError = ref<string | null>(null);
 const replOpen = ref(localStorage.getItem('labhub_repl_open') === 'true');
 
 watch(replOpen, (val) => {
@@ -277,10 +344,64 @@ function onSnapshot() {
   }
 }
 
+function influxToYaml(influx: Record<string, unknown> | undefined): string {
+  if (!influx || Object.keys(influx).length === 0) return '';
+  try {
+    return yaml.dump({ influx }, { indent: 2, lineWidth: -1 });
+  } catch {
+    return '';
+  }
+}
+
+function yamlToInflux(yamlStr: string): Record<string, unknown> | undefined {
+  if (!yamlStr.trim()) return undefined;
+  const parsed = yaml.load(yamlStr) as Record<string, unknown> | null;
+  if (!parsed) return undefined;
+  if ('influx' in parsed) {
+    return parsed.influx as Record<string, unknown>;
+  }
+  return parsed;
+}
+
+function onSettingsYamlChange() {
+  try {
+    yamlToInflux(settingsYaml.value);
+    settingsYamlError.value = null;
+  } catch (e) {
+    settingsYamlError.value = e instanceof Error ? e.message : 'Invalid YAML';
+  }
+}
+
+async function saveSettings() {
+  try {
+    const parsed = yamlToInflux(settingsYaml.value);
+    configStore.updateAdditionalConfig(parsed);
+    await configStore.saveAdditionalConfig();
+    showSettings.value = false;
+    $q.notify({ type: 'positive', message: 'Settings saved' });
+  } catch (e: unknown) {
+    $q.notify({
+      type: 'negative',
+      message: `Failed to save: ${e instanceof Error ? e.message : String(e)}`,
+    });
+  }
+}
+
+watch(showSettings, (val) => {
+  if (val) {
+    settingsYaml.value = influxToYaml(configStore.influx);
+    settingsYamlError.value = null;
+  }
+});
+
 onMounted(async () => {
-  await store.loadDevices();
+  await Promise.all([
+    store.loadDevices(),
+    configStore.loadConfig(),
+    configStore.loadDrivers(),
+    macrosStore.loadMacros(),
+  ]);
   store.startEventsListener();
-  await macrosStore.loadMacros();
 });
 
 onUnmounted(() => {
@@ -337,5 +458,10 @@ onUnmounted(() => {
   flex: 1;
   min-height: 0;
   overflow: hidden;
+}
+
+.settings-textarea :deep(textarea) {
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 13px;
 }
 </style>

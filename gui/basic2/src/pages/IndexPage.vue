@@ -108,8 +108,20 @@
         />
         <div>
           <div class="text-h5">{{ selectedDevice.id }}</div>
-          <div class="text-caption text-grey-6">{{ selectedDevice.kind }}</div>
+          <div class="text-caption text-grey-6">{{ selectedDevice.driver }}</div>
         </div>
+        <q-btn
+          flat
+          dense
+          round
+          size="sm"
+          icon="link_off"
+          color="orange"
+          class="q-ml-sm"
+          @click="onDisconnect(selectedDevice.id)"
+        >
+          <q-tooltip>Disconnect</q-tooltip>
+        </q-btn>
       </div>
 
       <div v-if="selectedDevice.doc" class="q-mb-md text-body2 text-grey-7">
@@ -120,6 +132,16 @@
       <DataSourcePanel v-if="hasDataSources" :device-id="selectedDevice.id" />
       <PropertyTable v-if="hasProperties" :device-id="selectedDevice.id" />
       <CommandPanel v-if="hasCommands" :device-id="selectedDevice.id" />
+    </div>
+
+    <!-- Disconnected device selected - show config panel -->
+    <div v-else-if="nodeType === 'device' && selectedDisconnectedDevice" class="q-pa-md">
+      <DeviceConfigPanel
+        :device-config="selectedDisconnectedDevice"
+        @save="onSaveDeviceConfig"
+        @connect="onConnectDevice"
+        @remove="onRemoveDevice"
+      />
     </div>
 
     <!-- Category selected (properties/commands/dataSources) -->
@@ -170,14 +192,18 @@ import { computed } from 'vue';
 import { useQuasar } from 'quasar';
 import { useDevicesStore } from 'stores/devices';
 import { useMacrosStore } from 'stores/macros';
+import { useConfigStore } from 'stores/config';
+import type { DeviceConfig } from '../api/admin';
 import PropertyTable from 'components/PropertyTable.vue';
 import CommandPanel from 'components/CommandPanel.vue';
 import DataSourcePanel from 'components/DataSourcePanel.vue';
 import MacroPanel from 'components/MacroPanel.vue';
+import DeviceConfigPanel from 'components/DeviceConfigPanel.vue';
 
 const $q = useQuasar();
 const store = useDevicesStore();
 const macrosStore = useMacrosStore();
+const configStore = useConfigStore();
 
 const selectedDevice = computed(() => store.selectedDevice);
 const selectedSpec = computed(() => store.selectedSpec);
@@ -188,6 +214,15 @@ const itemName = computed(() => store.selectedItemName);
 const hasProperties = computed(() => (selectedSpec.value?.properties?.length || 0) > 0);
 const hasCommands = computed(() => (selectedSpec.value?.commands?.length || 0) > 0);
 const hasDataSources = computed(() => (selectedSpec.value?.data_sources?.length || 0) > 0);
+
+// Disconnected device: selectedNodeId is set, but no connected device matches
+const selectedDisconnectedDevice = computed(() => {
+  if (!store.selectedNodeId) return null;
+  if (store.selectedDevice) return null; // it's a connected device
+  // Only bare device IDs (no ':' separator) are device nodes
+  if (store.selectedNodeId.includes(':')) return null;
+  return configStore.getConfigDevice(store.selectedNodeId);
+});
 
 const categoryTitle = computed(() => {
   switch (categoryType.value) {
@@ -251,6 +286,69 @@ async function saveFile() {
   } catch {
     $q.notify({ type: 'negative', message: 'Failed to save file' });
   }
+}
+
+function onDisconnect(devId: string) {
+  store
+    .disconnectDevice(devId)
+    .then(() => {
+      $q.notify({ type: 'positive', message: `Device '${devId}' disconnected` });
+    })
+    .catch((e: unknown) => {
+      $q.notify({
+        type: 'negative',
+        message: `Failed to disconnect: ${e instanceof Error ? e.message : String(e)}`,
+      });
+    });
+}
+
+async function onSaveDeviceConfig(devId: string, config: DeviceConfig) {
+  try {
+    configStore.updateDeviceLocally(devId, config);
+    await configStore.saveDevice(devId);
+    $q.notify({ type: 'positive', message: `Device '${devId}' config saved` });
+  } catch (e: unknown) {
+    $q.notify({
+      type: 'negative',
+      message: `Failed to save: ${e instanceof Error ? e.message : String(e)}`,
+    });
+  }
+}
+
+function onConnectDevice(devId: string) {
+  store
+    .connectDevice(devId)
+    .then(() => {
+      $q.notify({ type: 'positive', message: `Device '${devId}' connected` });
+    })
+    .catch((e: unknown) => {
+      $q.notify({
+        type: 'negative',
+        message: `Failed to connect: ${e instanceof Error ? e.message : String(e)}`,
+      });
+    });
+}
+
+function onRemoveDevice(devId: string) {
+  $q.dialog({
+    title: 'Remove Device',
+    message: `Are you sure you want to remove '${devId}' from the configuration?`,
+    cancel: true,
+    persistent: true,
+  }).onOk(() => {
+    configStore
+      .deleteDevice(devId)
+      .then(() => {
+        store.selectNode(null);
+        $q.notify({ type: 'positive', message: `Device '${devId}' removed` });
+      })
+      .catch((e: unknown) => {
+        $q.notify({
+          type: 'negative',
+          message: `Failed to remove: ${e instanceof Error ? e.message : String(e)}`,
+        });
+      });
+  });
 }
 </script>
 

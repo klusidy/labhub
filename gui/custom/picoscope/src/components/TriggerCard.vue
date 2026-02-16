@@ -25,7 +25,7 @@
           <q-btn-toggle
             v-model="trigger.channel"
             :options="
-              channelOptions.map((ch) => ({
+              channelOptions.map((ch: string) => ({
                 label: ch,
                 value: ch,
               }))

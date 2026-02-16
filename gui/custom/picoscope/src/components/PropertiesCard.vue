@@ -11,7 +11,7 @@
           <div class="col-6 col-sm-6">
             <q-input
               v-model="p.requested"
-              :ref="(comp) => (fieldEls[p.key] = (comp as any)?.$el ?? (comp as any) ?? null)"
+              :ref="refSetter(p.key)"
               :label="p.label"
               stack-label
               dense
@@ -38,11 +38,17 @@
 </template>
 
 <script setup lang="ts">
-  import { reactive, watch, nextTick, ref } from 'vue'
+  import { reactive, watch, ref } from 'vue'
   import { usePicoscopeStore } from 'stores/picoscope'
-  import type { QInput } from 'quasar/dist/types' // if you want typing
 
   const fieldEls = ref<Record<string, HTMLElement | null>>({})
+
+  function refSetter(key: string) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (comp: any) => {
+      fieldEls.value[key] = comp?.$el ?? comp ?? null
+    }
+  }
   const ps = usePicoscopeStore()
 
   function labelFromName(name: string): string {

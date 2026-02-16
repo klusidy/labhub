@@ -25,6 +25,7 @@ export interface TreeNode {
   nodeType: 'device' | 'category' | 'property' | 'command' | 'dataSource';
   deviceId: string;
   itemName?: string | undefined;
+  connected?: boolean | undefined;
 }
 
 export const useDevicesStore = defineStore('devices', () => {
@@ -119,6 +120,7 @@ export const useDevicesStore = defineStore('devices', () => {
         iconColor: getStatusColor(device.status),
         nodeType: 'device' as const,
         deviceId: device.id,
+        connected: true,
         children: children.length > 0 ? children : undefined,
       };
     });
@@ -310,7 +312,7 @@ export const useDevicesStore = defineStore('devices', () => {
           if (idx !== -1 && existing) {
             devices.value[idx] = {
               id: existing.id,
-              kind: existing.kind,
+              driver: existing.driver,
               state: msg.state as Record<string, unknown>,
               status: 'connected',
               ...(existing.doc !== undefined ? { doc: existing.doc } : {}),

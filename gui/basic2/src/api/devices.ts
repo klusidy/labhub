@@ -5,7 +5,7 @@ const API_BASE = '/api/v2';
 // Types
 export interface DeviceState {
   id: string;
-  kind: string;
+  driver: string;
   status: 'connected' | 'disconnected' | 'unhealthy';
   state: Record<string, unknown>;
   doc?: string;
