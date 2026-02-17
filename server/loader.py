@@ -6,8 +6,6 @@ This module handles:
 - Loading profile.yaml (device state snapshots)
 """
 
-import os
-import asyncio
 import logging
 from pathlib import Path
 from dataclasses import dataclass, field
@@ -57,24 +55,16 @@ class HubCfg:
 
 def get_config_path() -> str:
     """
-    Get the path to the active config file.
+    Get the path to the active device config file.
 
-    Priority:
-    1. LABHUB_CONFIG environment variable
-    2. Default: launcher/config_default.yaml
+    Resolution: ServerConfig.devices_path (set from server.yaml).
 
     Returns:
         Absolute path to config file
     """
-    env_cp = os.environ.get("LABHUB_CONFIG")
-    if env_cp and str(env_cp).strip():
-        return str(Path(env_cp).resolve())
+    from .server_config import get_server_config
 
-    # Default to launcher/config_default.yaml
-    default_path = (
-        Path(__file__).resolve().parents[1] / "launcher" / "config_default.yaml"
-    )
-    return str(default_path)
+    return str(get_server_config().devices_path)
 
 
 def load_config(config_path: str | None = None) -> HubCfg:
@@ -114,7 +104,7 @@ def load_config(config_path: str | None = None) -> HubCfg:
 
     logger.info(f"Loaded {len(devices)} device(s) from config")
 
-    # Parse InfluxDB configuration (optional)
+    # Parse InfluxDB configuration (legacy — authoritative source is server.yaml)
     influx_cfg: Optional[InfluxCfg] = None
     influx_raw = raw.get("influx")
     if influx_raw and isinstance(influx_raw, dict):
@@ -170,22 +160,14 @@ def get_profile_path() -> str:
     """
     Get the path to the active profile file.
 
-    Priority:
-    1. LABHUB_PROFILE environment variable
-    2. Default: launcher/profile_default.yaml
+    Resolution: ServerConfig.profile_path (set from server.yaml).
 
     Returns:
         Absolute path to profile file
     """
-    env_pp = os.environ.get("LABHUB_PROFILE")
-    if env_pp and str(env_pp).strip():
-        return str(Path(env_pp).resolve())
+    from .server_config import get_server_config
 
-    # Default to launcher/profile_default.yaml
-    default_path = (
-        Path(__file__).resolve().parents[1] / "launcher" / "profile_default.yaml"
-    )
-    return str(default_path)
+    return str(get_server_config().profile_path)
 
 
 def load_profile(profile_path: str | None = None) -> HubProfile:

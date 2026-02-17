@@ -23,16 +23,21 @@ from .schemas import (
 from .device_manager import DeviceManager
 from .events import EventBus
 from .utils import init_logging
-from .loader import get_config_path, load_config, get_profile_path
+from .server_config import load_server_config, set_server_config, get_server_config
+from .loader import load_config
 from .monitor import ProfileMonitor
 from .influx import InfluxWriter, InfluxStateMonitor
 from .macros import MacroManager
 from .repl_session import ReplSessionManager
 from . import admin
 
-# Initialize logging - reads LABHUB_LOG_LEVEL and LABHUB_LOG_FILE from environment
-init_logging(log_file=os.environ.get("LABHUB_LOG_FILE"))
-logger = logging.getLogger("labhub.main")  # Explicit name for proper hierarchy
+# Load server config (from LABHUB_SERVER_CONFIG env var, ./server.yaml, or defaults)
+server_cfg = load_server_config()
+set_server_config(server_cfg)
+
+# Initialize logging from server config
+init_logging(level=server_cfg.logging.level, log_file=server_cfg.logging.file)
+logger = logging.getLogger("labhub.main")
 
 
 @asynccontextmanager
@@ -43,35 +48,36 @@ async def lifespan(app: FastAPI):
     # --- Startup ---
     logger.info("LabHub server starting...")
 
-    # 1. Acquire config file lock (prevents multiple servers for same config)
-    config_path = os.path.abspath(get_config_path())
-    digest = hashlib.sha256(config_path.encode("utf-8")).hexdigest()[:16]
+    # 1. Acquire lock keyed on server.yaml path (prevents multiple servers)
+    server_config_path = str(server_cfg.config_file)
+    digest = hashlib.sha256(server_config_path.encode("utf-8")).hexdigest()[:16]
     lock_path = os.path.join(tempfile.gettempdir(), f"labhub_{digest}.lock")
     lock = FileLock(lock_path)
     try:
         lock.acquire(timeout=0.1)
-        logger.info(f"Acquired lock for config: {config_path}")
+        logger.info(f"Acquired lock for: {server_config_path}")
     except Timeout:
         logger.error(
-            f"Lock acquisition failed - another instance already running for config: {config_path}"
+            f"Lock acquisition failed - another instance already running for: {server_config_path}"
         )
         raise RuntimeError(
-            f"Another LabHub instance is already running for config: {config_path}"
+            f"Another LabHub instance is already running for: {server_config_path}"
         )
 
     # 2. Initialize devices from config
-    cfg = load_config()
+    cfg = load_config(str(server_cfg.devices_path))
     await manager.initialize_devices(cfg)
 
     # 3. Start property polling
     await manager.start_polling()
     logger.info("Device polling started")
 
-    # 4. Initialize InfluxDB integration (optional)
-    if cfg.influx and cfg.influx.enabled:
+    # 4. Initialize InfluxDB integration (from server.yaml)
+    influx_cfg = server_cfg.to_influx_cfg()
+    if influx_cfg.enabled:
         logger.info("Initializing InfluxDB integration...")
         try:
-            influx_writer = InfluxWriter(cfg.influx)
+            influx_writer = InfluxWriter(influx_cfg)
             await influx_writer.start()
 
             # Wire to manager for property/command hooks
@@ -79,7 +85,7 @@ async def lifespan(app: FastAPI):
 
             # Start state snapshot monitor
             influx_monitor = InfluxStateMonitor(
-                influx_writer, manager, cfg.influx.snapshot_interval
+                influx_writer, manager, influx_cfg.snapshot_interval
             )
             await influx_monitor.start()
 
@@ -92,7 +98,7 @@ async def lifespan(app: FastAPI):
     # 5. Initialize profile monitor (for live state backup)
     await asyncio.sleep(2.0)  # Allow polling to populate initial states
 
-    profile_path = get_profile_path()
+    profile_path = str(server_cfg.profile_path)
     await profile_monitor.load_profile(profile_path)
     await profile_monitor.start()
 
@@ -102,24 +108,19 @@ async def lifespan(app: FastAPI):
     admin.profile_monitor = profile_monitor
 
     # 6. Initialize macro manager (optional)
-    macros_path_str = os.environ.get("LABHUB_MACROS")
-    macros_path = None
-    if macros_path_str:
-        from pathlib import Path
-        macros_path = Path(macros_path_str)
+    macros_path = server_cfg.macros_path
+    if macros_path:
         macro_manager = MacroManager(macros_path)
         logger.info(f"Macro manager initialized (path={macros_path})")
     else:
         logger.info("Macro manager not configured")
 
     # 7. Initialize REPL session manager
-    python_path_str = os.environ.get("LABHUB_PYTHON_PATH")
-    python_path = Path(python_path_str) if python_path_str else None
-    startup_folder_str = os.environ.get("LABHUB_STARTUP_FOLDER")
-    startup_folder = Path(startup_folder_str) if startup_folder_str else None
     project_root = Path(__file__).parent.parent
-    repl_manager = ReplSessionManager(python_path, project_root, macros_path, startup_folder)
-    logger.info(f"REPL session manager initialized (startup_folder={startup_folder})")
+    repl_manager = ReplSessionManager(
+        server_cfg.python_path, project_root, macros_path, server_cfg.startup_folder_path
+    )
+    logger.info(f"REPL session manager initialized (startup_folder={server_cfg.startup_folder_path})")
 
     logger.info("LabHub server ready")
 
@@ -188,58 +189,41 @@ repl_manager: ReplSessionManager | None = None
 admin.manager = manager
 app.include_router(admin.router)
 
+
 # ---- Static files / GUI ----
-WEB_V1_DIST = Path(__file__).parent.parent / "gui" / "basic" / "dist"
-if WEB_V1_DIST.exists():
-    app.mount(
-        "/v1ui",
-        staticfiles.StaticFiles(directory=str(WEB_V1_DIST), html=True),
-        name="ui",
-    )
+_PROJECT_ROOT = Path(__file__).parent.parent
 
-WEB_V2_DIST = Path(__file__).parent.parent / "gui" / "basic2" / "dist" / "spa"
-if WEB_V2_DIST.exists():
-    app.mount(
-        "/ui", staticfiles.StaticFiles(directory=str(WEB_V2_DIST), html=True), name="ui"
-    )
+# Built-in GUIs (part of the product, always resolved relative to project root)
+_BUILTIN_GUIS = [
+    ("v1ui", "gui/basic/dist"),
+    ("ui",   "gui/basic2/dist/spa"),
+    ("devices", "gui/devices/dist/spa"),
+    ("profile", "gui/profile/dist/spa"),
+    ("macros",  "gui/macros/dist/spa"),
+]
 
-# todo - gui for picoscope should not be specified separately - not extensible
-GUI_PICOSCOPE_DIST = (
-    Path(__file__).parent.parent / "gui" / "custom" / "picoscope" / "dist" / "spa"
-)
-if GUI_PICOSCOPE_DIST.exists():
-    app.mount(
-        "/picoscope",
-        staticfiles.StaticFiles(directory=str(GUI_PICOSCOPE_DIST), html=True),
-        name="picoscope",
-    )
+for _route, _rel in _BUILTIN_GUIS:
+    _dist = _PROJECT_ROOT / _rel
+    if _dist.exists():
+        app.mount(
+            f"/{_route}",
+            staticfiles.StaticFiles(directory=str(_dist), html=True),
+            name=_route,
+        )
 
-# Admin/Config GUI
-GUI_DEVICES_DIST = Path(__file__).parent.parent / "gui" / "devices" / "dist" / "spa"
-if GUI_DEVICES_DIST.exists():
-    app.mount(
-        "/devices",
-        staticfiles.StaticFiles(directory=str(GUI_DEVICES_DIST), html=True),
-        name="devices",
-    )
+# Custom GUIs from server.yaml
+for _gui in server_cfg.custom_guis:
+    _dist = server_cfg.resolve_gui_dist(_gui)
+    if _dist.exists():
+        app.mount(
+            _gui.route,
+            staticfiles.StaticFiles(directory=str(_dist), html=True),
+            name=_gui.device_id,
+        )
+        logger.info(f"Custom GUI mounted: {_gui.route} -> {_dist}")
+    else:
+        logger.warning(f"Custom GUI dist not found: {_dist} (route: {_gui.route})")
 
-# Profile Admin GUI
-GUI_PROFILE_DIST = Path(__file__).parent.parent / "gui" / "profile" / "dist" / "spa"
-if GUI_PROFILE_DIST.exists():
-    app.mount(
-        "/profile",
-        staticfiles.StaticFiles(directory=str(GUI_PROFILE_DIST), html=True),
-        name="profile",
-    )
-
-# Macros GUI
-GUI_MACROS_DIST = Path(__file__).parent.parent / "gui" / "macros" / "dist" / "spa"
-if GUI_MACROS_DIST.exists():
-    app.mount(
-        "/macros",
-        staticfiles.StaticFiles(directory=str(GUI_MACROS_DIST), html=True),
-        name="macros",
-    )
 
 
 # ---- API ----

@@ -452,7 +452,7 @@ async def get_profile(monitor=Depends(get_profile_monitor)):
             - policies: Dict of device policies {dev_id: {prop_name: policy}}
 
     Notes:
-        - Profile path determined by LABHUB_PROFILE env var or default
+        - Profile path resolved from server.yaml
         - Useful for admin GUI to display profile tree
     """
     logger.debug("GET /api/v2/admin/profile")
@@ -637,9 +637,9 @@ class DeviceConfigUpdate(BaseModel):
 
 
 class ConfigUpdateRequest(BaseModel):
-    """Request model for updating the config file."""
+    """Request model for updating the device config file.
+    Note: influx config now lives in server.yaml, not here."""
     devices: List[Dict[str, Any]]
-    influx: Optional[Dict[str, Any]] = None
 
 
 @router.get("/config")
@@ -650,11 +650,11 @@ async def get_config():
     Returns:
         Dict with:
             - path: Path to current config file
-            - config: Parsed config content (devices and influx)
+            - config: Parsed config content (devices)
             - raw: Raw YAML content as string
 
     Notes:
-        - Config path determined by LABHUB_CONFIG env var or default
+        - Config path resolved from server.yaml
         - Useful for admin GUI to display and edit config
     """
     logger.debug("GET /api/v2/admin/config")
@@ -689,7 +689,7 @@ async def update_config(req: ConfigUpdateRequest):
     automatically reload devices - call /reload or /soft-reload after.
 
     Args:
-        req: ConfigUpdateRequest with devices list and optional influx config
+        req: ConfigUpdateRequest with devices list
 
     Returns:
         Dict with:
@@ -709,10 +709,8 @@ async def update_config(req: ConfigUpdateRequest):
     config_path = get_config_path()
 
     try:
-        # Build config dict
+        # Build config dict (influx now lives in server.yaml)
         config_data = {"devices": req.devices}
-        if req.influx:
-            config_data["influx"] = req.influx
 
         # Atomic write
         temp_path = config_path + ".tmp"

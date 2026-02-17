@@ -3,7 +3,23 @@ from pathlib import Path
 from typing import Optional
 import argparse
 import hashlib
-import yaml
+
+# Ensure project root is importable (for server.server_config)
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from server.server_config import (
+    ServerConfig,
+    ServerSection,
+    LoggingSection,
+    ScriptingSection,
+    InfluxSection,
+    CustomGuiEntry,
+    load_server_config,
+    save_server_config,
+    ENV_VAR,
+)
 
 from PySide6.QtWidgets import (
     QApplication,
@@ -21,6 +37,13 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QTabWidget,
     QWidget,
+    QCheckBox,
+    QSpinBox,
+    QDoubleSpinBox,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
+    QAbstractItemView,
 )
 
 from PySide6.QtGui import QIcon, QAction, QPixmap, QDesktopServices, QCursor
@@ -33,8 +56,7 @@ import logging
 
 logger = logging.getLogger("labhub.launcher")
 
-LABHUB_DIR = Path(__file__).resolve().parents[1]
-SETTINGS_FILE = Path(__file__).parent / "launcher_settings.yaml"
+LABHUB_DIR = _PROJECT_ROOT
 
 logger.debug(f"project_root is {LABHUB_DIR}")
 
@@ -43,26 +65,6 @@ icon_red_base64 = b"iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAACXBIWXMAAAT/
 
 
 LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
-
-
-def load_settings() -> dict:
-    """Load persisted settings from launcher_settings.yaml."""
-    if SETTINGS_FILE.exists():
-        try:
-            with open(SETTINGS_FILE, "r") as f:
-                return yaml.safe_load(f) or {}
-        except Exception as e:
-            logger.warning(f"Failed to load settings: {e}")
-    return {}
-
-
-def save_settings(settings: dict):
-    """Save settings to launcher_settings.yaml."""
-    try:
-        with open(SETTINGS_FILE, "w") as f:
-            yaml.dump(settings, f, default_flow_style=False)
-    except Exception as e:
-        logger.warning(f"Failed to save settings: {e}")
 
 
 class ConfigureDialog(QDialog):
@@ -246,6 +248,111 @@ class ConfigureDialog(QDialog):
         scripting_layout.addStretch()
         tabs.addTab(scripting_tab, "Scripting")
 
+        # ===== InfluxDB tab =====
+        influx_tab = QWidget()
+        influx_layout = QVBoxLayout(influx_tab)
+
+        # Enable checkbox
+        self.influx_enabled_cb = QCheckBox("Enable InfluxDB integration")
+        influx_layout.addWidget(self.influx_enabled_cb)
+
+        # Connection group
+        influx_conn_group = QGroupBox("Connection")
+        influx_conn_layout = QFormLayout(influx_conn_group)
+
+        self.influx_url_edit = QLineEdit()
+        self.influx_url_edit.setPlaceholderText("http://localhost:8086")
+        influx_conn_layout.addRow("URL:", self.influx_url_edit)
+
+        self.influx_token_edit = QLineEdit()
+        self.influx_token_edit.setEchoMode(QLineEdit.Password)
+        influx_conn_layout.addRow("Token:", self.influx_token_edit)
+
+        self.influx_org_edit = QLineEdit()
+        influx_conn_layout.addRow("Organization:", self.influx_org_edit)
+
+        self.influx_bucket_edit = QLineEdit()
+        influx_conn_layout.addRow("Bucket:", self.influx_bucket_edit)
+
+        influx_layout.addWidget(influx_conn_group)
+
+        # Executable group
+        influx_exe_group = QGroupBox("InfluxDB Executable (auto-start)")
+        influx_exe_layout = QVBoxLayout(influx_exe_group)
+
+        influx_exe_path_layout = QHBoxLayout()
+        self.influx_exe_edit = QLineEdit()
+        self.influx_exe_edit.setReadOnly(True)
+        self.influx_exe_edit.setPlaceholderText("Not configured (no auto-start)")
+        btn_influx_exe_browse = QPushButton("Browse...")
+        btn_influx_exe_browse.clicked.connect(self._browse_influx_exe)
+        btn_influx_exe_clear = QPushButton("Clear")
+        btn_influx_exe_clear.clicked.connect(lambda: self.influx_exe_edit.clear())
+        influx_exe_path_layout.addWidget(self.influx_exe_edit)
+        influx_exe_path_layout.addWidget(btn_influx_exe_browse)
+        influx_exe_path_layout.addWidget(btn_influx_exe_clear)
+        influx_exe_layout.addLayout(influx_exe_path_layout)
+
+        self.influx_stop_on_exit_cb = QCheckBox("Stop InfluxDB when launcher exits")
+        influx_exe_layout.addWidget(self.influx_stop_on_exit_cb)
+
+        influx_layout.addWidget(influx_exe_group)
+
+        # Tuning group
+        influx_tuning_group = QGroupBox("Tuning")
+        influx_tuning_layout = QFormLayout(influx_tuning_group)
+
+        self.influx_batch_size_spin = QSpinBox()
+        self.influx_batch_size_spin.setRange(1, 10000)
+        influx_tuning_layout.addRow("Batch size:", self.influx_batch_size_spin)
+
+        self.influx_flush_interval_spin = QSpinBox()
+        self.influx_flush_interval_spin.setRange(100, 60000)
+        self.influx_flush_interval_spin.setSuffix(" ms")
+        influx_tuning_layout.addRow("Flush interval:", self.influx_flush_interval_spin)
+
+        self.influx_max_retries_spin = QSpinBox()
+        self.influx_max_retries_spin.setRange(0, 20)
+        influx_tuning_layout.addRow("Max retries:", self.influx_max_retries_spin)
+
+        self.influx_snapshot_interval_spin = QDoubleSpinBox()
+        self.influx_snapshot_interval_spin.setRange(0.1, 3600.0)
+        self.influx_snapshot_interval_spin.setDecimals(1)
+        self.influx_snapshot_interval_spin.setSuffix(" s")
+        influx_tuning_layout.addRow("Snapshot interval:", self.influx_snapshot_interval_spin)
+
+        influx_layout.addWidget(influx_tuning_group)
+
+        influx_layout.addStretch()
+        tabs.addTab(influx_tab, "InfluxDB")
+
+        # ===== Custom GUIs tab =====
+        guis_tab = QWidget()
+        guis_layout = QVBoxLayout(guis_tab)
+
+        self.guis_table = QTableWidget(0, 3)
+        self.guis_table.setHorizontalHeaderLabels(["Device ID", "Route", "Dist Path"])
+        self.guis_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.guis_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.guis_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        guis_layout.addWidget(self.guis_table)
+
+        guis_btn_layout = QHBoxLayout()
+        btn_gui_add = QPushButton("Add")
+        btn_gui_add.clicked.connect(self._add_custom_gui)
+        btn_gui_remove = QPushButton("Remove")
+        btn_gui_remove.clicked.connect(self._remove_custom_gui)
+        btn_gui_browse_dist = QPushButton("Browse Dist...")
+        btn_gui_browse_dist.clicked.connect(self._browse_gui_dist)
+        guis_btn_layout.addWidget(btn_gui_add)
+        guis_btn_layout.addWidget(btn_gui_remove)
+        guis_btn_layout.addWidget(btn_gui_browse_dist)
+        guis_btn_layout.addStretch()
+        guis_layout.addLayout(guis_btn_layout)
+
+        guis_layout.addStretch()
+        tabs.addTab(guis_tab, "Custom GUIs")
+
         # Buttons
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
@@ -262,32 +369,47 @@ class ConfigureDialog(QDialog):
         layout.addLayout(btn_layout)
 
     def _load_current_values(self):
-        self.host_edit.setText(self.launcher.host)
-        self.port_edit.setText(str(self.launcher.port))
-        self.config_edit.setText(
-            str(self.launcher.config_path) if self.launcher.config_path else ""
-        )
-        self.profile_edit.setText(
-            str(self.launcher.profile_path) if self.launcher.profile_path else ""
-        )
-        self.macros_edit.setText(
-            str(self.launcher.macros_path) if self.launcher.macros_path else ""
-        )
-        self.python_edit.setText(
-            str(self.launcher.python_path) if self.launcher.python_path else ""
-        )
+        cfg = self.launcher.cfg
+        self.host_edit.setText(cfg.server.host)
+        self.port_edit.setText(str(cfg.server.port))
+        self.config_edit.setText(str(cfg.devices_path) if cfg.devices_path else "")
+        self.profile_edit.setText(str(cfg.profile_path) if cfg.profile_path else "")
+        self.macros_edit.setText(str(cfg.macros_path) if cfg.macros_path else "")
+        self.python_edit.setText(str(cfg.python_path) if cfg.python_path else "")
         self.startup_folder_edit.setText(
-            str(self.launcher.startup_folder) if self.launcher.startup_folder else ""
+            str(cfg.startup_folder_path) if cfg.startup_folder_path else ""
         )
 
-        if self.launcher.log_level and self.launcher.log_level in LOG_LEVELS:
-            self.log_level_combo.setCurrentText(self.launcher.log_level)
+        level = cfg.logging.level
+        if level and level in LOG_LEVELS:
+            self.log_level_combo.setCurrentText(level)
         else:
             self.log_level_combo.setCurrentText("INFO")
 
-        self.log_file_edit.setText(
-            str(self.launcher.log_file) if self.launcher.log_file else ""
-        )
+        self.log_file_edit.setText(cfg.logging.file or "")
+
+        # InfluxDB tab
+        influx = cfg.influx
+        self.influx_enabled_cb.setChecked(influx.enabled)
+        self.influx_url_edit.setText(influx.url)
+        self.influx_token_edit.setText(influx.token)
+        self.influx_org_edit.setText(influx.org)
+        self.influx_bucket_edit.setText(influx.bucket)
+        self.influx_exe_edit.setText(influx.exe_path or "")
+        self.influx_stop_on_exit_cb.setChecked(influx.stop_on_exit)
+        self.influx_batch_size_spin.setValue(influx.batch_size)
+        self.influx_flush_interval_spin.setValue(influx.flush_interval_ms)
+        self.influx_max_retries_spin.setValue(influx.max_retries)
+        self.influx_snapshot_interval_spin.setValue(influx.snapshot_interval)
+
+        # Custom GUIs tab
+        self.guis_table.setRowCount(0)
+        for gui in cfg.custom_guis:
+            row = self.guis_table.rowCount()
+            self.guis_table.insertRow(row)
+            self.guis_table.setItem(row, 0, QTableWidgetItem(gui.device_id))
+            self.guis_table.setItem(row, 1, QTableWidgetItem(gui.route))
+            self.guis_table.setItem(row, 2, QTableWidgetItem(gui.dist))
 
     def _browse_config(self):
         start_dir = (
@@ -368,7 +490,10 @@ class ConfigureDialog(QDialog):
             else str(LABHUB_DIR / ".venv" / "Scripts")
         )
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "Select Python Interpreter", start_dir, "Python Executable (python.exe);;All Files (*.*)"
+            self,
+            "Select Python Interpreter",
+            start_dir,
+            "Python Executable (python.exe);;All Files (*.*)",
         )
         if file_path:
             self.python_edit.setText(file_path)
@@ -391,7 +516,47 @@ class ConfigureDialog(QDialog):
 
     def _open_startup_folder(self):
         if self.startup_folder_edit.text():
-            QDesktopServices.openUrl(QUrl.fromLocalFile(self.startup_folder_edit.text()))
+            QDesktopServices.openUrl(
+                QUrl.fromLocalFile(self.startup_folder_edit.text())
+            )
+
+    def _browse_influx_exe(self):
+        start_dir = (
+            str(Path(self.influx_exe_edit.text()).parent)
+            if self.influx_exe_edit.text()
+            else str(LABHUB_DIR)
+        )
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Select influxd executable", start_dir,
+            "Executable (influxd.exe influxd);;All Files (*)",
+        )
+        if file_path:
+            self.influx_exe_edit.setText(file_path)
+
+    def _add_custom_gui(self):
+        row = self.guis_table.rowCount()
+        self.guis_table.insertRow(row)
+        self.guis_table.setItem(row, 0, QTableWidgetItem(""))
+        self.guis_table.setItem(row, 1, QTableWidgetItem("/"))
+        self.guis_table.setItem(row, 2, QTableWidgetItem(""))
+        self.guis_table.setCurrentCell(row, 0)
+
+    def _remove_custom_gui(self):
+        row = self.guis_table.currentRow()
+        if row >= 0:
+            self.guis_table.removeRow(row)
+
+    def _browse_gui_dist(self):
+        row = self.guis_table.currentRow()
+        if row < 0:
+            return
+        current = (self.guis_table.item(row, 2) or QTableWidgetItem("")).text()
+        start_dir = current if current else str(LABHUB_DIR)
+        folder_path = QFileDialog.getExistingDirectory(
+            self, "Select GUI dist folder", start_dir,
+        )
+        if folder_path:
+            self.guis_table.setItem(row, 2, QTableWidgetItem(folder_path))
 
     def _apply_and_restart(self):
         # Validate
@@ -408,53 +573,48 @@ class ConfigureDialog(QDialog):
             )
             return
 
-        # Apply settings to launcher
-        self.launcher.host = self.host_edit.text()
-        self.launcher.port = port
-        self.launcher.host_full = f"http://{self.launcher.host}:{self.launcher.port}"
-        self.launcher.config_path = Path(config_path)
+        # Update ServerConfig fields
+        cfg = self.launcher.cfg
+        cfg.server.host = self.host_edit.text()
+        cfg.server.port = port
+        cfg.devices = config_path
+        cfg.profile = self.profile_edit.text() or "./profile.yaml"
+        cfg.logging.level = self.log_level_combo.currentText()
+        cfg.logging.file = self.log_file_edit.text() or None
+        cfg.scripting.macros = self.macros_edit.text() or None
+        cfg.scripting.python = self.python_edit.text() or None
+        cfg.scripting.startup_folder = self.startup_folder_edit.text() or None
 
-        profile_path = self.profile_edit.text()
-        self.launcher.profile_path = Path(profile_path) if profile_path else None
+        # InfluxDB settings
+        cfg.influx.enabled = self.influx_enabled_cb.isChecked()
+        cfg.influx.url = self.influx_url_edit.text() or "http://localhost:8086"
+        cfg.influx.token = self.influx_token_edit.text()
+        cfg.influx.org = self.influx_org_edit.text() or "labhub"
+        cfg.influx.bucket = self.influx_bucket_edit.text() or "labhub"
+        cfg.influx.exe_path = self.influx_exe_edit.text() or None
+        cfg.influx.stop_on_exit = self.influx_stop_on_exit_cb.isChecked()
+        cfg.influx.batch_size = self.influx_batch_size_spin.value()
+        cfg.influx.flush_interval_ms = self.influx_flush_interval_spin.value()
+        cfg.influx.max_retries = self.influx_max_retries_spin.value()
+        cfg.influx.snapshot_interval = self.influx_snapshot_interval_spin.value()
 
-        macros_path = self.macros_edit.text()
-        self.launcher.macros_path = Path(macros_path) if macros_path else None
+        # Custom GUIs
+        cfg.custom_guis = []
+        for row in range(self.guis_table.rowCount()):
+            device_id = (self.guis_table.item(row, 0) or QTableWidgetItem("")).text().strip()
+            route = (self.guis_table.item(row, 1) or QTableWidgetItem("")).text().strip()
+            dist = (self.guis_table.item(row, 2) or QTableWidgetItem("")).text().strip()
+            if device_id and route and dist:
+                cfg.custom_guis.append(CustomGuiEntry(
+                    device_id=device_id, route=route, dist=dist,
+                ))
 
-        python_path = self.python_edit.text()
-        self.launcher.python_path = Path(python_path) if python_path else None
+        # Re-resolve paths and update convenience attribute
+        cfg._resolve_paths()
+        self.launcher.host_full = f"http://{cfg.server.host}:{cfg.server.port}"
 
-        startup_folder = self.startup_folder_edit.text()
-        self.launcher.startup_folder = Path(startup_folder) if startup_folder else None
-
-        self.launcher.log_level = self.log_level_combo.currentText()
-
-        log_file = self.log_file_edit.text()
-        self.launcher.log_file = Path(log_file) if log_file else None
-
-        # Reload influx config from new config file
-        self.launcher.influx_config = self.launcher._load_influx_config()
-
-        # Persist settings
-        settings = {
-            "host": self.launcher.host,
-            "port": self.launcher.port,
-            "config_path": str(self.launcher.config_path),
-            "profile_path": (
-                str(self.launcher.profile_path) if self.launcher.profile_path else None
-            ),
-            "macros_path": (
-                str(self.launcher.macros_path) if self.launcher.macros_path else None
-            ),
-            "python_path": (
-                str(self.launcher.python_path) if self.launcher.python_path else None
-            ),
-            "startup_folder": (
-                str(self.launcher.startup_folder) if self.launcher.startup_folder else None
-            ),
-            "log_level": self.launcher.log_level,
-            "log_file": str(self.launcher.log_file) if self.launcher.log_file else None,
-        }
-        save_settings(settings)
+        # Persist to server.yaml
+        save_server_config(cfg)
 
         # Restart server
         self.launcher.stop_server(silent=True)
@@ -464,38 +624,13 @@ class ConfigureDialog(QDialog):
 
 
 class Launcher:
-    def __init__(
-        self,
-        host,
-        port,
-        config_path,
-        profile_path,
-        log_level=None,
-        log_file=None,
-        influx_exe=None,
-        influx_url=None,
-        disable_influx=False,
-        macros_path=None,
-        python_path=None,
-        startup_folder=None,
-    ):
-        self.host = host
-        self.port = port
-        self.host_full = f"http://{self.host}:{self.port}"
-        self.config_path = config_path
-        self.profile_path = profile_path
-        self.macros_path = macros_path
-        self.python_path = python_path
-        self.startup_folder = startup_folder
-        self.log_level = log_level
-        self.log_file = log_file
+    def __init__(self, server_config: ServerConfig, disable_influx: bool = False):
+        self.cfg = server_config
+        self.host_full = f"http://{self.cfg.server.host}:{self.cfg.server.port}"
 
         # InfluxDB management
-        self.influx_exe = influx_exe
-        self.influx_url = influx_url
         self.disable_influx = disable_influx
         self.influx_proc: Optional[subprocess.Popen] = None
-        self.influx_config = self._load_influx_config()
 
         self.app = QApplication(sys.argv)
         QApplication.setQuitOnLastWindowClosed(False)
@@ -506,8 +641,8 @@ class Launcher:
             )
             sys.exit(1)
 
-        # Single-instance guard (per-config path key)
-        self._launcher_key = f"labhub_tray_{hashlib.sha256(str(self.config_path).encode('utf-8')).hexdigest()[:12]}"
+        # Single-instance guard (per server.yaml path key)
+        self._launcher_key = f"labhub_tray_{hashlib.sha256(str(self.cfg.config_file).encode('utf-8')).hexdigest()[:12]}"
         try:
             QLocalServer.removeServer(self._launcher_key)
         except Exception:
@@ -551,16 +686,6 @@ class Launcher:
 
     # ======= InfluxDB Management =======
 
-    def _load_influx_config(self) -> Optional[dict]:
-        """Load influx config from config.yaml."""
-        try:
-            with open(self.config_path, "r") as f:
-                cfg = yaml.safe_load(f) or {}
-            return cfg.get("influx")
-        except Exception as e:
-            logger.warning(f"Failed to load influx config: {e}")
-            return None
-
     def _check_influxdb_health(self, url: str, timeout: float = 2.0) -> bool:
         """Check if InfluxDB is healthy via /health endpoint."""
         try:
@@ -578,14 +703,12 @@ class Launcher:
             logger.info("InfluxDB disabled via --no-influx flag")
             return True
 
-        if not self.influx_config:
+        influx = self.cfg.influx
+        if not influx.enabled:
             return True
 
-        if not self.influx_config.get("enabled", False):
-            return True
-
-        url = self.influx_url or self.influx_config.get("url", "http://localhost:8086")
-        exe_path = self.influx_exe or self.influx_config.get("exe_path")
+        url = influx.url
+        exe_path = influx.exe_path
 
         if self._check_influxdb_health(url):
             logger.info(f"InfluxDB already running at {url}")
@@ -660,12 +783,7 @@ class Launcher:
         if not self.influx_proc or self.influx_proc.poll() is not None:
             return
 
-        stop_on_exit = (
-            self.influx_config.get("stop_on_exit", False)
-            if self.influx_config
-            else False
-        )
-        if not stop_on_exit:
+        if not self.cfg.influx.stop_on_exit:
             logger.info("InfluxDB stop_on_exit=False, leaving InfluxDB running")
             return
 
@@ -706,10 +824,7 @@ class Launcher:
         self.act_launch_gui = QAction("Launch GUI", self.menu)
         self.act_launch_gui.triggered.connect(self.open_gui)
 
-        # "More" submenu actions
-        self.act_launch_pico = QAction("Picoscope GUI", self.menu)
-        self.act_launch_pico.triggered.connect(self.open_picoscope)
-
+        # Built-in "More" submenu actions
         self.act_old_gui = QAction("Old GUI", self.menu)
         self.act_old_gui.triggered.connect(self.open_old_gui)
 
@@ -732,9 +847,17 @@ class Launcher:
         self.menu.addSeparator()
         self.menu.addAction(self.act_launch_gui)
 
+        # Custom GUIs from server.yaml (top-level menu items)
+        for gui in self.cfg.custom_guis:
+            act = QAction(gui.device_id.capitalize(), self.menu)
+            route = gui.route
+            act.triggered.connect(
+                lambda checked=False, r=route: self._open_custom_gui(r)
+            )
+            self.menu.addAction(act)
+
         # "More" submenu
         self.more_menu = QMenu("More", self.menu)
-        self.more_menu.addAction(self.act_launch_pico)
         self.more_menu.addAction(self.act_old_gui)
         self.more_menu.addAction(self.act_admin_gui)
         self.more_menu.addAction(self.act_profile_gui)
@@ -803,12 +926,15 @@ class Launcher:
             )
             return
 
-        if not self._port_available(self.host, self.port):
+        host = self.cfg.server.host
+        port = self.cfg.server.port
+
+        if not self._port_available(host, port):
             self.tray.setIcon(self.icon_red)
             self.tray.setToolTip("LabHub: stopped")
             self.tray.showMessage(
                 "LabHub",
-                f"Port {self.port} already in use on {self.host}.",
+                f"Port {port} already in use on {host}.",
                 QSystemTrayIcon.Critical,
                 2500,
             )
@@ -818,25 +944,7 @@ class Launcher:
         self._start_influxdb()
 
         env = os.environ.copy()
-        env["LABHUB_CONFIG"] = str(self.config_path)
-
-        if self.log_level:
-            env["LABHUB_LOG_LEVEL"] = self.log_level
-
-        if self.log_file:
-            env["LABHUB_LOG_FILE"] = str(self.log_file)
-
-        if self.profile_path:
-            env["LABHUB_PROFILE"] = str(self.profile_path)
-
-        if self.macros_path:
-            env["LABHUB_MACROS"] = str(self.macros_path)
-
-        if self.python_path:
-            env["LABHUB_PYTHON_PATH"] = str(self.python_path)
-
-        if self.startup_folder:
-            env["LABHUB_STARTUP_FOLDER"] = str(self.startup_folder)
+        env[ENV_VAR] = str(self.cfg.config_file)
 
         cwd = str(LABHUB_DIR)
 
@@ -846,9 +954,9 @@ class Launcher:
             "uvicorn",
             "server.main:app",
             "--host",
-            str(self.host),
+            str(host),
             "--port",
-            str(self.port),
+            str(port),
         ]
         try:
             self.proc = subprocess.Popen(cmd, cwd=cwd, env=env)
@@ -933,10 +1041,10 @@ class Launcher:
 
         webbrowser.open(f"{self.host_full}/ui")
 
-    def open_picoscope(self):
+    def _open_custom_gui(self, route: str):
         import webbrowser
 
-        webbrowser.open(f"{self.host_full}/picoscope")
+        webbrowser.open(f"{self.host_full}{route}")
 
     def open_admin_gui(self):
         import webbrowser
@@ -983,62 +1091,55 @@ class Launcher:
 def main():
     parser = argparse.ArgumentParser(description="Start LabGlue Hub")
     parser.add_argument(
+        "--server-config",
+        type=str,
+        help="Path to server.yaml (default: launcher/server_default.yaml)",
+    )
+    parser.add_argument(
         "--config",
         type=str,
-        help="Path to config.yaml (overrides persisted setting)",
+        help="Path to device config.yaml (overrides server.yaml)",
     )
     parser.add_argument(
         "--profile",
         type=str,
-        help="Path to profile.yaml (overrides persisted setting)",
+        help="Path to profile.yaml (overrides server.yaml)",
     )
     parser.add_argument(
         "--macros",
         type=str,
-        help="Path to macros folder (overrides persisted setting)",
+        help="Path to macros folder (overrides server.yaml)",
     )
     parser.add_argument(
         "--python",
         type=str,
-        help="Path to Python interpreter for REPL (overrides persisted setting)",
+        help="Path to Python interpreter for REPL (overrides server.yaml)",
     )
     parser.add_argument(
         "--startup-folder",
         type=str,
-        help="Working directory for REPL sessions (overrides persisted setting)",
+        help="Working directory for REPL sessions (overrides server.yaml)",
     )
     parser.add_argument(
         "--host",
         type=str,
-        help="Host for the hub server (overrides persisted setting)",
+        help="Host for the hub server (overrides server.yaml)",
     )
     parser.add_argument(
         "--port",
         type=int,
-        help="Port for the hub server (overrides persisted setting)",
+        help="Port for the hub server (overrides server.yaml)",
     )
     parser.add_argument(
         "--log-level",
         type=str,
         choices=LOG_LEVELS,
-        help="Logging level (overrides persisted setting)",
+        help="Logging level (overrides server.yaml)",
     )
     parser.add_argument(
         "--log-file",
         type=str,
-        help="Optional path to log file (overrides persisted setting)",
-    )
-    parser.add_argument(
-        "--influx-exe",
-        type=str,
-        default=None,
-        help="Path to influxd executable for auto-start (overrides config.yaml)",
-    )
-    parser.add_argument(
-        "--influx-url",
-        type=str,
-        default=None,
-        help="InfluxDB URL (overrides config.yaml)",
+        help="Optional path to log file (overrides server.yaml)",
     )
     parser.add_argument(
         "--no-influx",
@@ -1048,91 +1149,38 @@ def main():
 
     args = parser.parse_args()
 
-    # Load persisted settings
-    settings = load_settings()
+    # Load ServerConfig: explicit --server-config > default search paths
+    cfg = load_server_config(args.server_config)
 
-    # Determine values: CLI args > persisted settings > defaults
-    host = args.host or settings.get("host", "127.0.0.1")
-    port = args.port or settings.get("port", 8212)
-    log_level = args.log_level or settings.get("log_level", "INFO")
-
-    log_file = None
-    if args.log_file:
-        log_file = Path(args.log_file)
-    elif settings.get("log_file"):
-        log_file = Path(settings["log_file"])
-
-    # Determine config path
+    # Apply CLI overrides on top of server.yaml values
+    if args.host:
+        cfg.server.host = args.host
+    if args.port:
+        cfg.server.port = args.port
     if args.config:
-        config_path = Path(args.config)
-    elif settings.get("config_path"):
-        config_path = Path(settings["config_path"])
-    else:
-        config_path = Path(__file__).parent / "config_default.yaml"
+        cfg.devices = str(Path(args.config).resolve())
+    if args.profile:
+        cfg.profile = str(Path(args.profile).resolve())
+    if args.log_level:
+        cfg.logging.level = args.log_level
+    if args.log_file:
+        cfg.logging.file = args.log_file
+    if args.macros:
+        cfg.scripting.macros = str(Path(args.macros).resolve())
+    if args.python:
+        cfg.scripting.python = str(Path(args.python).resolve())
+    if args.startup_folder:
+        cfg.scripting.startup_folder = str(Path(args.startup_folder).resolve())
 
-    if not config_path.exists():
-        logger.error(f"Config file not found: {config_path}")
+    # Re-resolve paths after overrides
+    cfg._resolve_paths()
+
+    # Validate device config exists
+    if not cfg.devices_path.exists():
+        logger.error(f"Device config file not found: {cfg.devices_path}")
         sys.exit(1)
 
-    # Determine profile path
-    if args.profile:
-        profile_path = Path(args.profile)
-    elif settings.get("profile_path"):
-        profile_path = Path(settings["profile_path"])
-    else:
-        profile_path = Path(__file__).parent / "profile_default.yaml"
-
-    if profile_path and not profile_path.exists():
-        logger.warning(f"Profile file not found: {profile_path}")
-        profile_path = None
-
-    # Determine macros path
-    if args.macros:
-        macros_path = Path(args.macros)
-    elif settings.get("macros_path"):
-        macros_path = Path(settings["macros_path"])
-    else:
-        macros_path = Path(__file__).parent / "macros"
-
-    # Create default macros folder if it doesn't exist and using default path
-    if macros_path and not macros_path.exists() and not (args.macros or settings.get("macros_path")):
-        try:
-            macros_path.mkdir(parents=True, exist_ok=True)
-            logger.info(f"Created default macros folder: {macros_path}")
-        except Exception as e:
-            logger.warning(f"Failed to create macros folder: {e}")
-            macros_path = None
-
-    # Determine Python interpreter path
-    python_path = None
-    if args.python:
-        python_path = Path(args.python)
-    elif settings.get("python_path"):
-        python_path = Path(settings["python_path"])
-    # Default is None, which will use the server's .venv interpreter
-
-    # Determine startup folder (REPL working directory)
-    startup_folder = None
-    if args.startup_folder:
-        startup_folder = Path(args.startup_folder)
-    elif settings.get("startup_folder"):
-        startup_folder = Path(settings["startup_folder"])
-    # Default is None, which will use a temporary directory
-
-    Launcher(
-        host,
-        port,
-        config_path,
-        profile_path,
-        log_level=log_level,
-        log_file=log_file,
-        influx_exe=args.influx_exe,
-        influx_url=args.influx_url,
-        disable_influx=args.no_influx,
-        macros_path=macros_path,
-        python_path=python_path,
-        startup_folder=startup_folder,
-    ).run()
+    Launcher(cfg, disable_influx=args.no_influx).run()
 
 
 if __name__ == "__main__":

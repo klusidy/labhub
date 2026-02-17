@@ -13,3 +13,4 @@ runtime
 .venv
 run.bat
 launcher/launcher_settings.yaml
+server.yaml

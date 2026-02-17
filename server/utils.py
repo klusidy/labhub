@@ -1,6 +1,5 @@
 import logging
 import sys
-import os
 from pathlib import Path
 
 # Root logger for all LabHub components
@@ -33,38 +32,49 @@ class ColoredFormatter(logging.Formatter):
         return f"{colored_levelname:<18} {record.name}: {record.getMessage()}"
 
 
-def _level_from_env(default=logging.INFO) -> int:
-    """Get logging level from LABHUB_LOG_LEVEL environment variable."""
-    val = os.environ.get("LABHUB_LOG_LEVEL")
-    if not val:
-        return default
-    try:
-        return getattr(logging, val.upper())
-    except Exception:
+def _resolve_level(level) -> int:
+    """Convert a level name string or int to a logging level int."""
+    if isinstance(level, int):
+        return level
+    if isinstance(level, str):
         try:
-            return int(val)
-        except Exception:
-            return default
+            return getattr(logging, level.upper())
+        except AttributeError:
+            pass
+        try:
+            return int(level)
+        except ValueError:
+            pass
+    return logging.INFO
 
 
-def init_logging(level: int | None = None, log_file: str | Path | None = None):
+def init_logging(level=None, log_file=None):
     """
     Initialize LabHub logging.
 
     Args:
-        level: Logging level (int or None). If None, checks LABHUB_LOG_LEVEL env var.
+        level: Logging level (int, str like "DEBUG", or None).
+               If None, falls back to ServerConfig, then INFO.
         log_file: Optional file path to also log to file (in addition to console).
-
-    Environment Variables:
-        LABHUB_LOG_LEVEL: Set default level (e.g., "DEBUG", "INFO", "WARNING")
+               If None, falls back to ServerConfig.
 
     Examples:
         init_logging()                           # INFO to console
-        init_logging(logging.DEBUG)              # DEBUG to console
+        init_logging("DEBUG")                    # DEBUG to console
         init_logging(log_file="labhub.log")      # INFO to console + file
     """
-    if level is None:
-        level = _level_from_env(logging.INFO)
+    if level is None or log_file is None:
+        try:
+            from .server_config import get_server_config
+            cfg = get_server_config()
+            if level is None:
+                level = cfg.logging.level
+            if log_file is None:
+                log_file = cfg.logging.file
+        except Exception:
+            pass
+
+    level = _resolve_level(level if level is not None else logging.INFO)
 
     # Get root logger and set level
     root_logger = logging.getLogger(ROOT_LOGGER)
