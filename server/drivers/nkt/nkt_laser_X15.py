@@ -27,6 +27,13 @@ class nkt_laser_x15(Device):
     # Shared single-threaded executor for all X15 instances (NKT DLL thread affinity)
     _EXEC = ThreadPoolExecutor(max_workers=1, thread_name_prefix="nkt_x15")
 
+    config_template = {
+        "PORT": "COM4",
+        "autoMode": 0,
+        "liveMode": 0,
+        "polling_interval": 1000,
+    }
+
     def __init__(
         self,
         dev_id: str,

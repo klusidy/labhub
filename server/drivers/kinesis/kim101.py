@@ -24,6 +24,13 @@ logger = logging.getLogger(__name__)
 class kim101(KinesisDevice):
     """K-Cube Inertial Motor Controller (KIM101)"""
 
+    config_template = {
+        "serial": "97000001",
+        "poll_ms": 200,
+        "kinesis_path": "C:/Program Files/Thorlabs/Kinesis",
+        "polling_interval": 1000,
+    }
+
     _DLL_REQUIREMENTS = {
         "dlls": [
             "Thorlabs.MotionControl.GenericMotorCLI.dll",

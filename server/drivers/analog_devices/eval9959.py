@@ -30,6 +30,12 @@ class eval9959(Device):
     Bridge communicates via stdin/stdout, serialized by base class _lock.
     """
 
+    config_template = {
+        "dll_folder": "C:/Program Files (x86)/Analog Devices/AD9958_59 Evaluation Software",
+        "ref_clk_hz": 40000000,
+        "polling_interval": 1000,
+    }
+
     def __init__(
         self,
         dev_id: str,

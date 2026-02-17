@@ -19,6 +19,7 @@ import yaml
 from .schemas import ApplyPropertiesRequest
 from .utils import set_level as set_logging_level, get_level as get_logging_level
 from .loader import load_config, get_config_path
+from . import drivers as drivers_module
 
 logger = logging.getLogger(__name__)
 
@@ -806,6 +807,16 @@ async def update_device_config(dev_id: str, device_config: Dict[str, Any]):
                 break
 
         if not found:
+            # New device — merge driver's config_template as defaults
+            try:
+                cls = drivers_module.get(device_config["driver"])
+                template = getattr(cls, '_config_template', {})
+                if template:
+                    # Template provides defaults; explicit config overrides
+                    device_config = {**template, **device_config}
+                    logger.debug(f"Merged config_template for driver '{device_config['driver']}'")
+            except Exception as e:
+                logger.debug(f"Could not load config_template for '{device_config.get('driver')}': {e}")
             devices.append(device_config)
 
         parsed["devices"] = devices

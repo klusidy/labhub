@@ -30,7 +30,7 @@ export interface DriverInfo {
 // ===== API Functions =====
 
 export async function getConfig(): Promise<ConfigResponse> {
-  const r = await fetch(`${API_BASE}/admin/config`);
+  const r = await fetch(`${API_BASE}/admin/config`, { cache: 'no-store' });
   if (!r.ok) throw new Error(`Failed to get config: ${r.status}`);
   return r.json();
 }
@@ -72,7 +72,7 @@ export async function deleteDeviceConfig(
 }
 
 export async function listDrivers(): Promise<{ drivers: DriverInfo[] }> {
-  const r = await fetch(`${API_BASE}/admin/drivers`);
+  const r = await fetch(`${API_BASE}/admin/drivers`, { cache: 'no-store' });
   if (!r.ok) throw new Error(`Failed to list drivers: ${r.status}`);
   return r.json();
 }

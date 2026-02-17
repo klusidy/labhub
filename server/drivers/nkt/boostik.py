@@ -17,6 +17,13 @@ logger = logging.getLogger(__name__)
 class boostik(Device):
     """NKT Photonics Boostik fiber amplifier"""
 
+    config_template = {
+        "port": "COM5",
+        "baud": 9600,
+        "timeout": 1.0,
+        "polling_interval": 1000,
+    }
+
     def __init__(
         self,
         dev_id: str,

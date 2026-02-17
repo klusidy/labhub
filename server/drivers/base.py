@@ -25,6 +25,7 @@ class Device:
     _api_properties: Dict[str, Dict[str, Any]] = {}  # per subclass
     _api_commands: Dict[str, Dict[str, Any]] = {}  # per subclass
     _api_data_sources: Dict[str, Dict[str, Any]] = {}  # per subclass
+    _config_template: Dict[str, Any] = {}  # per subclass
 
     def __init_subclass__(cls, api_alias: Optional[str] = None):
         """Called when a subclass is defined (not initialized).
@@ -113,6 +114,7 @@ class Device:
         cls._api_commands = commands
         cls._api_properties = properties
         cls._api_data_sources = data_sources
+        cls._config_template = cls.__dict__.get('config_template', {})
 
     @classmethod
     async def create(

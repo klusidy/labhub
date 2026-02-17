@@ -17,6 +17,12 @@ logger = logging.getLogger(__name__)
 class tgf4000(Device):
     """Aim-TTi TGF4000 series function generator"""
 
+    config_template = {
+        "port": "COM8",
+        "baud": 115200,
+        "polling_interval": 1000,
+    }
+
     def __init__(
         self,
         dev_id: str,

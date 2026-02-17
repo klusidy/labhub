@@ -41,6 +41,12 @@ class example_device(Device):  # Class name MUST match filename exactly
     For real device examples, see other files in drivers/<vendor> folders.
     """
 
+    # Config template: options that appear in config.yaml when this device is added.
+    # The example device needs no connection options.
+    config_template = {
+        "polling_interval": 1000,
+    }
+
     def __init__(
         self,
         dev_id: str,

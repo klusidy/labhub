@@ -81,7 +81,8 @@ export const useConfigStore = defineStore('config', () => {
     loading.value = true;
     try {
       await adminApi.updateDeviceConfig(id, newDevice);
-      configDevices.value.push(newDevice);
+      // Reload config to get server-merged template options
+      await loadConfig();
     } finally {
       loading.value = false;
     }

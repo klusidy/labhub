@@ -20,6 +20,13 @@ logger = logging.getLogger(__name__)
 class k10cr1(KinesisDevice):
     """Stepper Motor Rotation Mount (K10CR1)"""
 
+    config_template = {
+        "serial": "55000001",
+        "poll_ms": 200,
+        "kinesis_path": "C:/Program Files/Thorlabs/Kinesis",
+        "polling_interval": 1000,
+    }
+
     _DLL_REQUIREMENTS = {
         "dlls": [
             "Thorlabs.MotionControl.GenericMotorCLI.dll",

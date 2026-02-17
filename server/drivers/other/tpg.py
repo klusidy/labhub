@@ -24,6 +24,13 @@ ENQ = b"\x05"
 class tpg(Device):
     """TPG pressure sensor (vacuum gauge)"""
 
+    config_template = {
+        "port": "COM10",
+        "baud": 9600,
+        "timeout": 1.0,
+        "polling_interval": 1000,
+    }
+
     def __init__(
         self,
         dev_id: str,

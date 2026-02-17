@@ -22,6 +22,13 @@ logger = logging.getLogger(__name__)
 class kpz101(KinesisDevice):
     """KCube Piezo Controller (KPZ101)"""
 
+    config_template = {
+        "serial": "29000001",
+        "poll_ms": 200,
+        "kinesis_path": "C:/Program Files/Thorlabs/Kinesis",
+        "polling_interval": 1000,
+    }
+
     # Declare DLL requirements for this device
     _DLL_REQUIREMENTS = {
         "dlls": [

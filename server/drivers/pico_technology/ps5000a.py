@@ -215,6 +215,25 @@ class ps5000a(Device):
     """PicoScope 5000a series driver.
     This driver requires the PicoSDK to be installed."""
 
+    config_template = {
+        "resolution": 14,
+        "channels": [
+            {"id": "A", "coupling": "DC", "range": "1V", "enable": True},
+            {"id": "B", "coupling": "DC", "range": "1V", "enable": False},
+            {"id": "C", "coupling": "DC", "range": "1V", "enable": False},
+            {"id": "D", "coupling": "DC", "range": "1V", "enable": False},
+        ],
+        "trigger": {
+            "enable": True,
+            "source": "A",
+            "threshold_mV": 1,
+            "direction": "RISING",
+            "delay": 0,
+            "auto_trigger_ms": 1000,
+        },
+        "polling_interval": 1000,
+    }
+
     def __init__(
         self,
         dev_id: str,
