@@ -133,7 +133,9 @@ function buildArgs(cmd: CommandSpec): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   for (const arg of cmd.args || []) {
     const val = argValues[cmd.name]?.[arg.name];
-    result[arg.name] = coerceArg(arg, val);
+    // Fall back to arg.default if user hasn't touched the input
+    const effective = val !== undefined ? val : arg.default;
+    result[arg.name] = coerceArg(arg, effective);
   }
   return result;
 }
