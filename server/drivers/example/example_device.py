@@ -36,7 +36,6 @@ logger = logging.getLogger(__name__)
 class example_device(Device):  # Class name MUST match filename exactly
     """
     Example device that generates configurable waveforms for testing.
-
     This is a simulated device - it doesn't connect to real hardware.
     For real device examples, see other files in drivers/<vendor> folders.
     """
@@ -66,7 +65,9 @@ class example_device(Device):  # Class name MUST match filename exactly
             - Don't connect to hardware here - use async connect() method
             - Initialize private variables that cache hardware state here
         """
-        super().__init__(dev_id, options, manager) # Do include this base class initialization!
+        super().__init__(
+            dev_id, options, manager
+        )  # Do include this base class initialization!
 
         # Initialize whatever internal variables are needed
         # Here, we simulate HW state with them
@@ -194,6 +195,19 @@ class example_device(Device):  # Class name MUST match filename exactly
         dt = self.time_step
         ts = np.arange(self.number_of_time_steps) * dt
         return ts.tolist()
+
+    @api_command()
+    def hello_world(self, name: str = "World") -> str:
+        """Example command that takes an argument and returns a string."""
+        return f"Hello, {name}! This is {self.id}."
+
+    @api_command()
+    def long_running_operation(self, duration_s: float) -> str:
+        """Example of a long-running command that simulates blocking behavior."""
+        import time
+
+        time.sleep(duration_s)  # Simulate blocking SDK call
+        return f"Completed long operation of {duration_s} seconds."
 
     # --- Data Sources --------------------------------------------------------
     # Data sources are async generators that yield Frame dicts for streaming.

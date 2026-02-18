@@ -299,6 +299,7 @@ class DeviceProxy:
 
             def _make(cname=cname, args_spec=args_spec, cdoc=cdoc, returns=returns):
                 def _cmd(**kwargs):
+                    timeout = kwargs.pop("_timeout", None)
                     for aspec in args_spec:
                         name = aspec.get("name")
                         if aspec.get("required", True) and name not in kwargs:
@@ -308,6 +309,7 @@ class DeviceProxy:
                     return self._hub._post(
                         f"/api/v2/devices/{dev_id}/commands",
                         json={"name": cname, "args": kwargs},
+                        timeout=timeout,
                     ).json()
 
                 sig = _fmt_cmd_sig(cname, args_spec)
@@ -955,7 +957,10 @@ class Hub:
 
     def __init__(self, base_url: str):
         self._base = base_url.rstrip("/")
-        self._http = httpx.Client(base_url=self._base, timeout=3.0)
+        self._http = httpx.Client(
+            base_url=self._base,
+            timeout=httpx.Timeout(5.0, read=300.0),
+        )
         self._devices: Dict[str, Dict[str, Any]] = {}  # id -> DeviceInfo
         self._specs: Dict[str, Dict[str, Any]] = {}    # id -> DeviceSpec
         self._proxies: Dict[str, DeviceProxy] = {}     # id -> DeviceProxy
@@ -999,8 +1004,11 @@ class Hub:
     def _patch(self, path: str, json: Dict[str, Any]):
         return self._http.patch(path, json=json)
 
-    def _post(self, path: str, json: Dict[str, Any]):
-        return self._http.post(path, json=json)
+    def _post(self, path: str, json: Dict[str, Any], timeout: float = None):
+        kw = {"json": json}
+        if timeout is not None:
+            kw["timeout"] = timeout
+        return self._http.post(path, **kw)
 
     def _host_port(self) -> str:
         u = urlparse(self._base)
