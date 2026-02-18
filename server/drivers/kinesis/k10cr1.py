@@ -130,7 +130,7 @@ class k10cr1(KinesisDevice):
         pos = self._dev.GetPositionCounter()
         pos_dec = self._to_decimal(pos)
         real = conv.DeviceUnitToReal(pos_dec, conv.UnitType.Length)
-        return float(self.Decimal.ToDouble(real))
+        return float(self.Decimal.ToDouble(real)) % 360
 
     @position.setter
     def position(self, value: float) -> None:
