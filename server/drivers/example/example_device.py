@@ -197,9 +197,9 @@ class example_device(Device):  # Class name MUST match filename exactly
         return ts.tolist()
 
     @api_command()
-    def hello_world(self, name: str = "World") -> str:
+    def hello_world(self, name: str = "World", times: int = 1) -> str:
         """Example command that takes an argument and returns a string."""
-        return f"Hello, {name}! This is {self.id}."
+        return f"Hello, {name}! This is {self.id}. (Called {times} times)"
 
     @api_command()
     def long_running_operation(self, duration_s: float) -> str:

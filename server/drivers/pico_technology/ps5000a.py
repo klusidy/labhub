@@ -25,6 +25,7 @@ from picosdk.functions import adc2mV, assert_pico_ok, mV2adc
 import numpy as np
 import matplotlib.pyplot as plt
 import time
+from scipy.signal import savgol_filter
 
 logger = logging.getLogger(__name__)
 logger = logging.getLogger("labhub.device_manager.pico_technologies.ps5000a")
@@ -263,6 +264,8 @@ class ps5000a(Device):
         self._trigger = {}
 
         self._downsample_window = 10
+        self._SG_window = 1001
+        self._SG_freq = 1e3
 
         self._pico_raw_source = PicoRawSource(driver=self)
 
@@ -518,6 +521,26 @@ class ps5000a(Device):
     @downsample_window.setter
     def downsample_window(self, value: int) -> None:
         self._downsample_window = value
+        return value
+
+    @api_property()
+    def SG_window(self) -> int:
+        """Number of samples to average over in Savitsky-Golay smoothed PSD"""
+        return self._SG_window
+
+    @SG_window.setter
+    def SG_window(self, value: int) -> None:
+        self._SG_window = value
+        return value
+
+    @api_property()
+    def SG_freq(self) -> int:
+        """Frequency shift of the logarithmically interpolated Savitsky-Golay smoothed PSD"""
+        return self._SG_freq
+
+    @SG_freq.setter
+    def SG_freq(self, value: int) -> None:
+        self._SG_freq = value
         return value
 
     @api_command()
@@ -971,7 +994,7 @@ class ps5000a(Device):
 
     @psd_stream_downsample.plot()
     def psd_stream_downsample_plot(self) -> Dict[str, Any]:
-        """PSD plot (function doc)"""
+        """PSD plot with average downsampling"""
 
         pre_trigger_samples = self._pre_trigger_samples
         post_trigger_samples = self._post_trigger_samples
@@ -997,6 +1020,104 @@ class ps5000a(Device):
 
         return {
             "title": "PSD (downsampled)",  # self.psd_stream_downsample_plot.__doc__,
+            "x-label": "Frequency (Hz)",
+            "y-label": "PSD [V^2 / Hz]",
+            "x-values": freqs.tolist(),
+        }
+
+    @api_data()
+    async def psd_stream_SG(self) -> AsyncIterator[Frame]:
+        """Returns PSD of the time series"""
+
+        def smooth_psd(psd, fs, f0, window, polyorder, eps):
+            """
+            In-place hybrid-warp SG smoothing for one-sided PSD.
+            Returns the same array object for convenience.
+            """
+
+            if window % 2 == 0:
+                raise ValueError("window must be odd")
+
+            nfft = 2 * (psd.size - 1)   # infer FFT length
+
+            # log-PSD (skip DC)
+            y = np.log10(psd[1:] + eps)
+
+            k = np.arange(1, psd.size, dtype=float)
+            f = (fs / nfft) * k
+
+            # hybrid warp
+            x = np.log10(f + f0)
+
+            # uniform grid in warped axis
+            xu = np.linspace(x[0], x[-1], x.size)
+
+            # interpolate → smooth → interpolate back
+            yu = np.interp(xu, x, y)
+            yu_sm = savgol_filter(yu, window_length=window, polyorder=polyorder, mode="interp")
+            y_sm = np.interp(x, xu, yu_sm)
+
+            # write back in place
+            psd[1:] = 10.0 ** y_sm
+
+            return psd
+
+        def mapper(x):
+            N = x.size
+            dt = self.sampling_time_ns * 1e-9
+            fs = 1 / dt
+
+            fft = np.fft.rfft(x)
+            Pxx = (np.abs(fft[1:]) ** 2) / (
+                fs * N
+            )  # normalize to density [unit^2 / Hz]
+
+            # Apply frequency downsample averaging
+            window_size = self._SG_window
+            f0 = self._SG_freq
+            if window_size > 1:
+                Pxx = smooth_psd(Pxx, fs, f0, window_size,3,1e-30)
+
+            return Pxx.tolist()
+
+        q = await self._pico_raw_source.subscribe()
+        await self._pico_raw_source.start()
+
+        try:
+            while True:
+                frame = await q.get()
+
+                # Check for stream start/restart signal
+                if frame is FIRST_FRAME:
+                    # Yield plot metadata to inform subscribers of new frequency axis
+                    yield {
+                        "type": "plot_metadata",
+                        "plot": self.psd_stream_SG_plot(),
+                    }
+                else:
+                    # Regular data frame
+                    yield {ch: mapper(data) for ch, data in frame.items()}
+        finally:
+            await self._pico_raw_source.unsubscribe(q)
+
+    @psd_stream_SG.plot()
+    def psd_stream_SG_plot(self) -> Dict[str, Any]:
+        """PSD plot with Savitsky-Golay smoothing over logarithmic scale"""
+
+        pre_trigger_samples = self._pre_trigger_samples
+        post_trigger_samples = self._post_trigger_samples
+        total_samples = pre_trigger_samples + post_trigger_samples
+        window_size = self._downsample_window
+
+        dt = (
+            self.sampling_time_ns * 1e-9
+        )  # created at runtime - self can be fixed in definition time
+        fs = 1 / dt
+
+        freqs = np.fft.rfftfreq(total_samples, d=dt)[1:]
+
+        return {
+            "title": "PSD (Savitsky-Golay smooth)",  # self.psd_stream_downsample_plot.__doc__,
             "x-label": "Frequency (Hz)",
             "y-label": "PSD [V^2 / Hz]",
             "x-values": freqs.tolist(),
