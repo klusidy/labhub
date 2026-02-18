@@ -1,0 +1,40 @@
+# LabHub Server Configuration
+# All relative paths are resolved against this file's directory.
+
+server:
+  host: 127.0.0.1
+  port: 8212
+
+# Paths to device configuration and profile (state snapshot)
+devices: ./config_cc.yaml
+profile: ./profile_cc.yaml
+
+logging:
+  level: INFO
+  file: null            # null = console only; set a path for file logging
+
+scripting:
+  macros: ./macros/     # null = macros disabled
+  python: null          # null = use .venv/Scripts/python.exe
+  startup_folder: null  # null = temporary directory per REPL session
+
+influx:
+  enabled: false
+  url: http://localhost:8086
+  token: dt0QIee0c0N2s2UoMJYb8Wjv7RwzGPpOgp6YeAUKeSzG4Yc9qnWTs0FNZsP3gmE39UxmnpIJ5bvfSk9-aDpm-g==
+  org: isibrno
+  bucket: labhub
+  exe_path: C:/Program Files/InfluxData/influxd.exe
+  stop_on_exit: false
+  batch_size: 100
+  flush_interval_ms: 1000
+  max_retries: 3
+  snapshot_interval: 10.0
+
+# Custom GUI SPAs served alongside the built-in UIs.
+# Each entry mounts a static directory at the given route.
+custom_guis:
+  - device_id: picoscope
+    route: /picoscope
+    dist: gui/custom/picoscope/dist/spa
+
