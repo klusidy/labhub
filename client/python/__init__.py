@@ -1,56 +1,75 @@
 from __future__ import annotations
 import sys, types
 from typing import Optional
-from .client import Hub, connect as _connect
+from .labhub import Hub, Devices, Server, connect as _connect
 
-# We keep a process-global hub. The module proxies attribute access to it.
 _HUB: Optional[Hub] = None
+devices: Optional[Devices] = None
+server: Optional[Server] = None
 
-def connect(host="127.0.0.1", port=8212) -> Hub:
-    """Connect to a running LabHub and update module-level help() output."""
-    global _HUB
-    _HUB = _connect(host, port)
-    _update_module_surface()
-    return _HUB
 
-def _update_module_surface():
-    """Expose devices by id on the module and refresh the module docstring."""
+def connect(host="127.0.0.1", port=8212) -> bool:
+    """
+    Connect to a LabHub server.
+
+    After calling this, use:
+      labhub.devices   - access and control devices
+      labhub.server    - server administration
+
+    Returns True on success.
+    """
+    global _HUB, devices, server
+    hub, devs, srv = _connect(host, port)
+    _HUB = hub
     mod = sys.modules[__name__]
-    if _HUB is None:
-        mod.__doc__ = "labhub: connect(host, port) to list devices."
-        return
-    # attach proxies as attributes by device id
-    for name, proxy in _HUB.devices().items():
-        setattr(mod, name, proxy)
-    # update module doc so help(labhub) prints the listing
-    mod.__doc__ = _HUB.describe()
-
-def __getattr__(name: str):
-    """Delegate attribute lookups to the connected Hub instance (by id only)."""
-    if name == "_HUB":
-        raise AttributeError
-    if _HUB is None:
-        raise AttributeError("Not connected. Call labhub.connect(...) first.")
-    # Allow calling repr(help)-like string via labhub._describe if someone needs it
-    if name == "_describe":
-        return _HUB.describe
-    # device by id?
-    devs = _HUB.devices()
-    if name in devs:
-        return devs[name]
-    if name == "snapshot":
-        return _HUB.snapshot
-    raise AttributeError(name)
+    mod.devices = devs
+    mod.server = srv
+    return True
 
 
-class _LabHubClientModule(types.ModuleType):
+class _LabHubModule(types.ModuleType):
     def __repr__(self):
         if _HUB is None:
-            return "labhub (not connected; call connect(...))"
-        return super().__repr__() + "\n" +  _HUB.describe()
+            lines = [
+                "labhub (not connected)",
+                "",
+                "Usage:",
+                "  import client.python as labhub",
+                "  labhub.connect(host, port)",
+                "  print(labhub)                  # show this overview",
+                "  print(labhub.devices)          # list connected devices",
+                "  print(labhub.server)           # list server operations",
+            ]
+            return "\n".join(lines)
+
+        host = _HUB._host_port()
+        n = len(devices) if devices else 0
+        lines = [f"labhub @ {host}  ({n} device{'s' if n != 1 else ''} connected)"]
+        lines.append("")
+
+        if devices and len(devices) > 0:
+            lines.append("Devices:")
+            for dev_id, proxy in devices:
+                kind = proxy._spec.get("kind", "")
+                doc = (proxy._spec.get("doc") or "").strip()
+                label = f".devices.{dev_id}"
+                info = f"[{kind}]" if kind else ""
+                desc = f"  {doc}" if doc else ""
+                lines.append(f"  {label.ljust(32)} {info}{desc}")
+            lines.append("")
+
+        lines.append("Server admin:  print(labhub.server) for full list")
+        lines.append("")
+        lines.append("Quick start:")
+        lines.append("  d = labhub.devices.DEVICE_ID   # get a device")
+        lines.append("  print(d)                        # see its properties & commands")
+        lines.append("  d.property = value              # set a property")
+        lines.append("  d.command(args)                 # run a command")
+        return "\n".join(lines)
+
     __str__ = __repr__
 
-sys.modules[__name__].__class__ = _LabHubClientModule
 
-# Make help(labhub) show device list (module docstring) even before connect()
-__doc__ = "labhub: connect(host, port) to list devices."
+sys.modules[__name__].__class__ = _LabHubModule
+
+__doc__ = "labhub: call connect(host, port) to get started."

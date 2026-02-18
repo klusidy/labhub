@@ -6,7 +6,6 @@ import time
 import json
 import yaml
 import urllib
-import types
 from pathlib import Path
 from datetime import datetime
 
@@ -24,7 +23,6 @@ def _fmt_param_line(p: Dict[str, Any], current: Any) -> str:
 
 
 def _fmt_param_details(p: Dict[str, Any]) -> str:
-    # Detailed help block with ranges, choices, fields...
     lines: List[str] = []
     name = p["name"]
     typ = p.get("type") or _infer_type_from_spec(p) or "Any"
@@ -33,7 +31,6 @@ def _fmt_param_details(p: Dict[str, Any]) -> str:
         hdr += f" [{p['unit']}]"
     ro = "read-only" if p.get("read_only") else "read-write"
     lines.append(hdr + f"  ({ro})")
-    # constraints
     rng = []
     if p.get("min") is not None:
         rng.append(f"min={p['min']}")
@@ -47,7 +44,7 @@ def _fmt_param_details(p: Dict[str, Any]) -> str:
         lines.append("  " + "; ".join(rng))
     if p.get("choices"):
         lines.append(f"  choices: {p['choices']}")
-    if p.get("fields"):  # composite param
+    if p.get("fields"):
         lines.append("  fields:")
         if isinstance(p["fields"], dict):
             for fname, fspec in p["fields"].items():
@@ -69,7 +66,6 @@ def _fmt_param_details(p: Dict[str, Any]) -> str:
 
 def _infer_type_from_spec(p: Dict[str, Any]) -> Optional[str]:
     if p.get("choices"):
-        # deduce common type within choices
         types = {type(x).__name__ for x in p["choices"]}
         if len(types) == 1:
             t = list(types)[0]
@@ -79,7 +75,6 @@ def _infer_type_from_spec(p: Dict[str, Any]) -> Optional[str]:
                 else t
             )
         return "Any"
-    # fall back from min/max presence
     if p.get("min") is not None or p.get("max") is not None:
         return "float"
     return None
@@ -87,9 +82,6 @@ def _infer_type_from_spec(p: Dict[str, Any]) -> Optional[str]:
 
 def _fmt_cmd_sig(cname: str, args_spec: Dict[str, Any]) -> str:
     parts = []
-    # print("  - inside _fmt_cmd_sig")
-    # print(cname)
-    # print(args_spec)
     for spec in args_spec:
         name = spec.get("name", "unknown")
         required = spec.get("required", True)
@@ -100,6 +92,36 @@ def _fmt_cmd_sig(cname: str, args_spec: Dict[str, Any]) -> str:
         else:
             parts.append(f"{name}: {typ} = {default!r}")
     return f"{cname}(" + ", ".join(parts) + ")"
+
+
+# ------------------------- Rich callable wrapper -------------------------
+
+
+class _RichCallable:
+    """
+    Wraps a callable so that typing its name in the REPL shows
+    the signature and docstring instead of <function ...> or <bound method ...>.
+    """
+
+    def __init__(self, fn, sig: str = "", doc: str = ""):
+        self._fn = fn
+        self._sig = sig
+        self._doc = doc
+        self.__doc__ = fn.__doc__ or doc
+        self.__name__ = getattr(fn, "__name__", "?")
+        self.__qualname__ = getattr(fn, "__qualname__", self.__name__)
+
+    def __call__(self, *args, **kwargs):
+        return self._fn(*args, **kwargs)
+
+    def __repr__(self) -> str:
+        lines = [self._sig or f"{self.__name__}(...)"]
+        if self._doc:
+            for line in self._doc.strip().splitlines():
+                lines.append(f"    {line}")
+        return "\n".join(lines)
+
+    __str__ = __repr__
 
 
 # ------------------------- Proxies -------------------------
@@ -115,10 +137,8 @@ class PropertyProxy:
         self._id = dev_id
         self._name = name
         self._spec = spec
-        # Detailed doc for help(...)
         self.__doc__ = _fmt_param_details(spec)
 
-    # user-facing value helpers
     def get(self) -> Any:
         return self._hub._get_param(self._id, self._name)
 
@@ -130,14 +150,10 @@ class PropertyProxy:
         )
         self._hub.refresh_device(self._id)
 
-    # make assignment work: device.param = x (DeviceProxy.__setattr__ calls set())
-    # pretty-printing
     def __str__(self) -> str:
-        # value-only for printing/formatting
         return str(self.get())
 
     def __repr__(self) -> str:
-        # spec + current value on top line
         p = self._spec
         name = p["name"]
         typ = p.get("type") or _infer_type_from_spec(p) or "Any"
@@ -145,7 +161,6 @@ class PropertyProxy:
         if p.get("unit"):
             hdr += f" [{p['unit']}]"
         ro = "read-only" if p.get("read_only") else "read-write"
-        # constraints
         bits = []
         if p.get("min") is not None:
             bits.append(f"min={p['min']}")
@@ -160,7 +175,13 @@ class PropertyProxy:
         constraints = ("  " + "; ".join(bits)) if bits else ""
         val = self.get()
         body = (p.get("doc") or "").strip()
-        return f"{hdr}  ({ro})\n  value={val!r}{constraints}\n\n{body}".rstrip()
+        lines = [f"{hdr}  ({ro})", f"  value = {val!r}{constraints}"]
+        if body:
+            lines.append(f"  {body}")
+        if not p.get("read_only"):
+            lines.append(f"")
+            lines.append(f"  Usage: device.{name} = <value>  or  device.{name}.set(<value>)")
+        return "\n".join(lines)
 
     # conversions
     def __bool__(self):
@@ -172,7 +193,7 @@ class PropertyProxy:
     def __float__(self):
         return float(self.get())
 
-    # arithmetic forwarders (return plain Python numbers/strings, not a proxy)
+    # arithmetic forwarders
     def _v(self):
         return self.get()
 
@@ -240,7 +261,6 @@ class PropertyProxy:
     def __ge__(self, other):
         return self._v() >= (other.get() if isinstance(other, PropertyProxy) else other)
 
-    # ------------------------- DeviceSpec and CommandSpec -------------------------
     def __iter__(self):
         return iter(self.get())
 
@@ -250,7 +270,7 @@ class PropertyProxy:
 
 class DeviceProxy:
     """
-    A device proxy. help(obj) / repr(obj) prints parameters with current values and command signatures.
+    A device proxy. print(device) shows properties, commands, and data sources.
     """
 
     def __init__(self, hub: "Hub", dev_id: str, spec: Dict[str, Any]):
@@ -258,7 +278,7 @@ class DeviceProxy:
         self.__dict__["_id"] = dev_id
         self.__dict__["_spec"] = spec
 
-        # Build param proxies and attach as attributes by id-only
+        # Build param proxies
         properties = {}
         for p in spec.get("properties", []):
             pr = PropertyProxy(hub, dev_id, p["name"], p)
@@ -273,13 +293,12 @@ class DeviceProxy:
                 cname = c["name"]
                 cdoc = c.get("doc") or ""
                 args_spec = c.get("args", {})
-                returns = c.get("returns")  # optional, if your /spec provides it
+                returns = c.get("returns")
             else:
                 cname, cdoc, args_spec, returns = c, "", {}, None
 
             def _make(cname=cname, args_spec=args_spec, cdoc=cdoc, returns=returns):
                 def _cmd(**kwargs):
-                    # simple arg presence check
                     for aspec in args_spec:
                         name = aspec.get("name")
                         if aspec.get("required", True) and name not in kwargs:
@@ -296,114 +315,91 @@ class DeviceProxy:
                     sig += f" -> {returns}"
                 _cmd.__doc__ = (sig + ("\n\n" + cdoc if cdoc else "")).strip()
                 _cmd.__name__ = cname
-                return _cmd
+                return _RichCallable(_cmd, sig=sig, doc=cdoc)
 
             cmds[cname] = _make()
         self.__dict__["_cmds"] = cmds
 
-        # --- Data sources ---
+        # Data sources
         data_specs = spec.get("data_sources", []) or []
-        # data_ns = types.SimpleNamespace()
         data_map: Dict[str, DataSourceProxy] = {}
         for ds in data_specs:
             dsp = DataSourceProxy(hub, dev_id, ds)
-            # setattr(data_ns, ds["name"], dsp)
             data_map[ds["name"]] = dsp
-        # self.__dict__["data_sources"] = data_ns
         self.__dict__["_data_sources"] = data_map
 
-        # --- Plots (only for data with has_plot=True) ---
-        # plots_ns = types.SimpleNamespace()
-        # plots_map: Dict[str, PlotProxy] = {}
-        # for name, dsp in data_map.items():
-        #    if dsp._spec.get("has_plot"):
-        #        pp = PlotProxy(dsp)
-        #        #setattr(plots_ns, name, pp)
-        #        plots_map[name] = pp
-        # self.__dict__["plots"] = plots_ns
-        # self.__dict__["_plots"] = plots_map
-
-        # Device-level doc for help(...)
         self.__doc__ = self._build_doc()
 
     def _build_doc(self) -> str:
-        lines = [f"{self._id}  [{self._spec.get('kind','?')}]"]
+        kind = self._spec.get("kind", "?")
+        status = self._hub._devices.get(self._id, {}).get("status", "?")
+        lines = [f"{self._id}  [{kind}]  status: {status}"]
         if self._spec.get("doc"):
             lines.append(self._spec["doc"])
 
-        # parameters with current values
-        lines.append("\nParameters:")
-        state = self._hub._ensure_state(self._id)
-        for p in self._spec.get("properties", []):
-            current = state["state"].get(p["name"])
-            lines.append(_fmt_param_line(p, current))
+        # properties with current values
+        if self._spec.get("properties"):
+            lines.append("")
+            lines.append("Properties:")
+            state = self._hub._ensure_state(self._id)
+            for p in self._spec.get("properties", []):
+                current = state["state"].get(p["name"])
+                lines.append(_fmt_param_line(p, current))
 
-        # commands with annotated properties
+        # commands
         if self._spec.get("commands"):
-            lines.append("\nCommands:")
+            lines.append("")
+            lines.append("Commands:")
             for name, fn in self._cmds.items():
-                lines.append(
-                    f"  .{fn.__doc__.splitlines()[0]}"
-                )  # first line: signature
-                doc = fn.__doc__.split("\n", 1)
-                if len(doc) > 1 and doc[1].strip():
-                    lines.append("    " + doc[1].strip())
+                lines.append(f"  .{fn._sig}")
+                if fn._doc:
+                    lines.append(f"      {fn._doc.strip()}")
 
         # data sources
-        if getattr(self, "_data_sources", None):
+        if self._data_sources:
             lines.append("")
-            lines.append("Data Sources:")
+            lines.append("Data sources:")
             for name, ds in self._data_sources.items():
-                plot_hint = "  (plot)" if ds._spec.get("has_plot") else ""
-                doc = ds.__doc__.strip()
-                lines.append(f"  .{name} {plot_hint}")
-                lines.append("    " + doc)
+                plot_hint = "  (has plot)" if ds._spec.get("has_plot") else ""
+                doc = (ds._spec.get("doc") or "").strip()
+                lines.append(f"  .{name}{plot_hint}" + (f"  # {doc}" if doc else ""))
 
-        # --- Plots ---
-        # if getattr(self, "_plots", None):
-        #     lines.append("")
-        #     lines.append("Plots:")
-        #     for name, pp in self._plots.items():
-        #         lines.append(f"  .{name}(**kwargs) -> dict")
+        # usage hints
+        lines.append("")
+        lines.append("Tips:")
+        lines.append("  device.property = value     # set a property")
+        lines.append("  print(device.property)      # inspect a property in detail")
+        lines.append("  device.command(args)        # run a command")
 
         return "\n".join(lines)
 
-    # resolve commands as attributes
-    def __getattr__(
-        self, name: str
-    ):  # getattr is used only when the attribute does not exist
+    def __getattr__(self, name: str):
         cmd = self.__dict__["_cmds"].get(name, None)
         if cmd:
             return cmd
-
         ds = self.__dict__["_data_sources"].get(name, None)
         if ds:
             return ds
         raise AttributeError(name)
 
-    # route assignments to parameter proxies
     def __setattr__(self, name: str, value: Any):
         properties = self.__dict__.get("_properties", {})
         if name in properties:
             properties[name].set(value)
-            # refresh doc (current values may change)
             self.__dict__["__doc__"] = self._build_doc()
             return
         self.__dict__[name] = value
 
     def __repr__(self) -> str:
-        # Same as help()
         return self._build_doc()
 
     __str__ = __repr__
 
-    # NEW: device-scoped events (state only, from /api/v2/events)
-    def events(self, rate: float | int | None = None):  # todo - add duration limit
+    def events(self, rate: float | int | None = None):
         """Yield state events for this device."""
         for ev in self._hub.events(ids=[self._id], rate=rate):
             yield ev
 
-    # NEW: binary data stream (from /api/v2/streams/{id})
     def stream(
         self,
         rate: float | int | None = None,
@@ -416,7 +412,7 @@ class DeviceProxy:
         duration: stop after N seconds (optional).
         """
         try:
-            import websocket  # pip install websocket-client
+            import websocket
         except ImportError as e:
             raise RuntimeError(
                 "Install 'websocket-client' to use DeviceProxy.stream()"
@@ -449,7 +445,6 @@ class DeviceProxy:
         finally:
             ws.close()
 
-    # this may not be necessary - collecting can be done differently by user script
     def collect_stream(
         self, seconds: float, rate: float | int | None = None, fmt: str = "msgpack"
     ):
@@ -468,12 +463,6 @@ class DeviceProxy:
 class DataSourceProxy:
     """
     A data source proxy bound to a concrete device + source name.
-
-    Methods:
-      - get_one_frame() -> dict         # GET /devices/{id}/data/{source}/frame
-      - get_plot_specs() -> dict        # GET /devices/{id}/data/{source}/plot
-      - stream(limit=None, interval=None, rate=None, fmt='json') -> iterator of frames
-                                        # WS  /api/v2/streams/{id}/{source}
     """
 
     def __init__(self, hub: "Hub", dev_id: str, spec: Dict[str, Any]):
@@ -485,7 +474,6 @@ class DataSourceProxy:
             self._spec.get("doc") or ""
         ).strip() or f"{self._id}.{self._name} data source"
 
-    # --- simple pulls ---------------------------------------------------------
     def get_one_frame(self, **kwargs) -> Dict[str, Any]:
         """Fetch a single frame (JSON->Python)."""
         return self._hub._get_data_frame(self._id, self._name, kwargs)
@@ -494,26 +482,23 @@ class DataSourceProxy:
         """Fetch plotting metadata/specs (JSON->Python)."""
         return self._hub._get_plot_specs(self._id, self._name, kwargs)
 
-    # --- streaming (synchronous iterator) ------------------------------------
     def stream(
         self,
         *,
         limit: Optional[int] = None,
-        # interval: Optional[float] = None,
         rate: Optional[float | int] = None,
         fmt: str = "json",
     ):
         """
-        Yield frames from WS /api/v2/streams/{device_id}/{source}?format=&rate=.
+        Yield frames from WS /api/v2/streams/{device_id}/{source}.
 
         Args:
           limit: stop after yielding this many frames (None = infinite)
-          interval: client-side sleep between yields (seconds)
-          rate: server throttle Hz (maps to ?rate=)
+          rate: server throttle Hz
           fmt: 'json' or 'msgpack'
         """
         try:
-            import websocket  # websocket-client
+            import websocket
         except ImportError as e:
             raise RuntimeError(
                 "Install 'websocket-client' to use DataSourceProxy.stream()"
@@ -524,12 +509,10 @@ class DataSourceProxy:
             {"format": fmt, "rate": str(rate) if rate else None},
         )
         ws = websocket.create_connection(url)
-        # If msgpack, we’ll unpack bytes; else json text
         unpack_msgpack = None
         if fmt.lower() != "json":
             try:
-                import msgpack  # type: ignore
-
+                import msgpack
                 unpack_msgpack = msgpack.unpackb
             except ImportError as e:
                 ws.close()
@@ -551,20 +534,19 @@ class DataSourceProxy:
                     n += 1
                 if limit is not None and n >= limit:
                     break
-                # if interval:
-                #    time.sleep(interval)
         finally:
             ws.close()
 
     def __repr__(self) -> str:
-        lines = []
-        lines.append(f"{self._name}: data source  {self.__doc__}")
-        lines.append(f"  .get_one_frame()  returns single data frame")
-        lines.append(
-            f"  .stream(limit, rate=10) returns iterator that will provide up to limit frames"
-        )
+        lines = [f"{self._name}: data source"]
+        doc = (self._spec.get("doc") or "").strip()
+        if doc:
+            lines.append(f"  {doc}")
+        lines.append(f"")
+        lines.append(f"  .get_one_frame()             fetch single data frame")
+        lines.append(f"  .stream(limit, rate=10)      iterate over data frames")
         if self._spec.get("has_plot"):
-            lines.append(f"  .get_plot_specs() returns plot metadata")
+            lines.append(f"  .get_plot_specs()            fetch plot metadata")
         return "\n".join(lines)
 
     __str__ = __repr__
@@ -572,8 +554,7 @@ class DataSourceProxy:
 
 class PlotProxy:
     """
-    Thin alias around a data source's .plot(**kwargs) to make plots discoverable
-    as dev.plots.<name>(**kwargs).
+    Thin alias around a data source's plot to make plots discoverable.
     """
 
     def __init__(self, data_proxy: DataSourceProxy):
@@ -588,7 +569,7 @@ class PlotProxy:
         self.__doc__ = f"{self._name}: plot for data source '{self._name}'\n\n{doc}"
 
     def __call__(self, **kwargs) -> Any:
-        """Fetch the plot payload (JSON → Python)."""
+        """Fetch the plot payload (JSON -> Python)."""
         return self._data.plot(**kwargs)
 
     def __repr__(self) -> str:
@@ -597,57 +578,171 @@ class PlotProxy:
     __str__ = __repr__
 
 
-# ------------------------- Hub -------------------------
+# ------------------------- Devices collection -------------------------
 
 
-class Hub:
-    def __init__(self, base_url: str):
-        print(f"trying to __init__ Hub with base_url {base_url}")
-        self._base = base_url.rstrip("/")
-        self._http = httpx.Client(base_url=self._base, timeout=3.0)
-        self._devices: Dict[str, Dict[str, Any]] = {}  # id -> DeviceInfo
-        self._specs: Dict[str, Dict[str, Any]] = {}  # id -> DeviceSpec
-        self._proxies: Dict[str, DeviceProxy] = {}  # id -> DeviceProxy
+class Devices:
+    """
+    Collection of connected device proxies.
 
-    @property
-    def base(self) -> str:
-        return self._base
+    Access devices as attributes:  devices.my_device
+    Iterate over devices:          for name, dev in devices
+    """
+
+    def __init__(self, hub: "Hub"):
+        self.__dict__["_hub"] = hub
+        self.__dict__["_proxies"] = {}
+
+    def _rebuild(self):
+        self.__dict__["_proxies"] = dict(self._hub._proxies)
+
+    def refresh(self) -> "Devices":
+        """Re-fetch device list and specs from the server."""
+        self._hub.refresh()
+        self._rebuild()
+        return self
+
+    def __getattr__(self, name: str):
+        proxies = self.__dict__["_proxies"]
+        if name in proxies:
+            return proxies[name]
+        raise AttributeError(
+            f"No device '{name}'. Available: {', '.join(proxies.keys()) or '(none)'}"
+        )
+
+    def __setattr__(self, name: str, value: Any):
+        # prevent accidentally overwriting device proxies
+        if name in self.__dict__.get("_proxies", {}):
+            raise AttributeError(
+                f"Cannot replace device '{name}'. Use device.property = value instead."
+            )
+        self.__dict__[name] = value
+
+    def __iter__(self):
+        return iter(self._proxies.items())
+
+    def __len__(self):
+        return len(self._proxies)
+
+    def __contains__(self, name: str):
+        return name in self._proxies
+
+    def keys(self):
+        return self._proxies.keys()
+
+    def values(self):
+        return self._proxies.values()
+
+    def items(self):
+        return self._proxies.items()
+
+    def __getitem__(self, name: str):
+        if name in self._proxies:
+            return self._proxies[name]
+        raise KeyError(name)
+
+    def events(self, ids: list[str] | str | None = None, rate: float | int | None = None):
+        """
+        Yield real-time state events for devices.
+
+        Args:
+          ids:  device id or list of ids to filter (None = all devices)
+          rate: max events/sec from server
+        """
+        yield from self._hub.events(ids=ids, rate=rate)
+
+    def __repr__(self) -> str:
+        proxies = self._proxies
+        n = len(proxies)
+        host = self._hub._host_port()
+        if not proxies:
+            return f"Devices ({host}): (none connected)\n\n  Call labhub.devices.refresh() after connecting devices."
+
+        lines = [f"Devices ({host}): {n} connected"]
+        lines.append("")
+        for dev_id, proxy in proxies.items():
+            kind = proxy._spec.get("kind", "")
+            status = self._hub._devices.get(dev_id, {}).get("status", "?")
+            doc = (proxy._spec.get("doc") or "").strip()
+            label = f".{dev_id}"
+            info = f"[{kind}]" if kind else ""
+            if status != "connected":
+                info += f" ({status})"
+            desc = f"  {doc}" if doc else ""
+            lines.append(f"  {label.ljust(24)} {info}{desc}")
+
+        lines.append("")
+        lines.append("Usage:")
+        lines.append("  d = labhub.devices.DEVICE_ID")
+        lines.append("  print(d)                      # show properties, commands")
+        lines.append("  d.property = value             # set a property")
+        lines.append("  d.command(args)                # run a command")
+        return "\n".join(lines)
+
+    __str__ = __repr__
+
+
+# ------------------------- Server / admin -------------------------
+
+
+class Server:
+    """
+    Server administration interface.
+
+    Provides operations for managing the LabHub server: configuration,
+    device lifecycle, profiles, logging, and monitoring.
+    """
+
+    # Methods that should be wrapped with _RichCallable for REPL display
+    _public_methods = {
+        "snapshot", "reload", "soft_reload", "reload_device",
+        "connect_device", "disconnect_device", "config", "device_config",
+        "update_device_config", "drivers", "profile", "profile_save",
+        "profile_load", "loglevel", "set_loglevel", "apply_properties",
+        "influx_status",
+    }
+
+    def __init__(self, hub: "Hub"):
+        self._hub = hub
+
+    def __getattr__(self, name: str):
+        # Let normal attribute lookup happen first (this is only called on miss)
+        raise AttributeError(name)
+
+    def __getattribute__(self, name: str):
+        val = super().__getattribute__(name)
+        # Wrap public methods so REPL shows signature + docstring
+        if name in Server._public_methods and callable(val):
+            import inspect
+            try:
+                sig = str(inspect.signature(val))
+            except (ValueError, TypeError):
+                sig = "(...)"
+            return _RichCallable(val, sig=f"{name}{sig}", doc=val.__doc__ or "")
+        return val
+
+    # ---- Snapshot ----
 
     def snapshot(
         self,
         folder: str = None,
-        name="snapshot_{now:%y%m%d_%H%M%S}",
+        name: str = "snapshot_{now:%y%m%d_%H%M%S}",
         filetype: str = "yaml",
         content: str = "properties",
     ):
         """
-        Fetch a snapshot of all currently connected devices from the server.
+        Fetch a snapshot of all device states. Optionally save to file.
 
-        The function returns python data structure and optionally saves it as JSON/YAML.
+        Args:
+          folder:   directory to save file (None = return data only)
+          name:     filename template, use {now} for timestamp
+          filetype: 'yaml' or 'json'
+          content:  'properties' (id -> state) or 'devices' (full info)
 
-        Parameters
-        ----------
-        folder : str, optional
-            Target directory where the snapshot file should be written.
-            If None or not a valid directory, only the python structure is returned.
-        name : str, optional
-            Filename template (without extension). Supports Python datetime
-            formatting via `{now}`, default "snapshot_{now:%y%m%d_%H%M%S}".
-        filetype : str, optional
-            Output file format ("json" or "yaml", default "yaml")
-        content : str, optional
-            Content format: "properties" (device_id -> {prop: value}, default)
-            or "devices" (full device info including kind, status, etc.)
-
-        Returns
-        -------
-        dict or list
-            If content="properties": dict of {device_id: {property: value}}
-            If content="devices": list of full device info dicts
+        Returns: dict (properties) or list (devices)
         """
-        devs = self._http.get("/api/v2/devices").json()
+        devs = self._hub._http.get("/api/v2/devices").json()
 
-        # Transform to properties format (device_id -> state)
         if content == "properties":
             data = {dev["id"]: dev["state"] for dev in devs}
         elif content == "devices":
@@ -664,19 +759,212 @@ class Hub:
             path = Path(folder)
             if path.is_dir():
                 full = path / filename
-
                 if filetype == "json":
                     with open(full, "w", encoding="utf-8") as f:
                         json.dump(data, f, indent=2)
-
                 if filetype in ("yaml", "yml"):
                     with open(full, "w", encoding="utf-8") as f:
                         yaml.safe_dump(data, f, sort_keys=False)
 
         return data
 
+    # ---- Reload ----
+
+    def reload(self) -> Dict[str, Any]:
+        """Reload all devices from config (full restart)."""
+        r = self._hub._http.post("/api/v2/admin/reload")
+        r.raise_for_status()
+        return r.json()
+
+    def soft_reload(self) -> Dict[str, Any]:
+        """Smart reload: only restart devices whose config changed."""
+        r = self._hub._http.post("/api/v2/admin/soft-reload")
+        r.raise_for_status()
+        return r.json()
+
+    def reload_device(self, dev_id: str) -> Dict[str, Any]:
+        """Reload a single device from config."""
+        r = self._hub._http.post(f"/api/v2/admin/reload/{dev_id}")
+        r.raise_for_status()
+        return r.json()
+
+    # ---- Device connect/disconnect ----
+
+    def connect_device(self, dev_id: str) -> Dict[str, Any]:
+        """Connect (enable) a device."""
+        r = self._hub._http.post(f"/api/v2/admin/device/{dev_id}/connect")
+        r.raise_for_status()
+        return r.json()
+
+    def disconnect_device(self, dev_id: str) -> Dict[str, Any]:
+        """Disconnect (disable) a device."""
+        r = self._hub._http.post(f"/api/v2/admin/device/{dev_id}/disconnect")
+        r.raise_for_status()
+        return r.json()
+
+    # ---- Configuration ----
+
+    def config(self) -> Dict[str, Any]:
+        """Get current device configuration (config.yaml content)."""
+        r = self._hub._http.get("/api/v2/admin/config")
+        r.raise_for_status()
+        return r.json()
+
+    def device_config(self, dev_id: str) -> Dict[str, Any]:
+        """Get configuration for a single device."""
+        r = self._hub._http.get(f"/api/v2/admin/config/device/{dev_id}")
+        r.raise_for_status()
+        return r.json()
+
+    def update_device_config(self, dev_id: str, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Update configuration for a single device."""
+        r = self._hub._http.put(f"/api/v2/admin/config/device/{dev_id}", json=config)
+        r.raise_for_status()
+        return r.json()
+
+    def drivers(self) -> List[Dict[str, Any]]:
+        """List all available device drivers."""
+        r = self._hub._http.get("/api/v2/admin/drivers")
+        r.raise_for_status()
+        return r.json()
+
+    # ---- Profile ----
+
+    def profile(self) -> Dict[str, Any]:
+        """Get current profile info (path, policies, raw content)."""
+        r = self._hub._http.get("/api/v2/admin/profile")
+        r.raise_for_status()
+        return r.json()
+
+    def profile_save(self) -> Dict[str, Any]:
+        """Force an immediate profile save."""
+        r = self._hub._http.post("/api/v2/admin/profile/save")
+        r.raise_for_status()
+        return r.json()
+
+    def profile_load(self, file_path: str, switch_path: bool = True) -> Dict[str, Any]:
+        """
+        Load a profile from file and apply saved property values.
+
+        Args:
+          file_path:    path to profile YAML file
+          switch_path:  if True, future saves go to this file (default True)
+        """
+        r = self._hub._http.post(
+            "/api/v2/admin/profile/load",
+            params={"file_path": file_path, "switch_path": switch_path},
+        )
+        r.raise_for_status()
+        return r.json()
+
+    # ---- Logging ----
+
+    def loglevel(self, logger_name: str = None) -> str:
+        """Get current log level. Optionally specify a logger name."""
+        params = {}
+        if logger_name:
+            params["logger_name"] = logger_name
+        r = self._hub._http.get("/api/v2/admin/loglevel", params=params or None)
+        r.raise_for_status()
+        return r.json()
+
+    def set_loglevel(self, level: str, logger_name: str = None) -> Dict[str, Any]:
+        """
+        Set log level at runtime.
+
+        Args:
+          level:       DEBUG, INFO, WARNING, or ERROR
+          logger_name: optional, e.g. 'labhub.drivers' (default: root)
+        """
+        params = {"level": level}
+        if logger_name:
+            params["logger_name"] = logger_name
+        r = self._hub._http.post("/api/v2/admin/loglevel", params=params)
+        r.raise_for_status()
+        return r.json()
+
+    # ---- Bulk property application ----
+
+    def apply_properties(
+        self, properties: Dict[str, Dict[str, Any]] = None, file_path: str = None
+    ) -> Dict[str, Any]:
+        """
+        Bulk-apply properties to multiple devices.
+
+        Args:
+          properties: dict of {device_id: {prop: value, ...}, ...}
+          file_path:  path to a YAML/JSON file with properties to apply
+        """
+        body = {}
+        if properties:
+            body["properties"] = properties
+        if file_path:
+            body["file_path"] = file_path
+        r = self._hub._http.post("/api/v2/admin/apply_properties", json=body)
+        r.raise_for_status()
+        return r.json()
+
+    # ---- InfluxDB ----
+
+    def influx_status(self) -> Dict[str, Any]:
+        """Get InfluxDB integration status and metrics."""
+        r = self._hub._http.get("/api/v2/admin/influx/status")
+        r.raise_for_status()
+        return r.json()
+
+    # ---- Presentation ----
+
+    def __repr__(self) -> str:
+        host = self._hub._host_port()
+        lines = [f"LabHub server @ {host}"]
+        lines.append("")
+        lines.append("Snapshots & profiles:")
+        lines.append("  .snapshot(folder, name, filetype)           Save device state snapshot")
+        lines.append("  .profile()                                  Get current profile info")
+        lines.append("  .profile_save()                             Force immediate profile save")
+        lines.append("  .profile_load(file_path)                    Load profile from file")
+        lines.append("  .apply_properties(properties)               Bulk-set properties on devices")
+        lines.append("")
+        lines.append("Device lifecycle:")
+        lines.append("  .reload()                                   Reload all devices from config")
+        lines.append("  .soft_reload()                              Smart reload (changed only)")
+        lines.append("  .reload_device(dev_id)                      Reload a single device")
+        lines.append("  .connect_device(dev_id)                     Connect a device")
+        lines.append("  .disconnect_device(dev_id)                  Disconnect a device")
+        lines.append("")
+        lines.append("Configuration:")
+        lines.append("  .config()                                   Get device configuration")
+        lines.append("  .device_config(dev_id)                      Get single device config")
+        lines.append("  .update_device_config(dev_id, config)       Update device config")
+        lines.append("  .drivers()                                  List available drivers")
+        lines.append("")
+        lines.append("Monitoring:")
+        lines.append("  .loglevel()                                 Get current log level")
+        lines.append("  .set_loglevel('DEBUG'|'INFO'|'WARNING')     Set log level at runtime")
+        lines.append("  .influx_status()                            Get InfluxDB status")
+        return "\n".join(lines)
+
+    __str__ = __repr__
+
+
+# ------------------------- Hub (internal) -------------------------
+
+
+class Hub:
+    """Internal connection manager. Not exposed directly to the user."""
+
+    def __init__(self, base_url: str):
+        self._base = base_url.rstrip("/")
+        self._http = httpx.Client(base_url=self._base, timeout=3.0)
+        self._devices: Dict[str, Dict[str, Any]] = {}  # id -> DeviceInfo
+        self._specs: Dict[str, Dict[str, Any]] = {}    # id -> DeviceSpec
+        self._proxies: Dict[str, DeviceProxy] = {}     # id -> DeviceProxy
+
+    @property
+    def base(self) -> str:
+        return self._base
+
     def refresh(self) -> "Hub":
-        # print(" - inside refresh")
         devs = self._http.get("/api/v2/devices").json()
         if not isinstance(devs, list):
             raise RuntimeError("Unexpected /devices response")
@@ -697,21 +985,11 @@ class Hub:
         self._devices[dev_id] = st
         return st
 
-    # ---- accessors for proxies ----
-    def devices(self) -> Dict[str, DeviceProxy]:
-        return dict(self._proxies)
-
     # ---- used by proxies ----
-    def _ensure_state(self, dev_id: str) -> Dict[str, Any]:
-        # st = self._devices.get(dev_id)
-        # if not st:
-        #     st = self._http.get(f"/api/v2/devices/{dev_id}").json()
-        #     self._devices[dev_id] = st
 
-        # ugly hack to always get fresh state (should be subscibed to event bus instead TODO)
+    def _ensure_state(self, dev_id: str) -> Dict[str, Any]:
         st = self._http.get(f"/api/v2/devices/{dev_id}").json()
         self._devices[dev_id] = st
-
         return st
 
     def _get_param(self, dev_id: str, name: str):
@@ -724,35 +1002,20 @@ class Hub:
     def _post(self, path: str, json: Dict[str, Any]):
         return self._http.post(path, json=json)
 
-    def _get_data_once(self, dev_id: str, name: str, params: Dict[str, Any]) -> Any:
-        url = f"/api/v2/devices/{dev_id}/data/{name}"
-        resp = self._http.get(url, params=params or None)
-        resp.raise_for_status()
-        return resp.json()
-
-    def _get_plot(self, dev_id: str, name: str, params: Dict[str, Any]) -> Any:
-        url = f"/api/v2/devices/{dev_id}/plots/{name}"
-        resp = self._http.get(url, params=params or None)
-        resp.raise_for_status()
-        return resp.json()
-
-    # ---- presentation ----
     def _host_port(self) -> str:
         u = urlparse(self._base)
         return f"{u.hostname}:{u.port or 80}"
 
-    # NEW: hub-wide events (state only)
+    # ---- events (websocket) ----
+
     def events(
         self, ids: list[str] | str | None = None, rate: float | int | None = None
     ):
-        """
-        Yield server-pushed state events as dicts.
-        ids: device id or list; rate: max events/sec from server.
-        """
+        """Yield server-pushed state events as dicts."""
         try:
-            import websocket  # pip install websocket-client
+            import websocket
         except ImportError as e:
-            raise RuntimeError("Install 'websocket-client' to use Hub.events()") from e
+            raise RuntimeError("Install 'websocket-client' to use events()") from e
 
         params = {}
         if ids:
@@ -772,7 +1035,8 @@ class Hub:
         finally:
             ws.close()
 
-    # data source helpers
+    # ---- data helpers ----
+
     def _ws_url(self, path: str, params: Dict[str, Any] | None = None) -> str:
         base = self._base.replace("http://", "ws://").replace("https://", "wss://")
         url = base + path
@@ -798,29 +1062,26 @@ class Hub:
         r.raise_for_status()
         return r.json()
 
-    def describe(self) -> str:
-        lines = [f"labhub ({self._host_port()}) has the following devices:"]
-        for dev_id, proxy in self._proxies.items():
-            doc = proxy._spec.get("doc", "")
-            doc = doc.strip() if doc is not None else "-"
-            lines.append(f"  .{dev_id.ljust(18)} {doc}")
-        return "\n".join(lines)
-
-    def __repr__(self) -> str:
-        return self.describe()
-
-    __str__ = __repr__
-
 
 # ------------------------- Top-level connect helper -------------------------
 
 
-def connect(host="127.0.0.1", port=8000) -> Hub:
+def connect(host="127.0.0.1", port=8212) -> bool:
+    """
+    Connect to a LabHub server and return (devices, server) tuple.
+
+    Returns True on success. After connecting, use the module-level
+    labhub.devices and labhub.server objects.
+    """
     base = f"http://{host}:{port}"
     try:
         hub = Hub(base).refresh()
     except Exception as e:
         raise ConnectionError(
-            f"Cannot connect to LabHub at {base}. Is the tray/server running?\n{e}"
+            f"Cannot connect to LabHub at {base}. Is the server running?\n{e}"
         )
-    return hub
+
+    devices = Devices(hub)
+    devices._rebuild()
+    server = Server(hub)
+    return hub, devices, server
