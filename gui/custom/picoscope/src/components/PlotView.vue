@@ -96,7 +96,7 @@
   import { usePlotSettingsStore } from 'stores/plotSettings'
   import type { PlotSettings } from 'src/types/plotSettings'
   import { getFrame, openDataStream } from 'src/api/picoscope' // adjust path
-  import type { Frame, DataFrameType, ChannelId, PlotSpec } from 'src/api/picoscope'
+  import type { Frame, DataFrameType, PlotMetadataFrame, HwChannelId, PlotSpec } from 'src/api/picoscope'
   import { last } from 'lodash-es'
 
   const ps = usePicoscopeStore()
@@ -127,11 +127,13 @@
   const xScaleLocal = ref<'linear' | 'log'>(settings.xScale)
   const yScaleLocal = ref<'linear' | 'log'>(settings.yScale)
 
-  const CHANNEL_COLORS: Record<ChannelId, string> = {
+  const CHANNEL_COLORS: Record<string, string> = {
     A: '#2196f3', // blue
     B: '#f44336', // red
     C: '#4caf50', // green
     D: '#ffc107', // amber/orange
+    X: '#9c27b0', // purple
+    Y: '#00bcd4', // cyan
   }
 
   watch(
@@ -150,24 +152,36 @@
 
   // frame is whatever I get from frame API/WS
   // data is what plotly needs
+  const HW_CHANNELS: HwChannelId[] = ['A', 'B', 'C', 'D']
+  const META_KEYS = new Set(['source', 'seq', 'ts', 'multiplier', 'type', 'plot'])
+
   function buildDataFromFrame(frame: DataFrameType): Data[] {
     const xVals = spec.value?.['x-values']
-    const chanKeys: ChannelId[] = (['A', 'B', 'C', 'D'] as ChannelId[])
-      .filter((ch) => ps.channels()?.[ch].enable === 1) // only enabled channels
-      .filter((ch) => Array.isArray(frame[ch])) // only those present in frame
+
+    // Discover all plottable keys from the frame
+    const chanKeys = Object.keys(frame).filter((key) => {
+      if (META_KEYS.has(key)) return false
+      if (!Array.isArray(frame[key])) return false
+      // For hardware channels, respect the enable flag
+      if (HW_CHANNELS.includes(key as HwChannelId)) {
+        return ps.channels()?.[key as HwChannelId]?.enable === 1
+      }
+      // Virtual channels (X, Y, etc.) — always show if data present
+      return true
+    })
 
     return chanKeys.map((ch) => {
-      const multiplier = spec.value?.channel_settings?.[ch]?.multiplier || 1 // apply multiplier if present
+      const multiplier = spec.value?.channel_settings?.[ch as HwChannelId]?.multiplier || 1
       const y = (frame[ch] as number[]).map((v) => v * multiplier)
-      const x = xVals || y.map((_, i) => i) // default to simple index on X
+      const x = xVals || y.map((_, i) => i)
 
       return {
         x,
         y,
-        mode: 'lines',
-        type: 'scattergl',
+        mode: 'lines' as const,
+        type: 'scattergl' as const,
         name: ch,
-        line: { color: CHANNEL_COLORS[ch] },
+        line: { color: CHANNEL_COLORS[ch] || '#999999' },
       }
     })
   }
@@ -449,8 +463,9 @@
           // Type guard: check if it's a plot metadata frame
           if ('type' in frame && frame.type === 'plot_metadata') {
             // Update plot spec in store (watch will update local spec.value)
-            ps.plotSpecs[props.name] = frame.plot
-            console.log('Plot metadata updated for', props.name, ':', frame.plot)
+            const metaFrame = frame as PlotMetadataFrame
+            ps.plotSpecs[props.name] = metaFrame.plot
+            console.log('Plot metadata updated for', props.name, ':', metaFrame.plot)
           } else {
             // Regular data frame (TypeScript knows it's DataFrameType here)
             const dataFrame = frame as DataFrameType

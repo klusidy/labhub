@@ -9,7 +9,27 @@
       <div class="row q-col-gutter-sm q-pa-sm">
         <div v-for="p in rows" :key="p.key" class="col-12 col-sm-6">
           <div class="col-6 col-sm-6">
+            <q-select
+              v-if="p.choices"
+              v-model="p.requested"
+              :ref="refSetter(p.key)"
+              :options="p.choices"
+              :label="p.label"
+              stack-label
+              dense
+              outlined
+              filled
+              :readonly="p.readonly || false"
+              :disable="p.readonly || false"
+              @update:model-value="onRowChange(p)"
+              :class="{ 'prop-updated': p.justUpdated }"
+            >
+              <q-tooltip v-if="p.hint">
+                {{ p.hint }}
+              </q-tooltip>
+            </q-select>
             <q-input
+              v-else
               v-model="p.requested"
               :ref="refSetter(p.key)"
               :label="p.label"
@@ -55,19 +75,19 @@
     return name.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase())
   }
 
-  type NumberRow = {
+  type PropertyRow = {
     key: string
     label: string
     unit?: string | undefined
     hint?: string | undefined
-    requested: number
-    actual?: number
+    requested: number | string
+    actual?: number | string
     readonly?: boolean
-
+    choices?: string[]
     justUpdated?: boolean
   }
 
-  const rows = reactive<NumberRow[]>([])
+  const rows = reactive<PropertyRow[]>([])
 
   watch(
     () => [ps.spec?.properties, ps.device?.state] as const,
@@ -79,22 +99,24 @@
 
       for (const p of props) {
         const name = p.name
-        const value = state[name] as number | undefined
+        const value = state[name] as number | string | undefined
 
-        rows.push({
+        const row: PropertyRow = {
           key: name,
           label: labelFromName(name),
           unit: p.unit ?? undefined,
           hint: p.doc ?? undefined,
-          requested: value ?? (p.default as number | null) ?? 0,
+          requested: value ?? (p.default as number | string | null) ?? 0,
           readonly: p.read_only,
-        })
+        }
+        if (p.choices) row.choices = p.choices
+        rows.push(row)
       }
     },
     { immediate: true }
   )
 
-  async function onRowChange(row: NumberRow) {
+  async function onRowChange(row: PropertyRow) {
     if (row.readonly) return
     const key = row.key
     const value = row.requested
@@ -117,7 +139,7 @@
     }, 600)
   }
 
-  // async function onRowChange(row: NumberRow) {
+  // async function onRowChange(row: PropertyRow) {
   //   if (row.readonly) return
   //   const key = row.key
 

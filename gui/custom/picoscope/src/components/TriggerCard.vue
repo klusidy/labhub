@@ -126,7 +126,7 @@
   import { computed, reactive, watch } from 'vue'
   import { debounce } from 'lodash-es'
   import { usePicoscopeStore } from 'stores/picoscope'
-  import type { ChannelId } from 'src/api/picoscope'
+  import type { HwChannelId } from 'src/api/picoscope'
 
   type Edge = 'RISING' | 'FALLING' | 'RISING_OR_FALLING'
 
@@ -191,7 +191,7 @@
   const debouncedTriggerUpdate = debounce(async (v: typeof trigger) => {
     await ps.setTriggerSimple({
       enable: v.enable,
-      source: v.channel as ChannelId,
+      source: v.channel as HwChannelId,
       threshold_mV: v.thresholdMv,
       direction: v.edge,
       delay: v.delaySamples,

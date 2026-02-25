@@ -267,6 +267,10 @@ class ps5000a(Device):
         self._SG_window = 1001
         self._SG_freq = 1e3
 
+        self._rotation_angle_deg = 0
+        self._rotation_angle_rad = 0
+        self._rotation_inputs = "AB"
+
         self._pico_raw_source = PicoRawSource(driver=self)
 
         super().__init__(dev_id, options, manager)
@@ -560,7 +564,7 @@ class ps5000a(Device):
         return self._rotation_inputs
 
     @rotation_inputs.setter
-    def rotation_inputs(self, value: str) -> None:
+    def rotation_inputs(self, value: str) -> str:
         self._rotation_inputs = value
         return value
 
@@ -1229,7 +1233,7 @@ class ps5000a(Device):
             )
 
         return {
-            "title": "PSD (downsampled)",  # self.psd_stream_downsample_plot.__doc__,
+            "title": "PSD (downsampled + XY)",
             "x-label": "Frequency (Hz)",
             "y-label": "PSD [V^2 / Hz]",
             "x-values": freqs.tolist(),

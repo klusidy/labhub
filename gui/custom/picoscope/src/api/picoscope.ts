@@ -7,7 +7,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //
 
-export type ChannelId = 'A' | 'B' | 'C' | 'D'
+export type ChannelId = 'A' | 'B' | 'C' | 'D' | 'X' | 'Y'
 
 export type Range =
   | '10MV'
@@ -22,15 +22,17 @@ export type Range =
   | '10V'
   | '20V' //| '50V'
 
-export const ChannelIndex: Record<ChannelId, number> = {
+export type HwChannelId = 'A' | 'B' | 'C' | 'D'
+
+export const ChannelIndex: Record<HwChannelId, number> = {
   A: 0,
   B: 1,
   C: 2,
   D: 3,
 }
 
-export const ChannelIdFromIndex = (i: number): ChannelId =>
-  (['A', 'B', 'C', 'D'] as ChannelId[])[i] ?? 'A'
+export const ChannelIdFromIndex = (i: number): HwChannelId =>
+  (['A', 'B', 'C', 'D'] as HwChannelId[])[i] ?? 'A'
 
 export interface ChannelSettings {
   status: number
@@ -66,7 +68,7 @@ export interface PicoscopeState {
   post_trigger_samples_seconds: number
   downsample_window: number
 
-  _channel_settings: Record<ChannelId, ChannelSettings>
+  _channel_settings: Record<HwChannelId, ChannelSettings>
   _trigger_settings: TriggerSettingsRaw
 
   [key: string]: unknown
@@ -86,7 +88,7 @@ export type DataFrameType = {
   seq: number
   ts: number
   multiplier?: number
-} & Partial<Record<ChannelId, number[]>>
+} & Partial<Record<ChannelId, number[]>> & { [key: string]: unknown }
 
 // Plot metadata frame (sent on stream start/restart)
 export type PlotMetadataFrame = {
@@ -155,7 +157,7 @@ export interface PlotSpec {
   'x-label': string
   'y-label': string
   'x-values': number[]
-  channel_settings?: Record<ChannelId, ChannelSettings>
+  channel_settings?: Record<HwChannelId, ChannelSettings>
 }
 
 //
@@ -224,7 +226,7 @@ export async function patchPicoscopeProperties(
 //
 
 export interface SetChannelArgs {
-  channel: ChannelId
+  channel: HwChannelId
   enable: boolean
   coupling_type: 'AC' | 'DC'
   range: '10MV' | '20MV' | '50MV' | '100MV' | '200MV' | '500MV' | '1V' | '2V' | '5V' | '10V' | '20V' // | '50V' | 'MAX_RANGES';
@@ -234,7 +236,7 @@ export type TriggerDirection = 'RISING' | 'FALLING' | 'RISING_OR_FALLING'
 
 export interface SetSimpleTriggerArgs {
   enable: boolean
-  source: ChannelId
+  source: HwChannelId
   threshold_mV: number
   direction: TriggerDirection
   delay?: number

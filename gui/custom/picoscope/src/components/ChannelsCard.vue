@@ -66,14 +66,14 @@
 import { computed, reactive, watch } from 'vue'
 import { debounce } from 'lodash-es'
 import { usePicoscopeStore } from 'stores/picoscope'
-import type { ChannelId, Range } from 'src/api/picoscope'
+import type { HwChannelId, Range } from 'src/api/picoscope'
 
 const ps = usePicoscopeStore()
 
 
 
 interface UIChannel {
-  id: ChannelId
+  id: HwChannelId
   enabled: boolean
   coupling: 'AC' | 'DC'
   range: Range
@@ -95,7 +95,7 @@ const rangeOptions = [
   '1V','2V','5V','10V','20V'
 ]
 
-const local = reactive<Record<ChannelId, LocalChannel>>({
+const local = reactive<Record<HwChannelId, LocalChannel>>({
   A: { enabled: false, coupling: 'DC', range: '1V' },
   B: { enabled: false, coupling: 'DC', range: '1V' },
   C: { enabled: false, coupling: 'DC', range: '1V' },
@@ -104,7 +104,7 @@ const local = reactive<Record<ChannelId, LocalChannel>>({
 
 // array form for template v-for
 const channelList = computed(() =>
-  (['A','B','C','D'] as ChannelId[]).map(id => ({ id }))
+  (['A','B','C','D'] as HwChannelId[]).map(id => ({ id }))
 )
 
 // sync backend → local UI state
@@ -112,7 +112,7 @@ watch(
   () => ps.channels(),
   ch => {
     if (!ch) return
-    for (const id of ['A','B','C','D'] as ChannelId[]) {
+    for (const id of ['A','B','C','D'] as HwChannelId[]) {
       local[id].enabled  = ch[id].enable === 1
       local[id].coupling = ch[id].coupling_type_str
       local[id].range    = ch[id].range_str
@@ -123,11 +123,11 @@ watch(
 
 // debounced update to backend
 import { toRaw } from 'vue'
-function applyChannelUpdate(id: ChannelId) {
+function applyChannelUpdate(id: HwChannelId) {
   void debouncedChannelUpdate(id, { ...toRaw(local[id]) }) // snapshot current UI state
 }
 
-const debouncedChannelUpdate = debounce(async (id: ChannelId, ch: LocalChannel) => {
+const debouncedChannelUpdate = debounce(async (id: HwChannelId, ch: LocalChannel) => {
   const v = local[id]
 
   await ps.setChannel({
