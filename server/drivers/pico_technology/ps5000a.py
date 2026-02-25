@@ -217,7 +217,7 @@ class ps5000a(Device):
     This driver requires the PicoSDK to be installed."""
 
     config_template = {
-        "resolution": 14,
+        "resolution": 12,
         "channels": [
             {"id": "A", "coupling": "DC", "range": "1V", "enable": True},
             {"id": "B", "coupling": "DC", "range": "1V", "enable": False},
@@ -541,6 +541,27 @@ class ps5000a(Device):
     @SG_freq.setter
     def SG_freq(self, value: int) -> None:
         self._SG_freq = value
+        return value
+
+    @api_property(unit="degrees")
+    def rotation_angle_deg(self) -> float:
+        """Rotation angle in degrees for the downsampled rotated PSD"""
+        return self._rotation_angle_deg
+
+    @rotation_angle_deg.setter
+    def rotation_angle_deg(self, value: float) -> None:
+        self._rotation_angle_deg = value
+        self._rotation_angle_rad = value * np.pi / 180
+        return value
+
+    @api_property(choices=["AB", "AC", "AD", "BC", "BD", "CD"])
+    def rotation_inputs(self) -> str:
+        """Channels to use as inputs for the downsampled rotated PSD"""
+        return self._rotation_inputs
+
+    @rotation_inputs.setter
+    def rotation_inputs(self, value: str) -> None:
+        self._rotation_inputs = value
         return value
 
     @api_command()
@@ -1038,7 +1059,7 @@ class ps5000a(Device):
             if window % 2 == 0:
                 raise ValueError("window must be odd")
 
-            nfft = 2 * (psd.size - 1)   # infer FFT length
+            nfft = 2 * (psd.size - 1)  # infer FFT length
 
             # log-PSD (skip DC)
             y = np.log10(psd[1:] + eps)
@@ -1054,11 +1075,13 @@ class ps5000a(Device):
 
             # interpolate → smooth → interpolate back
             yu = np.interp(xu, x, y)
-            yu_sm = savgol_filter(yu, window_length=window, polyorder=polyorder, mode="interp")
+            yu_sm = savgol_filter(
+                yu, window_length=window, polyorder=polyorder, mode="interp"
+            )
             y_sm = np.interp(x, xu, yu_sm)
 
             # write back in place
-            psd[1:] = 10.0 ** y_sm
+            psd[1:] = 10.0**y_sm
 
             return psd
 
@@ -1076,7 +1099,7 @@ class ps5000a(Device):
             window_size = self._SG_window
             f0 = self._SG_freq
             if window_size > 1:
-                Pxx = smooth_psd(Pxx, fs, f0, window_size,3,1e-30)
+                Pxx = smooth_psd(Pxx, fs, f0, window_size, 3, 1e-30)
 
             return Pxx.tolist()
 
@@ -1118,6 +1141,95 @@ class ps5000a(Device):
 
         return {
             "title": "PSD (Savitsky-Golay smooth)",  # self.psd_stream_downsample_plot.__doc__,
+            "x-label": "Frequency (Hz)",
+            "y-label": "PSD [V^2 / Hz]",
+            "x-values": freqs.tolist(),
+        }
+
+    @api_data()
+    async def psd_downsample_rotate(self) -> AsyncIterator[Frame]:
+        """Returns PSD of the time series"""
+
+        def downsample_average(data: np.ndarray, window_size: int) -> np.ndarray:
+            n = data.size
+            num_windows = n // window_size
+            if num_windows == 0:
+                return np.empty(0, dtype=data.dtype)
+            return (
+                data[: num_windows * window_size]
+                .reshape(num_windows, window_size)
+                .mean(axis=1)
+            )
+
+        def mapper(x):
+            N = x.size
+            dt = self.sampling_time_ns * 1e-9
+            fs = 1 / dt
+
+            fft = np.fft.rfft(x)
+            Pxx = (np.abs(fft[1:]) ** 2) / (
+                fs * N
+            )  # normalize to density [unit^2 / Hz]
+
+            # Apply frequency downsample averaging
+            window_size = self._downsample_window
+            if window_size > 1:
+                Pxx = downsample_average(Pxx, window_size)
+
+            return Pxx.tolist()
+
+        q = await self._pico_raw_source.subscribe()
+        await self._pico_raw_source.start()
+
+        try:
+            while True:
+                frame = await q.get()
+
+                # Check for stream start/restart signal
+                if frame is FIRST_FRAME:
+                    # Yield plot metadata to inform subscribers of new frequency axis
+                    yield {
+                        "type": "plot_metadata",
+                        "plot": self.psd_downsample_rotate_plot(),
+                    }
+                else:
+                    # Regular data frame
+                    ch1, ch2 = self._rotation_inputs
+                    phi = self._rotation_angle_rad
+                    frame["X"] = frame[ch1] * np.sin(phi) + frame[ch2] * np.cos(phi)
+                    frame["Y"] = frame[ch1] * np.cos(phi) - frame[ch2] * np.sin(phi)
+                    yield {ch: mapper(data) for ch, data in frame.items()}
+        finally:
+            await self._pico_raw_source.unsubscribe(q)
+
+    @psd_downsample_rotate.plot()
+    def psd_downsample_rotate_plot(self) -> Dict[str, Any]:
+        """PSD plot with average downsampling"""
+
+        pre_trigger_samples = self._pre_trigger_samples
+        post_trigger_samples = self._post_trigger_samples
+        total_samples = pre_trigger_samples + post_trigger_samples
+        window_size = self._downsample_window
+
+        dt = (
+            self.sampling_time_ns * 1e-9
+        )  # created at runtime - self can be fixed in definition time
+        fs = 1 / dt
+
+        freqs = np.fft.rfftfreq(total_samples, d=dt)[1:]
+
+        # Apply downsample averaging for X axis
+        if window_size > 1:
+            n = freqs.size
+            num_windows = n // window_size
+            freqs = (
+                freqs[: num_windows * window_size]
+                .reshape(num_windows, window_size)
+                .mean(axis=1)
+            )
+
+        return {
+            "title": "PSD (downsampled)",  # self.psd_stream_downsample_plot.__doc__,
             "x-label": "Frequency (Hz)",
             "y-label": "PSD [V^2 / Hz]",
             "x-values": freqs.tolist(),
