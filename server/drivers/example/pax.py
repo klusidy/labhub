@@ -71,13 +71,13 @@ class pax(Device):  # Class name MUST match filename exactly
             dev_id, options, manager
         )   
         self.polarimeter = None
+        self.polarimeterLTM = None
         self.interval = 0.05
         self.hw_number_of_time_steps = 1000
         # Cached metadata filled on successful connect.
         self.hw_resource = ""
         self.hw_model = ""
         self.hw_serial_number = ""
-        self.hw_firmware_version = ""
         # Do include this base class initialization!
 
 
@@ -85,8 +85,7 @@ class pax(Device):  # Class name MUST match filename exactly
     # Override these to manage hardware connections
 
     def connect(self) -> bool:
-        """Either sync or async method to establish connection to HW.
-
+        """Method to establish connection to the polarimeter.
         Returns:
             bool: True if connection was successful, False otherwise.
         """
@@ -117,6 +116,15 @@ class pax(Device):  # Class name MUST match filename exactly
             self.polarimeter.serialNumber.value.decode("utf-8", errors="ignore")
             if self.polarimeter.serialNumber and self.polarimeter.serialNumber.value
             else ""
+        )
+
+        # PolarimeterLTM expects (handler, sampleStage, ...). We do not use a stage here.
+        self.polarimeterLTM = PolarimeterLTM(
+            self.polarimeter.handler,
+            None,
+            0,
+            20,
+            self.interval,
         )
         return True
 
@@ -159,11 +167,6 @@ class pax(Device):  # Class name MUST match filename exactly
         """Serial number of the polarimeter"""
         return self.hw_serial_number
 
-    @api_property()
-    def polarimeter_firmware_version(self) -> str:
-        """Version of firmware on the polarimeter"""
-        return self.hw_firmware_version
-    
     @api_property()
     def polarimeter_wavelength(self) -> float:
         """wavelenght of the polarimeter"""
@@ -212,6 +215,7 @@ class pax(Device):  # Class name MUST match filename exactly
         self.hw_number_of_time_steps = value
 
 
+
     # --- Commands ------------------------------------------------------------
     # Commands are actions that execute on demand (not polled/cached).
     # Use for operations like: start acquisition, save data, reset device.
@@ -229,6 +233,21 @@ class pax(Device):  # Class name MUST match filename exactly
         """Example command that checks if the device is connected."""
         return self.polarimeter is not None       
 
+    @api_command()
+    def take_one_measurement(self, rotate_angle: float = 0.0) -> str:
+        if not self.polarimeter or not self.polarimeterLTM:
+            raise RuntimeError("Polarimeter is not connected")
+        measurementid = self.polarimeterLTM.takeOneMeasurement()
+        measurement = self.polarimeterLTM.readFromScanID(measurementid)
+        return (f"Measurement with id {measurementid} taken. these are the results: {measurement}")
+    
+    @api_command()
+    def erase_all_measurements(self) -> str:
+        if not self.polarimeter or not self.polarimeterLTM:
+            raise RuntimeError("Polarimeter is not connected")
+        self.polarimeterLTM.clearMemory()
+        return "All measurements erased from the device."
+    
     @api_command()
     def hello_world(self, name: str = "World", times: int = 1) -> str:
         """Example command that takes an argument and returns a string."""
