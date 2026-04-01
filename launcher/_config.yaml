@@ -3,23 +3,23 @@ devices:
     driver: "sim_piezo"
     conn:
       voltage: 0.0
+
   - id: "kcube2"
     driver: "kcube_piezo"
     conn:
-      serial: "29251095"         # <- your device serial
-      kinesis_path: "C:/Program Files/Thorlabs/Kinesis"  # optional if KINESIS_PATH env set
+      serial: "29251095"
+      kinesis_path: "C:/Program Files/Thorlabs/Kinesis"
       poll_ms: 200
       simulate: true
-    startup: # optional, will be set after connection
+    startup:
       voltage: 1.0
       intensity: 0.5
 
-
-devices:
   - id: "dummy_01"
     driver: "dummy"
     params:
       foo: 0.42
+
   - id: "example_device_01"
     driver: "example_device"
     params:
@@ -27,28 +27,19 @@ devices:
       time_step: 0.1
       number_of_time_steps: 500
 
-
-
-- id: "example_device_01"
-    driver: "example_device"
-    params:
-      duration_in_seconds: 10
-      time_step: 0.1
-      number_of_time_steps: 500
-
-
-        - id: "kcube"
+  - id: "kcube"
     driver: "KPZ101"
     conn:
-      serial: "29251095"         
-      kinesis_path: "C:/Program Files/Thorlabs/Kinesis"  # optional if KINESIS_PATH env set
+      serial: "29251095"
+      kinesis_path: "C:/Program Files/Thorlabs/Kinesis"
       poll_ms: 200
       simulate: false
     defaults:
       voltage: 0.1
+
   - id: "picoscope"
     driver: "ps5000a"
-    resolution: 12 #8/12/14/15/16 bit
+    resolution: 12
     channels:
       - id: "A"
         coupling: "DC"
@@ -66,7 +57,7 @@ devices:
         coupling: "DC"
         range: "1V"
         enable: false
-    trigger: #will call set_simple_trigger()
+    trigger:
       enable: true
       source: "A"
       threshold_mV: 100
