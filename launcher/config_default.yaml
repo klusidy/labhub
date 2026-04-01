@@ -1,11 +1,9 @@
 devices:
 - id: example_device_01
   driver: example.example_device
-# influx:
-#   enabled: true
-#   url: http://localhost:8086
-#   token: your-token
-#   org: your-org
-#   bucket: your-bucket
-#   exe_path: C:/Program Files/InfluxData/influxd.exe
-#   snapshot_interval: 10.0
+- polling_interval: 1000
+  Measure_mode: 9
+  wavelength: 5.32e-07
+  id: test
+  driver: example.pax
+  should_connect: true
