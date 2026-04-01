@@ -85,14 +85,14 @@ class Polarimeter:
     
     def setMeasureMode(self,measureMode):
         lib.TLPAX_setMeasurementMode(self.handler, measureMode)
-        time.sleep(5) # 5 seconds is necessary for waiting the device
+        time.sleep(1) # 1 second is necessary for waiting the device
         mode = c_int()
         lib.TLPAX_getMeasurementMode(self.handler, byref(mode))
         print("The measureMode is set to be: {}".format(mode.value))
 
     def setWavelength(self, _wavelength):
         lib.TLPAX_setWavelength(self.handler, c_double(_wavelength) )
-        time.sleep(5)
+        time.sleep(1) # 1 second is necessary for waiting the device
         wavelength = c_double()
         lib.TLPAX_getWavelength(self.handler, byref(wavelength))
         print("The wavelength is set to be: {} m".format(wavelength.value))
