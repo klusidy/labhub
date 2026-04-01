@@ -225,21 +225,9 @@ class pax(Device):  # Class name MUST match filename exactly
     #
     # Locking: Commands acquire exclusive lock automatically (no collision with properties)
     @api_command()
-    def get_timestamps(self) -> List[float]:
-        """
-        Generate timestamp array for current configuration.
-
-        This is a sync command - it will automatically run in a thread pool,
-        so it's safe to make blocking SDK calls directly here.
-
-        For async commands, you must wrap blocking calls:
-            async def my_async_command(self, arg: int) -> str:
-                result = await self._run_blocking_in_thread(sdk_function, arg)
-                return result
-        """
-        dt = self.time_step
-        ts = np.arange(self.number_of_time_steps) * dt
-        return ts.tolist()
+    def is_connected(self) -> bool:
+        """Example command that checks if the device is connected."""
+        return self.polarimeter is not None       
 
     @api_command()
     def hello_world(self, name: str = "World", times: int = 1) -> str:
