@@ -20,7 +20,9 @@ Key patterns demonstrated:
 from __future__ import annotations
 import asyncio
 import logging
+import time
 from typing import List, AsyncIterator, Dict, Any, Optional, TYPE_CHECKING
+from pandas import *
 from .PAX1000LTM import *
 import numpy as np
 import pyvisa
@@ -180,7 +182,8 @@ class pax(Device):  # Class name MUST match filename exactly
     def polarimeter_wavelength(self, value: float):
         if not self.polarimeter:
             raise RuntimeError("Polarimeter is not connected")
-        self.polarimeter.setWavelength(value)
+        else:
+            self.polarimeter.setWavelength(value)
     
     @api_property(min = 1, max = 9, step= 1)
     def polarimeter_measure_mode(self) -> int:
@@ -214,7 +217,30 @@ class pax(Device):  # Class name MUST match filename exactly
     def number_of_steps(self, value: int):
         self.hw_number_of_time_steps = value
 
-
+    @api_property()
+    def last_scan_id(self) -> int:
+        """ID of the last scan taken by the polarimeter."""
+        if not self.polarimeterLTM:
+            return -1
+        return self.polarimeterLTM.lastestScanID
+    
+    @api_property()
+    def number_of_measurements_stored(self) -> int:
+        """Number of measurements currently stored in the polarimeter's memory."""
+        if not self.polarimeterLTM:
+            return -1
+        return self.polarimeterLTM.lastestScanID - 255
+    
+    @api_property()
+    def latest_measurement(self) -> str:
+        """Data of the latest measurement taken by the polarimeter."""
+        if not self.polarimeterLTM:
+            return "No measurements - device not connected"
+        if self.polarimeterLTM.lastestScanID < 256:
+            return "No measurements to view"
+        return str(self.polarimeterLTM.readFromScanID(int(self.polarimeterLTM.lastestScanID)))
+    
+    
 
     # --- Commands ------------------------------------------------------------
     # Commands are actions that execute on demand (not polled/cached).
@@ -234,13 +260,72 @@ class pax(Device):  # Class name MUST match filename exactly
         return self.polarimeter is not None       
 
     @api_command()
-    def take_one_measurement(self, rotate_angle: float = 0.0) -> str:
+    def take_one_measurement(self) -> str:
         if not self.polarimeter or not self.polarimeterLTM:
-            raise RuntimeError("Polarimeter is not connected")
+            return "Polarimeter is not connected"
         measurementid = self.polarimeterLTM.takeOneMeasurement()
         measurement = self.polarimeterLTM.readFromScanID(measurementid)
         return (f"Measurement with id {measurementid} taken. these are the results: {measurement}")
     
+    @api_command()
+    def long_scan(
+        self,
+        measure_time: Optional[Any] = None, interval_s: Optional[Any] = None, clear_memory: bool = True) -> str:
+        error_value: int = 0
+        if not self.polarimeter or not self.polarimeterLTM:
+            raise RuntimeError("Polarimeter is not connected")
+
+        normalized_measure_time: Optional[int] = None
+        normalized_interval_s: Optional[float] = None
+
+        if measure_time is not None:
+            try:
+                normalized_measure_time = int(measure_time)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("measure_time must be an integer > 0") from exc
+
+        if interval_s is not None:
+            try:
+                normalized_interval_s = float(interval_s)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("interval_s must be a number > 0") from exc
+
+        if normalized_measure_time is not None and normalized_measure_time <= error_value:
+            raise ValueError("measure_time must be > 0")
+        if normalized_interval_s is not None and normalized_interval_s <= error_value:
+            raise ValueError("interval_s must be > 0")
+
+        if isinstance(clear_memory, str):
+            clear_memory = clear_memory.strip().lower() not in {"0", "false", "no", "off"}
+
+        if normalized_measure_time is not None:
+            self.polarimeterLTM.measureTime = normalized_measure_time
+        if normalized_interval_s is not None:
+            self.interval = normalized_interval_s
+            self.polarimeterLTM.interval = normalized_interval_s
+        else:
+            # Keep PolarimeterLTM and device property in sync when command is called.
+            self.polarimeterLTM.interval = float(self.interval)
+
+        if clear_memory:
+            self.polarimeterLTM.clearMemory()
+
+        started_at = time.time()
+        self.polarimeterLTM.measure()
+        elapsed = time.time() - started_at
+
+        latest_scan_id = self.polarimeterLTM.lastestScanID
+        latest_measurement = self.polarimeterLTM.readFromScanID(latest_scan_id)
+
+        return (
+            "Long scan completed. "
+            f"measure_time={self.polarimeterLTM.measureTime:.3f}s, "
+            f"interval={self.polarimeterLTM.interval:.3f}s, "
+            f"elapsed={elapsed:.3f}s, "
+            f"latest_scan_id={latest_scan_id}, "
+            f"latest_measurement={latest_measurement}"
+        )
+     
     @api_command()
     def erase_all_measurements(self) -> str:
         if not self.polarimeter or not self.polarimeterLTM:
@@ -254,13 +339,15 @@ class pax(Device):  # Class name MUST match filename exactly
         return f"Hello, {name}! This is {self.id}. (Called {times} times)"
 
     @api_command()
-    def long_running_operation(self, duration_s: float) -> str:
-        """Example of a long-running command that simulates blocking behavior."""
-        import time
-
-        time.sleep(duration_s)  # Simulate blocking SDK call
-        return f"Completed long operation of {duration_s} seconds."
-
+    def delete_last_scan(self) -> str:
+        """ Delete the most recent scan from the polarimeter's memory. """
+        if not self.polarimeter or not self.polarimeterLTM:
+            return "Polarimeter is not connected"
+        if self.polarimeterLTM.lastestScanID < 256:
+            return "No measurements to delete"
+        self.polarimeterLTM.delete_last_scan()
+        
+        return f"Deleted scan with ID {self.polarimeterLTM.lastestScanID + 1} from memory."
 
 
 # === Additional Notes ========================================================

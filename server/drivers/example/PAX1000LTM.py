@@ -9,7 +9,7 @@ Date: 20th December 2021
 '''
 
 import ctypes
-from ctypes import *
+from ctypes import c_int, c_double, c_bool, c_char_p, c_ulong, byref
 import threading
 import time
 import csv
@@ -25,6 +25,7 @@ try:
 except OSError as e:
     raise FileNotFoundError(f"Could not find TLPAX_64.dll at {dll_path}. Make sure the DLL file is in the same directory as this script.") from e
 
+from httpx import delete
 import pyvisa
 
 cwd = os.getcwd()
@@ -281,5 +282,10 @@ class PolarimeterLTM:
         """ Clear memory of the polarimeter """
         for i in range(int(self.lastestScanID), 255, -1):
             lib.TLPAX_releaseScan(self.handler, c_int(i))
-
         self.lastestScanID = 255
+    
+    def delete_last_scan(self):
+        """ Delete the most recent scan from the polarimeter's memory. """
+        last_scan_id = self.lastestScanID
+        lib.TLPAX_releaseScan(self.handler, c_int(last_scan_id))
+        self.lastestScanID -= 1
