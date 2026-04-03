@@ -1,6 +1,9 @@
 devices:
 - id: example_device_01
   driver: example.example_device
-- id: test
+- polling_interval: 1000
+  Measure_mode: 9
+  wavelength: 5.32e-07
+  id: test
   driver: example.pax
   should_connect: true
