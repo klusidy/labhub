@@ -2,8 +2,9 @@
 # All relative paths are resolved against this file's directory.
 
 server:
-  host: 127.0.0.1
+  host: 0
   port: 8212
+  max_workers: 8  # Thread pool size for blocking driver operations
 
 # Paths to device configuration and profile (state snapshot)
 devices: ./config_default.yaml

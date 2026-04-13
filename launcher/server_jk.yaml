@@ -1,0 +1,29 @@
+server:
+  host: 127.0.0.1
+  port: 8212
+  max_workers: 8
+devices: C:\Users\jankl\Documents\pracovni\upt\labglue\labhub\launcher\config_jk.yaml
+profile: C:\Users\jankl\Documents\pracovni\upt\labglue\labhub\launcher\profile_jk.yaml
+logging:
+  level: INFO
+  file: null
+scripting:
+  macros: C:\Users\jankl\Documents\pracovni\upt\labglue\labhub\launcher\macros
+  python: null
+  startup_folder: null
+influx:
+  enabled: true
+  url: http://localhost:8086
+  token: wdB3AJlWGTtC04rig5KwT7CRAovJvttWCaT0sYlJTnZ-9JB0Yxa0EDl6d8JJOFd80DeTEz96wIvXAQE62GzxTw==
+  org: jk
+  bucket: labhub2
+  exe_path: C:/Program Files/InfluxData/influxd.exe
+  stop_on_exit: false
+  batch_size: 100
+  flush_interval_ms: 1000
+  max_retries: 3
+  snapshot_interval: 10.0
+custom_guis:
+- device_id: picoscope
+  route: /picoscope
+  dist: gui/custom/picoscope/dist/spa

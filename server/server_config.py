@@ -30,6 +30,7 @@ ENV_VAR = "LABHUB_SERVER_CONFIG"
 class ServerSection:
     host: str = "127.0.0.1"
     port: int = 8212
+    max_workers: int = 8  # Thread pool size for blocking driver operations
 
 
 @dataclass
@@ -217,6 +218,7 @@ def load_server_config(path: Optional[str] = None) -> ServerConfig:
         server=ServerSection(
             host=server_raw.get("host", "127.0.0.1"),
             port=int(server_raw.get("port", 8212)),
+            max_workers=int(server_raw.get("max_workers", 8)),
         ),
         devices=raw.get("devices", "./config.yaml"),
         profile=raw.get("profile", "./profile.yaml"),
@@ -272,6 +274,7 @@ def save_server_config(cfg: ServerConfig, path: Optional[Path] = None) -> None:
         "server": {
             "host": cfg.server.host,
             "port": cfg.server.port,
+            "max_workers": cfg.server.max_workers,
         },
         "devices": cfg.devices,
         "profile": cfg.profile,

@@ -9,9 +9,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-import client.python as lhc
+import client.python as labhub
 
-lhc.connect("127.0.0.1", 8212)
+labhub.connect("127.0.0.1", 8212)
 print(lhc) # prints docs
 
 lhc.picoscope.set_channel(channel="A", enable=True, coupling_type="DC", range="1V")

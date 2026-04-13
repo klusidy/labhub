@@ -95,8 +95,12 @@ class ConfigureDialog(QDialog):
 
         self.host_edit = QLineEdit()
         self.port_edit = QLineEdit()
+        self.max_workers_spin = QSpinBox()
+        self.max_workers_spin.setRange(1, 128)
+        self.max_workers_spin.setToolTip("Thread pool size for blocking driver operations")
         server_layout.addRow("Host:", self.host_edit)
         server_layout.addRow("Port:", self.port_edit)
+        server_layout.addRow("Max Workers:", self.max_workers_spin)
         general_layout.addWidget(server_group)
 
         # Config file group
@@ -372,6 +376,7 @@ class ConfigureDialog(QDialog):
         cfg = self.launcher.cfg
         self.host_edit.setText(cfg.server.host)
         self.port_edit.setText(str(cfg.server.port))
+        self.max_workers_spin.setValue(cfg.server.max_workers)
         self.config_edit.setText(str(cfg.devices_path) if cfg.devices_path else "")
         self.profile_edit.setText(str(cfg.profile_path) if cfg.profile_path else "")
         self.macros_edit.setText(str(cfg.macros_path) if cfg.macros_path else "")
@@ -577,6 +582,7 @@ class ConfigureDialog(QDialog):
         cfg = self.launcher.cfg
         cfg.server.host = self.host_edit.text()
         cfg.server.port = port
+        cfg.server.max_workers = self.max_workers_spin.value()
         cfg.devices = config_path
         cfg.profile = self.profile_edit.text() or "./profile.yaml"
         cfg.logging.level = self.log_level_combo.currentText()

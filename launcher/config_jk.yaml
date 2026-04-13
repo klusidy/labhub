@@ -29,6 +29,12 @@ devices:
     direction: RISING
     delay: 0
     auto_trigger_ms: 1000
+  should_connect: true
+- port: COM10
+  baud: 9600
+  timeout: 1.0
+  id: ii
+  driver: other.tpg
 influx:
   enabled: true
   url: http://localhost:8086

@@ -169,7 +169,7 @@ async def lifespan(app: FastAPI):
 # ======= APP =========
 app = FastAPI(title="LabHub", version="0.2.0", lifespan=lifespan)
 event_bus = EventBus()
-manager = DeviceManager(event_bus)
+manager = DeviceManager(event_bus, max_workers=server_cfg.server.max_workers)
 profile_monitor: ProfileMonitor | None = ProfileMonitor(
     event_bus, manager, save_interval=10.0
 )  # Profile auto-save monitor
