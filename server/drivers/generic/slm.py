@@ -21,7 +21,7 @@ try:
 except ImportError:
     _HAS_SCREENINFO = False
 
-from ..base import Device, api_device, api_command, api_property, api_data, Frame
+from ..base import Device, ChildDevice, api_device, api_command, api_property, api_data, Frame
 
 if TYPE_CHECKING:
     from ...device_manager import DeviceManager
@@ -29,12 +29,161 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Child device: grating
+# ---------------------------------------------------------------------------
+
+@api_device()
+class _grating(ChildDevice):
+    """
+    Grating sub-device — controls spacing and angle of a sinusoidal phase grating.
+
+    Call show_grating() to generate and push the pattern to the SLM display.
+    The circular mask (centre and radius) is taken from the sibling mask sub-device
+    when use_mask=True.
+    """
+
+    def __init__(self, child_id: str, parent: Device):
+        super().__init__(child_id, parent)
+        self._spacing: float = 20.0  # defaults overridden in connect()
+        self._angle: float = 0.0
+
+    def connect(self) -> bool:
+        opts = self._parent.options
+        self._spacing = float(opts.get("grating_spacing", 20.0))
+        self._angle = float(opts.get("grating_angle", 0.0))
+        return True
+
+    # --- Properties ---
+
+    @api_property(min=1.0, max=4000.0, step=1.0, unit="px")
+    def spacing(self) -> float:
+        """Grating period in pixels (pixels per full 0–2π phase cycle)."""
+        return self._spacing
+
+    @spacing.setter
+    def spacing(self, value: float) -> None:
+        self._spacing = value
+
+    @api_property(min=-180.0, max=180.0, step=0.5, unit="°")
+    def angle(self) -> float:
+        """
+        Grating angle in degrees.
+        0° → vertical fringes (phase varies along X).
+        90° → horizontal fringes (phase varies along Y).
+        """
+        return self._angle
+
+    @angle.setter
+    def angle(self, value: float) -> None:
+        self._angle = value
+
+    # --- Commands ---
+
+    @api_command()
+    async def show_grating(self, use_mask: bool = True) -> None:
+        """
+        Generate and display a sinusoidal grating on the SLM.
+
+        use_mask : if True, zero pixels outside the circular mask defined
+                   by the sibling mask sub-device.  Set to False for a
+                   full-frame grating regardless of mask settings.
+        """
+        root = self._parent  # slm root instance
+        if root._monitor is None:
+            raise RuntimeError("SLM not connected — cannot generate pattern")
+
+        w = root._monitor["width"]
+        h = root._monitor["height"]
+
+        # Read mask parameters from sibling child, or disable mask
+        mask_dev = root.children.get("mask")
+        if use_mask and mask_dev is not None:
+            cx, cy, r = mask_dev.cx, mask_dev.cy, mask_dev.r
+        else:
+            cx, cy, r = -1.0, -1.0, -1.0
+
+        # Grating generation is CPU-bound: run on default thread pool
+        loop = asyncio.get_running_loop()
+        arr = await loop.run_in_executor(
+            None, _generate_grating, w, h, self._spacing, self._angle, cx, cy, r
+        )
+
+        # Display must happen on the dedicated tkinter thread
+        await root._run_blocking_in_thread(root._display, arr)
+
+
+# ---------------------------------------------------------------------------
+# Child device: mask
+# ---------------------------------------------------------------------------
+
+@api_device()
+class _mask(ChildDevice):
+    """
+    Mask sub-device — defines a circular aperture applied by show_grating().
+
+    Set r = -1 to disable masking (full frame).
+    Set cx = -1 or cy = -1 to use the monitor centre for that coordinate.
+    """
+
+    def __init__(self, child_id: str, parent: Device):
+        super().__init__(child_id, parent)
+        self._cx: float = -1.0  # defaults overridden in connect()
+        self._cy: float = -1.0
+        self._r: float = -1.0
+
+    def connect(self) -> bool:
+        opts = self._parent.options
+        self._cx = float(opts.get("mask_cx", -1.0))
+        self._cy = float(opts.get("mask_cy", -1.0))
+        self._r = float(opts.get("mask_r", -1.0))
+        return True
+
+    # --- Properties ---
+
+    @api_property(min=-1.0, unit="px")
+    def cx(self) -> float:
+        """Mask centre X in pixels.  -1 → use monitor centre."""
+        return self._cx
+
+    @cx.setter
+    def cx(self, value: float) -> None:
+        self._cx = value
+
+    @api_property(min=-1.0, unit="px")
+    def cy(self) -> float:
+        """Mask centre Y in pixels.  -1 → use monitor centre."""
+        return self._cy
+
+    @cy.setter
+    def cy(self, value: float) -> None:
+        self._cy = value
+
+    @api_property(min=-1.0, unit="px")
+    def r(self) -> float:
+        """Mask radius in pixels.  -1 → no mask, full frame used."""
+        return self._r
+
+    @r.setter
+    def r(self, value: float) -> None:
+        self._r = value
+
+
+# ---------------------------------------------------------------------------
+# Root device
+# ---------------------------------------------------------------------------
+
 @api_device()
 class slm(Device):
     """
     Driver for a generic SLM device that looks like an external monitor to the OS.
     The SLM appears as a secondary display; patterns are sent by rendering a
     full-screen borderless window on that monitor.
+
+    Sub-devices
+    -----------
+    grating : spacing + angle + show_grating command
+    mask    : circular aperture (cx, cy, r) applied by show_grating
     """
 
     # Single-threaded executor: all tkinter calls must originate from one OS thread.
@@ -44,12 +193,16 @@ class slm(Device):
     config_template = {
         "polling_interval": 1000,
         "monitor_index": None,      # None → auto-select first non-primary monitor
-        "grating_spacing": 20.0,    # pixels per period
-        "grating_angle": 0.0,       # degrees
-        "mask_cx": -1.0,            # -1 = monitor centre
+        "grating_spacing": 20.0,
+        "grating_angle": 0.0,
+        "mask_cx": -1.0,
         "mask_cy": -1.0,
-        "mask_r": -1.0,             # -1 = no mask
+        "mask_r": -1.0,
     }
+
+    # Declare child devices — auto-discovered and instantiated after connect()
+    grating = _grating.as_child()
+    mask = _mask.as_child()
 
     def __init__(
         self,
@@ -61,27 +214,19 @@ class slm(Device):
 
         self._monitor_index: int | None = options.get("monitor_index", None)
 
-        # Grating / mask parameters (readable via properties, settable from GUI)
-        self._grating_spacing: float = float(options.get("grating_spacing", 20.0))
-        self._grating_angle: float = float(options.get("grating_angle", 0.0))
-        self._mask_cx: float = float(options.get("mask_cx", -1.0))
-        self._mask_cy: float = float(options.get("mask_cy", -1.0))
-        self._mask_r: float = float(options.get("mask_r", -1.0))
-
         # Tkinter state (all access must go through _TK_EXEC)
         self._monitor: dict | None = None
         self._root: tk.Tk | None = None
         self._label: tk.Label | None = None
         self._tk_image: ImageTk.PhotoImage | None = None
 
-        # Last pattern sent — read by the data source, written by _display()
+        # Last pattern sent — polled by the current_pattern data source
         self._current_pattern: np.ndarray | None = None
 
     # --- Thread routing ------------------------------------------------------
     # Route every blocking call through the dedicated single-threaded executor.
     # This guarantees that Tk(), update(), destroy() etc. always execute on the
-    # same OS thread (tkinter requirement).  Property polls and commands all go
-    # through here automatically via the base-class machinery.
+    # same OS thread.  Property polls and sync commands all go through here.
 
     async def _run_blocking_in_thread(self, fn, *args, **kwargs):
         loop = asyncio.get_running_loop()
@@ -127,57 +272,6 @@ class slm(Device):
         """True when the SLM display window is currently open."""
         return self._root is not None
 
-    # --- Properties: grating parameters --------------------------------------
-
-    @api_property(min=1.0, max=4000.0, step=1.0, unit="px")
-    def grating_spacing(self) -> float:
-        """Grating period in pixels (pixels per full 0–2π phase cycle)."""
-        return self._grating_spacing
-
-    @grating_spacing.setter
-    def grating_spacing(self, value: float) -> None:
-        self._grating_spacing = value
-
-    @api_property(min=-180.0, max=180.0, step=0.5, unit="°")
-    def grating_angle(self) -> float:
-        """
-        Grating angle in degrees.
-        0° → vertical fringes (phase varies along X).
-        90° → horizontal fringes (phase varies along Y).
-        """
-        return self._grating_angle
-
-    @grating_angle.setter
-    def grating_angle(self, value: float) -> None:
-        self._grating_angle = value
-
-    @api_property(min=-1.0, unit="px")
-    def mask_cx(self) -> float:
-        """Circular mask centre X in pixels.  -1 → use monitor centre."""
-        return self._mask_cx
-
-    @mask_cx.setter
-    def mask_cx(self, value: float) -> None:
-        self._mask_cx = value
-
-    @api_property(min=-1.0, unit="px")
-    def mask_cy(self) -> float:
-        """Circular mask centre Y in pixels.  -1 → use monitor centre."""
-        return self._mask_cy
-
-    @mask_cy.setter
-    def mask_cy(self, value: float) -> None:
-        self._mask_cy = value
-
-    @api_property(min=-1.0, unit="px")
-    def mask_r(self) -> float:
-        """Circular mask radius in pixels.  -1 → no mask, full frame used."""
-        return self._mask_r
-
-    @mask_r.setter
-    def mask_r(self, value: float) -> None:
-        self._mask_r = value
-
     # --- Commands ------------------------------------------------------------
 
     @api_command()
@@ -189,28 +283,7 @@ class slm(Device):
                   Clipped to uint8 and resized to the monitor resolution if needed.
         """
         arr = np.asarray(pattern, dtype=float)
-        arr = self._validate_pattern(arr)
-        self._display(arr)
-
-    @api_command()
-    def show_grating(self) -> None:
-        """
-        Generate and display a sinusoidal grating from the stored parameters.
-
-        The pattern is computed from grating_spacing and grating_angle.
-        Pixels outside the circular mask (mask_cx, mask_cy, mask_r) are zeroed.
-        Set mask_r = -1 to illuminate the full frame.
-        """
-        if self._monitor is None:
-            raise RuntimeError("SLM not connected — cannot generate pattern")
-        w = self._monitor["width"]
-        h = self._monitor["height"]
-        arr = _generate_grating(
-            w, h,
-            self._grating_spacing,
-            self._grating_angle,
-            self._mask_cx, self._mask_cy, self._mask_r,
-        )
+        arr = _validate_pattern(arr)
         self._display(arr)
 
     @api_command()
@@ -239,8 +312,7 @@ class slm(Device):
                 arr = self._current_pattern.copy()  # snapshot before encoding
                 b64 = await loop.run_in_executor(None, _array_to_b64png, arr)
                 yield {"image_b64": b64}
-            # Brief sleep so the loop doesn't spin when no pattern is loaded yet.
-            # The DataSource runner adds its own inter-frame sleep on top of this.
+            # Brief pause before next check; DataSource runner adds its own rate-limiting.
             await asyncio.sleep(0.1)
 
     # --- Internal helpers ----------------------------------------------------
@@ -253,14 +325,6 @@ class slm(Device):
             self._open_window(img)
         else:
             self._update_image(img)
-
-    @staticmethod
-    def _validate_pattern(pattern: np.ndarray) -> np.ndarray:
-        if pattern.ndim != 2:
-            raise ValueError(f"Pattern must be 2D, got shape {pattern.shape}")
-        if pattern.dtype != np.uint8:
-            pattern = np.clip(pattern, 0, 255).astype(np.uint8)
-        return pattern
 
     def _to_pil(self, pattern: np.ndarray) -> Image.Image:
         """Convert uint8 numpy array to a PIL RGB image sized to the monitor."""
@@ -298,6 +362,14 @@ class slm(Device):
 # ---------------------------------------------------------------------------
 
 
+def _validate_pattern(pattern: np.ndarray) -> np.ndarray:
+    if pattern.ndim != 2:
+        raise ValueError(f"Pattern must be 2D, got shape {pattern.shape}")
+    if pattern.dtype != np.uint8:
+        pattern = np.clip(pattern, 0, 255).astype(np.uint8)
+    return pattern
+
+
 def _generate_grating(
     width: int,
     height: int,
@@ -319,7 +391,6 @@ def _generate_grating(
     ys = np.arange(height, dtype=float)
     X, Y = np.meshgrid(xs, ys)
 
-    # Project pixel coordinates onto grating wave-vector direction
     proj = X * np.cos(angle_rad) + Y * np.sin(angle_rad)
     pattern = (128 + 127 * np.sin(2 * np.pi * proj / spacing)).astype(np.uint8)
 
