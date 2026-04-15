@@ -218,12 +218,12 @@ def api_property(
 
 
 class api_data:
-    def __init__(self, api_name: str | None = None, *, doc: str | None = None):
+    def __init__(self, api_name: str | None = None, *, doc: str | None = None, kind: str = "timeseries"):
 
         self.generator: Optional[Callable] = None
         self._plot_fn: Optional[Callable] = None
         self._api_data_name: Optional[str] = api_name
-        self._api_data_meta: Dict[str, Any] = {"doc": doc, "plots": []}
+        self._api_data_meta: Dict[str, Any] = {"doc": doc, "plots": [], "kind": kind}
 
         self._owner: Optional[type] = None
         self._attr_name: Optional[str] = None

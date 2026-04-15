@@ -54,40 +54,52 @@
               @click.stop
             ></q-input>
 
-            <q-select
-              v-model="xScale[ds.name]"
-              :options="scaleOptions"
-              dense
-              label="X scale"
-              stack-label
-              outlined
-              dark
-              style="width: 120px"
-              @click.stop
-            >
-            </q-select>
-
-            <q-select
-              v-model="yScale[ds.name]"
-              :options="scaleOptions"
-              outlined
-              dense
-              label="Y scale"
-              stack-label
-              dark
-              style="width: 120px"
-              @click.stop
-            >
-            </q-select>
+            <template v-if="ds.kind !== 'image'">
+              <q-select
+                v-model="xScale[ds.name]"
+                :options="scaleOptions"
+                dense
+                label="X scale"
+                stack-label
+                outlined
+                dark
+                style="width: 120px"
+                @click.stop
+              />
+              <q-select
+                v-model="yScale[ds.name]"
+                :options="scaleOptions"
+                outlined
+                dense
+                label="Y scale"
+                stack-label
+                dark
+                style="width: 120px"
+                @click.stop
+              />
+            </template>
           </div>
         </template>
 
         <q-card flat class="plot-content">
           <q-card-section class="q-pa-xs">
+            <!-- Image data source -->
+            <template v-if="ds.kind === 'image'">
+              <img
+                v-if="imageUrls[ds.name]"
+                :src="imageUrls[ds.name]!"
+                class="image-preview"
+              />
+              <div v-else class="text-grey text-caption q-pa-sm">No image yet — press Once or Start</div>
+            </template>
+
+            <!-- Time-series data source (default) -->
             <div
+              v-else
               :ref="(el) => (plotRefs[ds.name] = el as HTMLElement)"
               class="plot-container"
             ></div>
+
             <div v-if="errors[ds.name]" class="text-negative text-caption q-mt-xs">
               {{ errors[ds.name] }}
             </div>
@@ -122,6 +134,7 @@ const dataSources = computed(() => {
 });
 
 const plotRefs = reactive<Record<string, HTMLElement | null>>({});
+const imageUrls = reactive<Record<string, string | null>>({});
 const rateHz = reactive<Record<string, number>>({});
 const xScale = reactive<Record<string, string>>({});
 const yScale = reactive<Record<string, string>>({});
@@ -131,6 +144,10 @@ const runningSource = ref<string | null>(null);
 const websockets = reactive<Record<string, WebSocket | null>>({});
 const plotSpecs = reactive<Record<string, PlotSpec>>({});
 const plotData = reactive<Record<string, { x: number[]; series: Record<string, number[]> }>>({});
+
+function isImageSource(sourceName: string): boolean {
+  return dataSources.value.find((d) => d.name === sourceName)?.kind === 'image';
+}
 
 const scaleOptions = ['linear', 'log'];
 
@@ -175,10 +192,10 @@ async function onOnce(sourceName: string) {
   errors[sourceName] = null;
 
   try {
-    await loadSpec(sourceName);
+    if (!isImageSource(sourceName)) await loadSpec(sourceName);
     const frame = await getFrame(props.deviceId, sourceName);
     applyFrame(sourceName, frame);
-    updatePlot(sourceName);
+    if (!isImageSource(sourceName)) updatePlot(sourceName);
   } catch (e) {
     errors[sourceName] = e instanceof Error ? e.message : String(e);
   } finally {
@@ -214,7 +231,7 @@ async function startStream(sourceName: string) {
           plotSpecs[sourceName] = frame.plot;
         } else {
           applyFrame(sourceName, frame);
-          updatePlot(sourceName);
+          if (!isImageSource(sourceName)) updatePlot(sourceName);
         }
       } catch {
         // Ignore parse errors
@@ -248,6 +265,14 @@ function stopStream(sourceName: string) {
 }
 
 function applyFrame(sourceName: string, frame: unknown) {
+  const fr = frame as Record<string, unknown>;
+
+  // Image frame: driver yields { image_b64: "<base64-png>" }
+  if (typeof fr?.image_b64 === 'string') {
+    imageUrls[sourceName] = `data:image/png;base64,${fr.image_b64}`;
+    return;
+  }
+
   const ps = plotSpecs[sourceName];
   const xValues = (ps?.['x-values'] as number[]) || [];
 
@@ -259,7 +284,6 @@ function applyFrame(sourceName: string, frame: unknown) {
   const data = plotData[sourceName];
 
   // Extract x values
-  const fr = frame as Record<string, unknown>;
   if (Array.isArray(fr?.['x-values'])) {
     data.x = fr['x-values'] as number[];
   } else if (Array.isArray(fr?.x)) {
@@ -398,6 +422,14 @@ onUnmounted(() => {
 .plot-container {
   width: 100%;
   height: 280px;
+}
+
+.image-preview {
+  display: block;
+  max-width: 100%;
+  max-height: 480px;
+  object-fit: contain;
+  background: #111;
 }
 
 .rate-input :deep(.q-field__control) {

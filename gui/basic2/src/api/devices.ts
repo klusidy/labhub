@@ -45,6 +45,7 @@ export interface DataSourceSpec {
   name: string;
   doc?: string;
   has_plot?: boolean;
+  kind?: 'timeseries' | 'image';
 }
 
 export interface DeviceSpec {

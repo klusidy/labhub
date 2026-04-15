@@ -129,6 +129,7 @@ class Device:
                     "No doc provided. Fill in doc string of decorated property in device driver.",
                 )
                 data_source["has_plot"] = attr._plot_fn is not None
+                data_source["kind"] = data_source_meta.get("kind", "timeseries")
                 data_sources[attr._api_data_name] = data_source
 
             # --- Nested Device subclasses decorated with @api_device() ---
@@ -563,6 +564,7 @@ class Device:
                     name=dsname,
                     has_plot=dsinfo.get("has_plot", False),
                     doc=dsinfo.get("doc", ""),
+                    kind=dsinfo.get("kind", "timeseries"),
                 )
             )
 

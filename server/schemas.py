@@ -68,6 +68,7 @@ class DataSourceSpec(BaseModel):
     name: str
     doc: Optional[str] = None
     has_plot: bool = False
+    kind: str = "timeseries"  # "timeseries" | "image"
 
 class DeviceSpec(BaseModel):
     """Full capability sheet for one device instance."""
