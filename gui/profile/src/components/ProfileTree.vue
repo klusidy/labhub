@@ -1,23 +1,23 @@
 <template>
   <q-tree
-    :nodes="nodes"
+    :nodes="nodes as unknown as object[]"
     node-key="id"
     default-expand-all
     :no-nodes-label="loading ? 'Loading...' : 'No devices'"
   >
-    <!-- Device node -->
     <template v-slot:default-header="prop">
-      <div v-if="!prop.node.deviceId" class="row items-center full-width device-row">
-        <q-icon
-          :name="prop.node.icon"
-          :color="prop.node.iconColor"
-          size="sm"
-          class="q-mr-sm"
-        />
+
+      <!-- Root device node -->
+      <div v-if="prop.node.nodeType === 'device'" class="row items-center full-width device-row">
+        <q-icon :name="prop.node.icon" :color="prop.node.iconColor" size="sm" class="q-mr-sm" />
         <span class="text-weight-medium">{{ prop.node.label }}</span>
-        <q-badge class="q-ml-sm" color="grey-7" outline>
-          {{ prop.node.driver }}
-        </q-badge>
+        <q-badge class="q-ml-sm" color="grey-7" outline>{{ prop.node.driver }}</q-badge>
+      </div>
+
+      <!-- Child device node -->
+      <div v-else-if="prop.node.nodeType === 'childDevice'" class="row items-center full-width child-device-row">
+        <q-icon name="device_hub" color="blue-grey" size="xs" class="q-mr-xs" />
+        <span class="text-weight-medium text-blue-grey-8">{{ prop.node.label }}</span>
       </div>
 
       <!-- Property node -->
@@ -77,13 +77,14 @@ interface TreeNode {
   icon?: string;
   iconColor?: string;
   driver?: string;
-  status?: string;
+  nodeType: 'device' | 'childDevice' | 'property';
+  devicePath?: string;
   deviceId?: string;
   propName?: string;
   value?: unknown;
   policy?: 'read' | 'write';
   readOnly?: boolean;
-  children?: TreeNode[];
+  children?: TreeNode[] | undefined;
 }
 
 defineProps<{
@@ -96,37 +97,32 @@ const emit = defineEmits<{
 }>();
 
 function formatValue(value: unknown): string {
-  if (value === null || value === undefined) {
-    return 'null';
-  }
-  if (typeof value === 'boolean') {
-    return value ? 'true' : 'false';
-  }
+  if (value === null || value === undefined) return 'null';
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
   if (typeof value === 'number') {
-    if (Number.isInteger(value)) {
-      return value.toString();
-    }
+    if (Number.isInteger(value)) return value.toString();
     return value.toPrecision(6).replace(/\.?0+$/, '');
   }
-  if (typeof value === 'string') {
-    return value;
-  }
-  // Objects, arrays, and anything else
+  if (typeof value === 'string') return value;
   const str = JSON.stringify(value);
-  if (str.length > 80) {
-    return str.slice(0, 77) + '...';
-  }
-  return str;
+  return str.length > 80 ? str.slice(0, 77) + '...' : str;
 }
 
-function onPolicyChange(deviceId: string, propName: string, policy: 'read' | 'write') {
-  emit('policyChange', deviceId, propName, policy);
+function onPolicyChange(deviceId: string | undefined, propName: string | undefined, policy: 'read' | 'write') {
+  if (deviceId && propName) {
+    emit('policyChange', deviceId, propName, policy);
+  }
 }
 </script>
 
 <style scoped>
 .device-row {
   padding: 4px 0;
+}
+
+.child-device-row {
+  padding: 2px 0;
+  font-size: 0.9em;
 }
 
 .property-row {

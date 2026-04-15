@@ -20,17 +20,17 @@
       </div>
 
       <!-- Property value display and edit -->
-      <div v-if="item.type === 'property' && device && propertySpec">
+      <div v-if="item.type === 'property' && propertySpec">
         <div class="row items-center no-wrap q-gutter-sm property-row">
           <div class="col-6">
             <code class="current-value">{{
-              formatValue(device.state?.[item.itemName], propertySpec.unit)
+              formatValue(deviceState[item.itemName], propertySpec.unit)
             }}</code>
           </div>
           <div v-if="!propertySpec.read_only" class="col-6">
             <PropertyInput
               :property="propertySpec"
-              :value="device.state?.[item.itemName]"
+              :value="deviceState[item.itemName]"
               class="property-input-large"
               @update="(val) => onUpdateProperty(val)"
             />
@@ -157,7 +157,7 @@ const store = useDevicesStore();
 const macrosStore = useMacrosStore();
 const replStore = useReplStore();
 
-const device = computed(() => store.deviceMap.get(props.item.deviceId));
+const deviceState = computed(() => store.getStateForPath(props.item.deviceId));
 const propertySpec = computed(() =>
   store.getPropertySpec(props.item.deviceId, props.item.itemName),
 );

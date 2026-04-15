@@ -48,9 +48,12 @@ export interface DataSourceSpec {
 }
 
 export interface DeviceSpec {
+  id?: string;
+  driver?: string;
   properties?: PropertySpec[];
   commands?: CommandSpec[];
   data_sources?: DataSourceSpec[];
+  children?: Record<string, DeviceSpec>;
 }
 
 export interface PlotSpec {
@@ -65,6 +68,11 @@ export interface PlotSpec {
   }>;
 }
 
+// Encode a device path (preserves '/' separators between segments)
+function encodePath(path: string): string {
+  return path.split('/').map(encodeURIComponent).join('/');
+}
+
 // REST API functions
 export async function listDevices(): Promise<DeviceState[]> {
   const r = await fetch(`${API_BASE}/devices`);
@@ -73,7 +81,7 @@ export async function listDevices(): Promise<DeviceState[]> {
 }
 
 export async function getDeviceSpec(id: string): Promise<DeviceSpec | null> {
-  const r = await fetch(`${API_BASE}/devices/${encodeURIComponent(id)}/spec`);
+  const r = await fetch(`${API_BASE}/devices/${encodePath(id)}/spec`);
   if (r.status === 404) return null;
   if (!r.ok) throw new Error(`Failed to get spec: ${r.status}`);
   return r.json();
@@ -83,7 +91,7 @@ export async function patchProperties(
   id: string,
   properties: Record<string, unknown>
 ): Promise<DeviceState> {
-  const r = await fetch(`${API_BASE}/devices/${encodeURIComponent(id)}`, {
+  const r = await fetch(`${API_BASE}/devices/${encodePath(id)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ properties }),
@@ -106,7 +114,7 @@ export async function runCommand(
   name: string,
   args: Record<string, unknown> = {}
 ): Promise<unknown> {
-  const r = await fetch(`${API_BASE}/devices/${encodeURIComponent(id)}/commands`, {
+  const r = await fetch(`${API_BASE}/devices/${encodePath(id)}/commands`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, args }),
@@ -117,7 +125,7 @@ export async function runCommand(
 
 export async function getPlotSpec(id: string, source: string): Promise<PlotSpec> {
   const r = await fetch(
-    `${API_BASE}/devices/${encodeURIComponent(id)}/data/${encodeURIComponent(source)}/plot`
+    `${API_BASE}/devices/${encodePath(id)}/data/${encodeURIComponent(source)}/plot`
   );
   if (!r.ok) throw new Error(`Failed to get plot spec: ${r.status}`);
   return r.json();
@@ -125,7 +133,7 @@ export async function getPlotSpec(id: string, source: string): Promise<PlotSpec>
 
 export async function getFrame(id: string, source: string): Promise<unknown> {
   const r = await fetch(
-    `${API_BASE}/devices/${encodeURIComponent(id)}/data/${encodeURIComponent(source)}/frame`
+    `${API_BASE}/devices/${encodePath(id)}/data/${encodeURIComponent(source)}/frame`
   );
   if (!r.ok) throw new Error(`Failed to get frame: ${r.status}`);
   return r.json();
@@ -133,7 +141,7 @@ export async function getFrame(id: string, source: string): Promise<unknown> {
 
 // Admin API functions
 export async function disconnectDevice(id: string): Promise<{ status: string; devices: DeviceState[] }> {
-  const r = await fetch(`${API_BASE}/admin/device/${encodeURIComponent(id)}/disconnect`, {
+  const r = await fetch(`${API_BASE}/admin/device/${encodePath(id)}/disconnect`, {
     method: 'POST',
   });
   if (!r.ok) throw new Error(`Failed to disconnect device: ${r.status}`);
@@ -141,7 +149,7 @@ export async function disconnectDevice(id: string): Promise<{ status: string; de
 }
 
 export async function connectDevice(id: string): Promise<{ status: string; devices: DeviceState[] }> {
-  const r = await fetch(`${API_BASE}/admin/device/${encodeURIComponent(id)}/connect`, {
+  const r = await fetch(`${API_BASE}/admin/device/${encodePath(id)}/connect`, {
     method: 'POST',
   });
   if (!r.ok) throw new Error(`Failed to connect device: ${r.status}`);
@@ -168,7 +176,7 @@ export function openDataStream(
   if (rate) qs.set('rate', String(rate));
   qs.set('format', format);
   const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
-  const url = `${protocol}://${location.host}${API_BASE}/streams/${encodeURIComponent(id)}/${encodeURIComponent(source)}?${qs}`;
+  const url = `${protocol}://${location.host}${API_BASE}/streams/${encodePath(id)}/${encodeURIComponent(source)}?${qs}`;
   const ws = new WebSocket(url);
   if (format === 'msgpack') ws.binaryType = 'arraybuffer';
   return ws;

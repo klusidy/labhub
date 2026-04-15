@@ -19,28 +19,35 @@ export interface DeviceState {
   state: Record<string, unknown>;
 }
 
+export interface PropMeta {
+  doc?: string;
+  type?: string;
+  read_only?: boolean;
+  min?: number;
+  max?: number;
+  step?: number;
+  choices?: string[];
+  unit?: string;
+}
+
 export interface DeviceSpec {
-  driver: string;
-  properties: Record<
-    string,
-    {
-      doc?: string;
-      type?: string;
-      read_only?: boolean;
-      min?: number;
-      max?: number;
-      step?: number;
-      choices?: string[];
-      unit?: string;
-    }
-  >;
+  id?: string;
+  driver?: string;
+  properties: Record<string, PropMeta>;
   commands?: Record<string, unknown>;
+  children?: Record<string, DeviceSpec>;
 }
 
 export interface ProfileResponse {
   path: string | null;
   raw: string;
   policies: Record<string, Record<string, string>>; // {dev_id: {prop_name: policy}}
+}
+
+// ===== Helpers =====
+
+function encodePath(path: string): string {
+  return path.split('/').map(encodeURIComponent).join('/');
 }
 
 // ===== API Functions =====
@@ -67,7 +74,7 @@ export async function listDevices(): Promise<DeviceState[]> {
  * Get device specification (property metadata)
  */
 export async function getDeviceSpec(devId: string): Promise<DeviceSpec> {
-  const r = await fetch(`${API_BASE}/devices/${devId}/spec`);
+  const r = await fetch(`${API_BASE}/devices/${encodePath(devId)}/spec`);
   if (!r.ok) throw new Error(`Failed to get device spec: ${r.status}`);
   return r.json();
 }

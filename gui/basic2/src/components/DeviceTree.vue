@@ -194,6 +194,7 @@ const allTreeNodes = computed<TreeNode[]>(() => {
     iconColor: 'grey-5',
     nodeType: 'device' as const,
     deviceId: d.id,
+    devicePath: d.id,
     connected: false,
   }));
   return [...connected, ...disconnected];

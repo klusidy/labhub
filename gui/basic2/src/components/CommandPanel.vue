@@ -98,7 +98,7 @@ const props = defineProps<{
 }>();
 
 const store = useDevicesStore();
-const spec = computed(() => store.getDeviceSpec(props.deviceId));
+const spec = computed(() => store.getSpecForPath(props.deviceId));
 
 const commands = computed(() => {
   const all = spec.value?.commands || [];

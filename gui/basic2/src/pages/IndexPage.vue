@@ -97,8 +97,8 @@
       </q-card>
     </div>
 
-    <!-- Device selected - show full device view -->
-    <div v-else-if="nodeType === 'device' && selectedDevice" class="q-pa-md">
+    <!-- Device selected (root or child) - show full device view -->
+    <div v-else-if="(nodeType === 'device' || nodeType === 'childDevice') && selectedDevice" class="q-pa-md">
       <div class="row items-center q-mb-md">
         <q-icon
           :name="getStatusIcon(selectedDevice.status)"
@@ -107,10 +107,11 @@
           class="q-mr-sm"
         />
         <div>
-          <div class="text-h5">{{ selectedDevice.id }}</div>
+          <div class="text-h5">{{ selectedDevicePath }}</div>
           <div class="text-caption text-grey-6">{{ selectedDevice.driver }}</div>
         </div>
         <q-btn
+          v-if="nodeType === 'device'"
           flat
           dense
           round
@@ -124,14 +125,14 @@
         </q-btn>
       </div>
 
-      <div v-if="selectedDevice.doc" class="q-mb-md text-body2 text-grey-7">
+      <div v-if="nodeType === 'device' && selectedDevice.doc" class="q-mb-md text-body2 text-grey-7">
         {{ selectedDevice.doc }}
       </div>
 
       <!-- All sections for device -->
-      <DataSourcePanel v-if="hasDataSources" :device-id="selectedDevice.id" />
-      <PropertyTable v-if="hasProperties" :device-id="selectedDevice.id" />
-      <CommandPanel v-if="hasCommands" :device-id="selectedDevice.id" />
+      <DataSourcePanel v-if="hasDataSources" :device-id="selectedDevicePath!" />
+      <PropertyTable v-if="hasProperties" :device-id="selectedDevicePath!" />
+      <CommandPanel v-if="hasCommands" :device-id="selectedDevicePath!" />
     </div>
 
     <!-- Disconnected device selected - show config panel -->
@@ -147,16 +148,16 @@
     <!-- Category selected (properties/commands/dataSources) -->
     <div v-else-if="nodeType === 'category' && selectedDevice" class="q-pa-md">
       <div class="row items-center q-mb-md">
-        <q-btn flat dense round icon="arrow_back" @click="store.selectNode(selectedDevice.id)" />
+        <q-btn flat dense round icon="arrow_back" @click="store.selectNode(selectedDevicePath!)" />
         <div class="q-ml-sm">
           <div class="text-h6">{{ categoryTitle }}</div>
           <div class="text-caption text-grey-6">{{ selectedDevice.id }}</div>
         </div>
       </div>
 
-      <DataSourcePanel v-if="categoryType === 'dataSources'" :device-id="selectedDevice.id" />
-      <PropertyTable v-if="categoryType === 'properties'" :device-id="selectedDevice.id" />
-      <CommandPanel v-if="categoryType === 'commands'" :device-id="selectedDevice.id" />
+      <DataSourcePanel v-if="categoryType === 'dataSources'" :device-id="selectedDevicePath!" />
+      <PropertyTable v-if="categoryType === 'properties'" :device-id="selectedDevicePath!" />
+      <CommandPanel v-if="categoryType === 'commands'" :device-id="selectedDevicePath!" />
     </div>
 
     <!-- Individual item selected (property/command/dataSource) -->
@@ -170,17 +171,17 @@
       </div>
       <DataSourcePanel
         v-if="nodeType === 'dataSource'"
-        :device-id="selectedDevice.id"
+        :device-id="selectedDevicePath!"
         :filter-source="itemName"
       />
       <PropertyTable
         v-if="nodeType === 'property'"
-        :device-id="selectedDevice.id"
+        :device-id="selectedDevicePath!"
         :filter-prop="itemName"
       />
       <CommandPanel
         v-if="nodeType === 'command'"
-        :device-id="selectedDevice.id"
+        :device-id="selectedDevicePath!"
         :filter-cmd="itemName"
       />
     </div>
@@ -206,6 +207,7 @@ const macrosStore = useMacrosStore();
 const configStore = useConfigStore();
 
 const selectedDevice = computed(() => store.selectedDevice);
+const selectedDevicePath = computed(() => store.selectedDevicePath);
 const selectedSpec = computed(() => store.selectedSpec);
 const nodeType = computed(() => store.selectedNodeType);
 const categoryType = computed(() => store.selectedCategoryType);
@@ -264,7 +266,7 @@ function getStatusColor(status: string): string {
 }
 
 function goBackToCategory() {
-  if (!selectedDevice.value || !nodeType.value) return;
+  if (!selectedDevicePath.value || !nodeType.value) return;
   const catMap: Record<string, string> = {
     property: 'properties',
     command: 'commands',
@@ -272,9 +274,9 @@ function goBackToCategory() {
   };
   const cat = catMap[nodeType.value];
   if (cat) {
-    store.selectNode(`${selectedDevice.value.id}:${cat}`);
+    store.selectNode(`${selectedDevicePath.value}:${cat}`);
   } else {
-    store.selectNode(selectedDevice.value.id);
+    store.selectNode(selectedDevicePath.value);
   }
 }
 

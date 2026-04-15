@@ -22,8 +22,9 @@ export interface TreeNode {
   selectable?: boolean | undefined;
   children?: TreeNode[] | undefined;
   // Metadata for selection handling
-  nodeType: 'device' | 'category' | 'property' | 'command' | 'dataSource';
-  deviceId: string;
+  nodeType: 'device' | 'childDevice' | 'category' | 'property' | 'command' | 'dataSource';
+  deviceId: string;    // root device ID (for connect/disconnect)
+  devicePath: string;  // full path, e.g. 'multi_device/channel_a'
   itemName?: string | undefined;
   connected?: boolean | undefined;
 }
@@ -48,71 +49,135 @@ export const useDevicesStore = defineStore('devices', () => {
     return map;
   });
 
+  // --- Path-aware helpers ---
+
+  function getSpecForPath(path: string): DeviceSpec | null {
+    const parts = path.split('/');
+    let spec: DeviceSpec | null | undefined = specs.value.get(parts[0] ?? '');
+    if (!spec) return null;
+    for (const part of parts.slice(1)) {
+      spec = spec.children?.[part] ?? null;
+      if (!spec) return null;
+    }
+    return spec;
+  }
+
+  function getStateForPath(path: string): Record<string, unknown> {
+    const parts = path.split('/');
+    const root = devices.value.find((d) => d.id === parts[0]);
+    if (!root) return {};
+    let state: Record<string, unknown> = root.state;
+    for (const part of parts.slice(1)) {
+      const child = state[part];
+      if (child && typeof child === 'object' && !Array.isArray(child)) {
+        state = child as Record<string, unknown>;
+      } else {
+        return {};
+      }
+    }
+    return state;
+  }
+
+  // --- Tree building ---
+
+  function buildDeviceSubtree(
+    devicePath: string,
+    rootId: string,
+    spec: DeviceSpec,
+  ): TreeNode[] {
+    const nodes: TreeNode[] = [];
+
+    // Child devices first (recursively)
+    if (spec.children) {
+      for (const [childId, childSpec] of Object.entries(spec.children)) {
+        const childPath = `${devicePath}/${childId}`;
+        const grandchildren = buildDeviceSubtree(childPath, rootId, childSpec);
+        nodes.push({
+          id: childPath,
+          label: childId,
+          icon: 'device_hub',
+          iconColor: 'blue-grey',
+          nodeType: 'childDevice',
+          deviceId: rootId,
+          devicePath: childPath,
+          children: grandchildren.length > 0 ? grandchildren : undefined,
+        });
+      }
+    }
+
+    // Data sources
+    if (spec.data_sources?.length) {
+      nodes.push({
+        id: `${devicePath}:dataSources`,
+        label: 'Data Sources',
+        icon: 'show_chart',
+        nodeType: 'category',
+        deviceId: rootId,
+        devicePath,
+        children: spec.data_sources.map((ds) => ({
+          id: `${devicePath}:dataSource:${ds.name}`,
+          label: ds.name,
+          icon: 'timeline',
+          iconColor: 'teal',
+          nodeType: 'dataSource' as const,
+          deviceId: rootId,
+          devicePath,
+          itemName: ds.name,
+        })),
+      });
+    }
+
+    // Properties
+    if (spec.properties?.length) {
+      nodes.push({
+        id: `${devicePath}:properties`,
+        label: 'Properties',
+        icon: 'tune',
+        nodeType: 'category',
+        deviceId: rootId,
+        devicePath,
+        children: spec.properties.map((p) => ({
+          id: `${devicePath}:property:${p.name}`,
+          label: p.name,
+          icon: p.read_only ? 'lock' : 'edit',
+          iconColor: p.read_only ? 'grey-6' : 'primary',
+          nodeType: 'property' as const,
+          deviceId: rootId,
+          devicePath,
+          itemName: p.name,
+        })),
+      });
+    }
+
+    // Commands
+    if (spec.commands?.length) {
+      nodes.push({
+        id: `${devicePath}:commands`,
+        label: 'Commands',
+        icon: 'play_arrow',
+        nodeType: 'category',
+        deviceId: rootId,
+        devicePath,
+        children: spec.commands.map((c) => ({
+          id: `${devicePath}:command:${c.name}`,
+          label: c.name,
+          icon: 'bolt',
+          iconColor: 'orange',
+          nodeType: 'command' as const,
+          deviceId: rootId,
+          devicePath,
+          itemName: c.name,
+        })),
+      });
+    }
+
+    return nodes;
+  }
+
   const treeNodes = computed<TreeNode[]>(() => {
     return devices.value.map((device) => {
       const spec = specs.value.get(device.id);
-      const children: TreeNode[] = [];
-
-      // Data sources category
-      if (spec?.data_sources?.length) {
-        children.push({
-          id: `${device.id}:dataSources`,
-          label: 'Data Sources',
-          icon: 'show_chart',
-          nodeType: 'category',
-          deviceId: device.id,
-          children: spec.data_sources.map((ds) => ({
-            id: `${device.id}:dataSource:${ds.name}`,
-            label: ds.name,
-            icon: 'timeline',
-            iconColor: 'teal',
-            nodeType: 'dataSource' as const,
-            deviceId: device.id,
-            itemName: ds.name,
-          })),
-        });
-      }
-
-      // Properties category
-      if (spec?.properties?.length) {
-        children.push({
-          id: `${device.id}:properties`,
-          label: 'Properties',
-          icon: 'tune',
-          nodeType: 'category',
-          deviceId: device.id,
-          children: spec.properties.map((p) => ({
-            id: `${device.id}:property:${p.name}`,
-            label: p.name,
-            icon: p.read_only ? 'lock' : 'edit',
-            iconColor: p.read_only ? 'grey-6' : 'primary',
-            nodeType: 'property' as const,
-            deviceId: device.id,
-            itemName: p.name,
-          })),
-        });
-      }
-
-      // Commands category
-      if (spec?.commands?.length) {
-        children.push({
-          id: `${device.id}:commands`,
-          label: 'Commands',
-          icon: 'play_arrow',
-          nodeType: 'category',
-          deviceId: device.id,
-          children: spec.commands.map((c) => ({
-            id: `${device.id}:command:${c.name}`,
-            label: c.name,
-            icon: 'bolt',
-            iconColor: 'orange',
-            nodeType: 'command' as const,
-            deviceId: device.id,
-            itemName: c.name,
-          })),
-        });
-      }
-
+      const children = spec ? buildDeviceSubtree(device.id, device.id, spec) : [];
       return {
         id: device.id,
         label: device.id,
@@ -120,6 +185,7 @@ export const useDevicesStore = defineStore('devices', () => {
         iconColor: getStatusColor(device.status),
         nodeType: 'device' as const,
         deviceId: device.id,
+        devicePath: device.id,
         connected: true,
         children: children.length > 0 ? children : undefined,
       };
@@ -127,22 +193,34 @@ export const useDevicesStore = defineStore('devices', () => {
   });
 
   // Selection computed
-  const selectedDevice = computed(() => {
+  // The device path is everything before the first ':' in the node ID
+  // e.g. 'multi_device/channel_a:property:amplitude' → 'multi_device/channel_a'
+  const selectedDevicePath = computed(() => {
     if (!selectedNodeId.value) return null;
-    const nodeId = selectedNodeId.value;
-    const deviceId = nodeId.split(':')[0];
-    return devices.value.find((d) => d.id === deviceId) || null;
+    return selectedNodeId.value.split(':')[0] || null;
+  });
+
+  // Root device (for status display, connect/disconnect)
+  const selectedDevice = computed(() => {
+    const path = selectedDevicePath.value;
+    if (!path) return null;
+    const rootId = path.split('/')[0];
+    return devices.value.find((d) => d.id === rootId) || null;
   });
 
   const selectedSpec = computed(() => {
-    if (!selectedDevice.value) return null;
-    return specs.value.get(selectedDevice.value.id) || null;
+    const path = selectedDevicePath.value;
+    if (!path) return null;
+    return getSpecForPath(path);
   });
 
   const selectedNodeType = computed(() => {
     if (!selectedNodeId.value) return null;
     const parts = selectedNodeId.value.split(':');
-    if (parts.length === 1) return 'device';
+    if (parts.length === 1) {
+      // bare path — root device or child device
+      return (parts[0] ?? '').includes('/') ? 'childDevice' : 'device';
+    }
     if (parts.length === 2) return 'category';
     return parts[1] as 'property' | 'command' | 'dataSource';
   });
@@ -255,23 +333,20 @@ export const useDevicesStore = defineStore('devices', () => {
     selectedNodeId.value = nodeId;
   }
 
-  function getDeviceSpec(deviceId: string): DeviceSpec | null {
-    return specs.value.get(deviceId) || null;
+  function getDeviceSpec(devicePath: string): DeviceSpec | null {
+    return getSpecForPath(devicePath);
   }
 
-  function getPropertySpec(deviceId: string, propName: string): PropertySpec | undefined {
-    const spec = specs.value.get(deviceId);
-    return spec?.properties?.find((p) => p.name === propName);
+  function getPropertySpec(devicePath: string, propName: string): PropertySpec | undefined {
+    return getSpecForPath(devicePath)?.properties?.find((p) => p.name === propName);
   }
 
-  function getCommandSpec(deviceId: string, cmdName: string): CommandSpec | undefined {
-    const spec = specs.value.get(deviceId);
-    return spec?.commands?.find((c) => c.name === cmdName);
+  function getCommandSpec(devicePath: string, cmdName: string): CommandSpec | undefined {
+    return getSpecForPath(devicePath)?.commands?.find((c) => c.name === cmdName);
   }
 
-  function getDataSourceSpec(deviceId: string, sourceName: string): DataSourceSpec | undefined {
-    const spec = specs.value.get(deviceId);
-    return spec?.data_sources?.find((ds) => ds.name === sourceName);
+  function getDataSourceSpec(devicePath: string, sourceName: string): DataSourceSpec | undefined {
+    return getSpecForPath(devicePath)?.data_sources?.find((ds) => ds.name === sourceName);
   }
 
   // WebSocket for real-time updates
@@ -359,10 +434,15 @@ export const useDevicesStore = defineStore('devices', () => {
     deviceMap,
     treeNodes,
     selectedDevice,
+    selectedDevicePath,
     selectedSpec,
     selectedNodeType,
     selectedItemName,
     selectedCategoryType,
+
+    // Path helpers (used by panel components)
+    getSpecForPath,
+    getStateForPath,
 
     // Actions
     loadDevices,

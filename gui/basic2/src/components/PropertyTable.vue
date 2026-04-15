@@ -79,9 +79,8 @@ const props = defineProps<{
 
 const store = useDevicesStore();
 
-const device = computed(() => store.deviceMap.get(props.deviceId));
-const spec = computed(() => store.getDeviceSpec(props.deviceId));
-const deviceState = computed(() => device.value?.state || {});
+const spec = computed(() => store.getSpecForPath(props.deviceId));
+const deviceState = computed(() => store.getStateForPath(props.deviceId));
 
 const properties = computed(() => {
   const all = spec.value?.properties || [];
