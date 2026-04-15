@@ -11,8 +11,10 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import AsyncIterator, Dict, Any, Optional, TYPE_CHECKING
 
 import numpy as np
-import tkinter as tk
-from PIL import Image, ImageTk
+from PIL import Image
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QImage, QKeyEvent, QPixmap
+from PySide6.QtWidgets import QApplication, QLabel
 
 try:
     from screeninfo import get_monitors
@@ -35,6 +37,27 @@ if TYPE_CHECKING:
     from ...device_manager import DeviceManager
 
 logger = logging.getLogger(__name__)
+
+
+class _SlmWindow(QLabel):
+    """Borderless top-level label used to present the SLM pattern."""
+
+    def __init__(self, on_escape=None):
+        super().__init__(None)
+        self._on_escape = on_escape
+        self.setWindowTitle("SLM")
+        self.setStyleSheet("background-color: black;")
+        self.setAlignment(Qt.AlignCenter)
+        self.setScaledContents(True)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() == Qt.Key_Escape:
+            if self._on_escape is not None:
+                self._on_escape()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 # ---------------------------------------------------------------------------
@@ -118,7 +141,7 @@ class _grating(ChildDevice):
             None, _generate_grating, w, h, self._spacing, self._angle, cx, cy, r
         )
 
-        # Display must happen on the dedicated tkinter thread
+        # Display must happen on the dedicated Qt thread
         await root._run_blocking_in_thread(root._display, arr)
 
 
@@ -197,9 +220,9 @@ class slm(Device):
     mask    : circular aperture (cx, cy, r) applied by show_grating
     """
 
-    # Single-threaded executor: all tkinter calls must originate from one OS thread.
-    # Class-level because tkinter is process-wide — only one Tk() per process.
-    _TK_EXEC = ThreadPoolExecutor(max_workers=1, thread_name_prefix="slm_tk")
+    # Single-threaded executor: all Qt calls must originate from one OS thread.
+    # Class-level because QApplication is process-wide.
+    _QT_EXEC = ThreadPoolExecutor(max_workers=1, thread_name_prefix="slm_qt")
 
     config_template = {
         "polling_interval": 1000,
@@ -225,23 +248,24 @@ class slm(Device):
 
         self._monitor_index: int | None = options.get("monitor_index", None)
 
-        # Tkinter state (all access must go through _TK_EXEC)
+        # Qt state (all access must go through _QT_EXEC)
         self._monitor: dict | None = None
-        self._root: tk.Tk | None = None
-        self._label: tk.Label | None = None
-        self._tk_image: ImageTk.PhotoImage | None = None
+        self._app: QApplication | None = None
+        self._window: _SlmWindow | None = None
+        self._pixmap: QPixmap | None = None
 
         # Last pattern sent — polled by the current_pattern data source
         self._current_pattern: np.ndarray | None = None
 
     # --- Thread routing ------------------------------------------------------
     # Route every blocking call through the dedicated single-threaded executor.
-    # This guarantees that Tk(), update(), destroy() etc. always execute on the
-    # same OS thread.  Property polls and sync commands all go through here.
+    # This guarantees that QApplication, QWidget, repaint and teardown all
+    # execute on the same OS thread. Property polls and sync commands all go
+    # through here.
 
     async def _run_blocking_in_thread(self, fn, *args, **kwargs):
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(self._TK_EXEC, lambda: fn(*args, **kwargs))
+        return await loop.run_in_executor(self._QT_EXEC, lambda: fn(*args, **kwargs))
 
     # --- Lifecycle -----------------------------------------------------------
 
@@ -260,7 +284,7 @@ class slm(Device):
         return True
 
     def disconnect(self) -> bool:
-        """Sync so the base class routes it through _run_blocking_in_thread → tk thread."""
+        """Sync so the base class routes it through _run_blocking_in_thread → Qt thread."""
         self.close()
         return True
 
@@ -281,7 +305,7 @@ class slm(Device):
     @api_property()
     def is_displaying(self) -> bool:
         """True when the SLM display window is currently open."""
-        return self._root is not None
+        return self._window is not None
 
     # --- Commands ------------------------------------------------------------
 
@@ -300,11 +324,12 @@ class slm(Device):
     @api_command()
     def close(self) -> None:
         """Close the SLM display window."""
-        if self._root is not None:
-            self._root.destroy()
-            self._root = None
-            self._label = None
-            self._tk_image = None
+        if self._window is not None:
+            self._window.close()
+            self._window.deleteLater()
+            self._window = None
+            self._pixmap = None
+            self._process_qt_events()
 
     # --- Data source: live pattern preview -----------------------------------
 
@@ -328,11 +353,23 @@ class slm(Device):
 
     # --- Internal helpers ----------------------------------------------------
 
+    def _ensure_app(self) -> QApplication:
+        app = QApplication.instance()
+        if app is None:
+            app = QApplication([])
+            app.setQuitOnLastWindowClosed(False)
+        self._app = app
+        return app
+
+    def _process_qt_events(self) -> None:
+        app = self._ensure_app()
+        app.processEvents()
+
     def _display(self, arr: np.ndarray) -> None:
-        """Store pattern and push to tkinter window (create or update)."""
+        """Store pattern and push to Qt window (create or update)."""
         self._current_pattern = arr
         img = self._to_pil(arr)
-        if self._root is None:
+        if self._window is None:
             self._open_window(img)
         else:
             self._update_image(img)
@@ -343,29 +380,34 @@ class slm(Device):
         img = Image.fromarray(pattern, mode="L")
         if img.size != (m["width"], m["height"]):
             img = img.resize((m["width"], m["height"]), Image.LANCZOS)
-        return img.convert("RGB")  # tkinter PhotoImage requires RGB
+        return img.convert("RGB")
+
+    def _pil_to_qpixmap(self, img: Image.Image) -> QPixmap:
+        data = img.tobytes("raw", "RGB")
+        qimg = QImage(data, img.width, img.height, img.width * 3, QImage.Format_RGB888)
+        return QPixmap.fromImage(qimg.copy())
 
     def _open_window(self, img: Image.Image) -> None:
+        self._ensure_app()
         m = self._monitor
-        self._root = tk.Tk()
-        self._root.title("SLM")
-        self._root.configure(bg="black")
-        self._root.overrideredirect(True)  # no title bar / decorations
-        self._root.geometry(f"{m['width']}x{m['height']}+{m['x']}+{m['y']}")
-        self._root.attributes("-topmost", True)
-        self._root.bind("<Escape>", lambda _: self.close())
 
-        self._tk_image = ImageTk.PhotoImage(img, master=self._root)
-        self._label = tk.Label(self._root, image=self._tk_image, bg="black", bd=0)
-        self._label.image = self._tk_image  # explicit ref — prevents GC blanking
-        self._label.pack()
-        self._root.update()
+        self._window = _SlmWindow(on_escape=self.close)
+        self._window.setGeometry(m["x"], m["y"], m["width"], m["height"])
+        self._window.setFocusPolicy(Qt.StrongFocus)
+
+        self._pixmap = self._pil_to_qpixmap(img)
+        self._window.setPixmap(self._pixmap)
+        self._window.show()
+        self._window.raise_()
+        self._window.activateWindow()
+        self._window.setFocus()
+        self._process_qt_events()
 
     def _update_image(self, img: Image.Image) -> None:
-        self._tk_image = ImageTk.PhotoImage(img, master=self._root)
-        self._label.configure(image=self._tk_image)
-        self._label.image = self._tk_image  # explicit ref — prevents GC blanking
-        self._root.update()
+        self._pixmap = self._pil_to_qpixmap(img)
+        self._window.setPixmap(self._pixmap)
+        self._window.repaint()
+        self._process_qt_events()
 
 
 # ---------------------------------------------------------------------------
