@@ -21,7 +21,15 @@ try:
 except ImportError:
     _HAS_SCREENINFO = False
 
-from ..base import Device, ChildDevice, api_device, api_command, api_property, api_data, Frame
+from ..base import (
+    Device,
+    ChildDevice,
+    api_device,
+    api_command,
+    api_property,
+    api_data,
+    Frame,
+)
 
 if TYPE_CHECKING:
     from ...device_manager import DeviceManager
@@ -32,6 +40,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Child device: grating
 # ---------------------------------------------------------------------------
+
 
 @api_device()
 class _grating(ChildDevice):
@@ -117,6 +126,7 @@ class _grating(ChildDevice):
 # Child device: mask
 # ---------------------------------------------------------------------------
 
+
 @api_device()
 class _mask(ChildDevice):
     """
@@ -173,6 +183,7 @@ class _mask(ChildDevice):
 # Root device
 # ---------------------------------------------------------------------------
 
+
 @api_device()
 class slm(Device):
     """
@@ -192,7 +203,7 @@ class slm(Device):
 
     config_template = {
         "polling_interval": 1000,
-        "monitor_index": None,      # None → auto-select first non-primary monitor
+        "monitor_index": None,  # None → auto-select first non-primary monitor
         "grating_spacing": 20.0,
         "grating_angle": 0.0,
         "mask_cx": -1.0,
@@ -339,7 +350,7 @@ class slm(Device):
         self._root = tk.Tk()
         self._root.title("SLM")
         self._root.configure(bg="black")
-        self._root.overrideredirect(True)   # no title bar / decorations
+        self._root.overrideredirect(True)  # no title bar / decorations
         self._root.geometry(f"{m['width']}x{m['height']}+{m['x']}+{m['y']}")
         self._root.attributes("-topmost", True)
         self._root.bind("<Escape>", lambda _: self.close())
@@ -392,12 +403,15 @@ def _generate_grating(
     X, Y = np.meshgrid(xs, ys)
 
     proj = X * np.cos(angle_rad) + Y * np.sin(angle_rad)
-    pattern = (128 + 127 * np.sin(2 * np.pi * proj / spacing)).astype(np.uint8)
+    # pattern = (128 + 127 * np.sin(2 * np.pi * proj / spacing)).astype(np.uint8)
+
+    ramp = (proj / spacing) % 1.0  # linear ramp
+    pattern = (ramp * 255).astype(np.uint8)  # scale to 8 bit
 
     if mask_r > 0:
         cx = mask_cx if mask_cx >= 0 else width / 2.0
         cy = mask_cy if mask_cy >= 0 else height / 2.0
-        outside = (X - cx) ** 2 + (Y - cy) ** 2 > mask_r ** 2
+        outside = (X - cx) ** 2 + (Y - cy) ** 2 > mask_r**2
         pattern[outside] = 0
 
     return pattern
