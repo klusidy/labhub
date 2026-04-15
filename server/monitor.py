@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import Optional, Dict, TYPE_CHECKING
+from typing import Optional, Dict, Iterable, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .device_manager import DeviceManager
@@ -181,41 +181,28 @@ class ProfileMonitor:
         Uses manager.list_devices() for state, preserves existing policies.
         """
         try:
-            # Get current device states from manager
-            device_infos = await self.manager.list_devices()
             device_profiles = []
 
-            for dev_info in device_infos:
-                dev_id = dev_info.id
-                state = dev_info.state
+            # Iterate every device and child device in the tree.
+            # Each gets its own profile entry keyed by its full path.
+            for path, dev in self._iter_device_tree():
+                if path not in self._policies:
+                    self._policies[path] = {}
 
-                # Get device for metadata
-                dev = self.manager.devices.get(dev_id)
-                if not dev:
-                    logger.warning(f"Device '{dev_id}' not found in manager, skipping")
-                    continue
-
-                # Build property profiles
                 properties = {}
-                for prop_name, value in state.items():
-                    # Get policy: preserve existing, or determine from metadata
-                    if dev_id not in self._policies:
-                        self._policies[dev_id] = {}
+                for prop_name in dev._api_properties:
+                    value = dev.get_cached(prop_name)
 
-                    if dev_id in self._policies and prop_name in self._policies[dev_id]:
-                        # Preserve existing policy from loaded profile
-                        policy = self._policies[dev_id][prop_name]
+                    if prop_name in self._policies[path]:
+                        policy = self._policies[path][prop_name]
                     else:
-                        # Determine policy from property metadata
                         prop_meta = dev._api_properties.get(prop_name, {})
                         policy = "read" if prop_meta.get("read_only") else "write"
-                        self._policies[dev_id][
-                            prop_name
-                        ] = policy  # store for future saves
+                        self._policies[path][prop_name] = policy
 
                     properties[prop_name] = PropertyProfile(value=value, policy=policy)
 
-                device_profiles.append(DeviceProfile(id=dev_id, properties=properties))
+                device_profiles.append(DeviceProfile(id=path, properties=properties))
 
             # Write to file atomically
             profile = HubProfile(devices=device_profiles)
@@ -266,14 +253,14 @@ class ProfileMonitor:
             new_profile = load_profile(new_path)
             new_policies = {}
 
-            # Process each device in profile
+            # Process each device (or child device) in profile
             for dev_profile in new_profile.devices:
-                dev_id = dev_profile.id
-                dev = self.manager.devices.get(dev_id)
+                dev_path = dev_profile.id
+                dev = self._resolve_device(dev_path)
 
                 if not dev:
                     logger.warning(
-                        f"Device '{dev_id}' in profile not found in manager, skipping"
+                        f"Device '{dev_path}' in profile not found in manager, skipping"
                     )
                     continue
 
@@ -282,25 +269,22 @@ class ProfileMonitor:
                 write_properties = {}
 
                 for prop_name, prop_profile in dev_profile.properties.items():
-                    # Store policy
                     dev_policies[prop_name] = prop_profile.policy
-
-                    # Collect write-policy properties for application
                     if prop_profile.policy == "write":
                         write_properties[prop_name] = prop_profile.value
 
-                new_policies[dev_id] = dev_policies
+                new_policies[dev_path] = dev_policies
 
-                # Apply write-policy properties (comparison done in apply_properties)
+                # Apply write-policy properties directly to the resolved device
                 if write_properties:
                     try:
-                        await self.manager.apply_properties(dev_id, write_properties)
+                        await dev.apply_properties(write_properties)
                         logger.info(
-                            f"Applied {len(write_properties)} write-policy properties to '{dev_id}'"
+                            f"Applied {len(write_properties)} write-policy properties to '{dev_path}'"
                         )
                     except Exception as e:
                         logger.error(
-                            f"Failed to apply properties to '{dev_id}': {e}",
+                            f"Failed to apply properties to '{dev_path}': {e}",
                             exc_info=True,
                         )
 
@@ -346,7 +330,7 @@ class ProfileMonitor:
             raise ValueError(f"Invalid policy: {policy}. Must be 'read' or 'write'")
 
         # Validate: cannot set "write" on read-only property
-        dev = self.manager.devices.get(dev_id)
+        dev = self._resolve_device(dev_id)
         if dev:
             prop_meta = dev._api_properties.get(prop_name, {})
             if prop_meta.get("read_only") and policy == "write":
@@ -366,61 +350,82 @@ class ProfileMonitor:
 
     async def apply_profile_to_device(self, dev_id: str) -> None:
         """
-        Apply profile (write-policy properties) to a single device.
+        Apply profile (write-policy properties) to a device and all its children.
 
         Used when a device is connected mid-session to restore its
         last-known property values from the profile.
 
         Args:
-            dev_id: Device identifier
+            dev_id: Root device identifier
         """
-        dev = self.manager.devices.get(dev_id)
-        if not dev:
+        if not self.manager.devices.get(dev_id):
             logger.warning(f"Cannot apply profile: device '{dev_id}' not in manager")
             return
 
-        # Load current profile from file for stale values
+        # Load current profile from file for fresh values
         try:
             profile = load_profile(self.profile_path)
         except Exception as e:
             logger.warning(f"Failed to load profile for device '{dev_id}': {e}")
             return
 
-        # Find this device's profile entry
-        dev_profile = None
-        for dp in profile.devices:
-            if dp.id == dev_id:
-                dev_profile = dp
-                break
+        # Apply all profile entries that belong to this root device
+        # (both the root entry "dev_id" and child entries "dev_id/ch_a" etc.)
+        applied = 0
+        for dev_profile in profile.devices:
+            path = dev_profile.id
+            if path != dev_id and not path.startswith(dev_id + "/"):
+                continue
 
-        if not dev_profile:
-            logger.info(f"No profile entry for device '{dev_id}', skipping profile apply")
-            return
+            dev = self._resolve_device(path)
+            if not dev:
+                continue
 
-        # Collect write-policy properties
-        write_properties = {}
-        for prop_name, prop_profile in dev_profile.properties.items():
-            if prop_profile.policy == "write":
-                write_properties[prop_name] = prop_profile.value
+            write_properties = {
+                k: v.value
+                for k, v in dev_profile.properties.items()
+                if v.policy == "write"
+            }
 
-        if write_properties:
-            try:
-                await self.manager.apply_properties(dev_id, write_properties)
-                logger.info(
-                    f"Applied {len(write_properties)} write-policy properties "
-                    f"to '{dev_id}' from profile"
-                )
-            except Exception as e:
-                logger.error(
-                    f"Failed to apply profile properties to '{dev_id}': {e}",
-                    exc_info=True,
-                )
+            if write_properties:
+                try:
+                    await dev.apply_properties(write_properties)
+                    applied += len(write_properties)
+                except Exception as e:
+                    logger.error(
+                        f"Failed to apply profile properties to '{path}': {e}",
+                        exc_info=True,
+                    )
 
-        # Restore policies for this device
-        dev_policies = {}
-        for prop_name, prop_profile in dev_profile.properties.items():
-            dev_policies[prop_name] = prop_profile.policy
-        self._policies[dev_id] = dev_policies
+            # Restore policies
+            self._policies[path] = {k: v.policy for k, v in dev_profile.properties.items()}
+
+        if applied:
+            logger.info(f"Applied {applied} write-policy properties to '{dev_id}' subtree")
+
+    # ------------------------------------------------------------------
+    # Device-tree helpers
+    # ------------------------------------------------------------------
+
+    def _resolve_device(self, path: str):
+        """Return the Device at *path* (e.g. ``'ps5000a/ch_a'``), or None."""
+        parts = path.split("/")
+        dev = self.manager.devices.get(parts[0])
+        for part in parts[1:]:
+            if dev is None:
+                return None
+            dev = dev.children.get(part)
+        return dev
+
+    def _iter_device_tree(self) -> Iterable[Tuple[str, object]]:
+        """Yield ``(path, Device)`` for every device and child, depth-first."""
+        def _recurse(path: str, dev):
+            yield path, dev
+            for child_id, child in dev.children.items():
+                yield from _recurse(f"{path}/{child_id}", child)
+
+        for dev_id, dev in self.manager.devices.items():
+            yield from _recurse(dev_id, dev)
 
     async def force_save(self) -> None:
         """

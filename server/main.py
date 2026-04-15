@@ -226,6 +226,36 @@ for _gui in server_cfg.custom_guis:
 
 
 
+# ---- API helpers ----
+
+def _resolve(path: str):
+    """Navigate the device tree by slash-separated path and return the target device.
+
+    The first segment is looked up in manager.devices (root devices).
+    Subsequent segments traverse device.children.
+
+    Examples:
+        "red_pitaya"          → root device
+        "red_pitaya/osc"      → osc child of red_pitaya
+        "red_pitaya/osc/ch_a" → ch_a grandchild
+
+    Raises:
+        KeyError: if any segment is not found (caller converts to 404).
+    """
+    parts = [p for p in path.strip("/").split("/") if p]
+    if not parts:
+        raise KeyError("empty device path")
+    dev = manager.devices[parts[0]]
+    for part in parts[1:]:
+        dev = dev.children[part]
+    return dev
+
+
+def _root_id(path: str) -> str:
+    """Return the root device id from a slash-separated path."""
+    return path.strip("/").split("/")[0]
+
+
 # ---- API ----
 @app.get("/api/v2/devices", response_model=list[DeviceInfo])
 async def list_devices():
@@ -251,171 +281,171 @@ async def list_devices():
         raise HTTPException(500, f"Internal error while listing devices: {str(e)}")
 
 
-@app.get("/api/v2/devices/{dev_id}", response_model=DeviceInfo)
-async def get_device(dev_id: str):
+# NOTE: routes with path suffixes (/spec, /commands, /data/…) MUST be
+# registered before the bare {path:path} GET/PATCH catch-alls, otherwise
+# FastAPI's greedy path parameter would consume the suffix.
+
+@app.get("/api/v2/devices/{path:path}/spec", response_model=DeviceSpec)
+async def get_device_spec(path: str):
+    """Get device (or sub-device) specification.
+
+    Path examples:
+        /api/v2/devices/red_pitaya/spec          → root device spec
+        /api/v2/devices/red_pitaya/osc/spec      → osc module spec
     """
-    Get current state for a specific device.
+    try:
+        dev = _resolve(path)
+    except KeyError:
+        raise HTTPException(404, f"Unknown device path '{path}'")
+    try:
+        return dev.build_spec(path)
+    except Exception as e:
+        logger.error(f"Failed to build spec for '{path}': {e}", exc_info=True)
+        raise HTTPException(500, f"Error reading device specification: {str(e)}")
+
+
+@app.get("/api/v2/devices/{path:path}/data/{source}/plot")
+async def get_plot_spec(path: str, source: str):
+    """Get plot specification for a data source on any device in the tree."""
+    try:
+        dev = _resolve(path)
+    except KeyError:
+        raise HTTPException(404, f"Unknown device path '{path}'")
+    try:
+        ds = dev.get_datasource(source)
+        return ds.plot()
+    except KeyError:
+        raise HTTPException(404, f"Unknown data source '{source}'")
+    except Exception as e:
+        raise HTTPException(500, f"Error reading plot spec: {str(e)}")
+
+
+@app.get("/api/v2/devices/{path:path}/data/{source}/frame")
+async def get_one_frame(path: str, source: str):
+    """Get a single data frame from a source on any device in the tree."""
+    try:
+        dev = _resolve(path)
+    except KeyError:
+        raise HTTPException(404, f"Unknown device path '{path}'")
+    try:
+        ds = dev.get_datasource(source)
+        return await ds.once()
+    except KeyError:
+        raise HTTPException(404, f"Unknown data source '{source}'")
+    except Exception as e:
+        raise HTTPException(500, f"Error acquiring frame: {str(e)}")
+
+
+@app.get("/api/v2/devices/{path:path}/data")
+async def get_data_catalog(path: str):
+    """List available data sources for a device at any depth in the tree."""
+    try:
+        dev = _resolve(path)
+    except KeyError:
+        raise HTTPException(404, f"Unknown device path '{path}'")
+    try:
+        return {"device": path, "sources": dev.list_data_sources()}
+    except Exception as e:
+        raise HTTPException(500, f"Error reading data catalog: {str(e)}")
+
+
+@app.post("/api/v2/devices/{path:path}/commands")
+async def run_command(path: str, req: CommandRequest):
+    """Execute a command on a device at any depth in the tree.
+
+    After the command completes the root device's full state is published
+    to the event bus so all WebSocket clients stay in sync.
+    """
+    root_id = _root_id(path)
+    if root_id not in manager.devices:
+        raise HTTPException(404, f"Unknown device '{root_id}'")
+    try:
+        dev = _resolve(path)
+    except KeyError:
+        raise HTTPException(404, f"Unknown device path '{path}'")
+
+    try:
+        res = await dev.run_command(req.name, req.args)
+    except ValueError as e:
+        raise HTTPException(400, f"Invalid command: {str(e)}")
+    except Exception as e:
+        logger.error(f"Command '{req.name}' failed on '{path}': {e}", exc_info=True)
+        raise HTTPException(500, f"Command execution failed: {str(e)}")
+
+    # Publish full root state so WS clients stay in sync
+    root_dev = manager.devices[root_id]
+    st = await root_dev.read_state()
+    await event_bus.publish({"type": "device.state", "id": root_id, "state": st})
+    return res
+
+
+# --- State read / property write (bare path — registered LAST among GETs) ---
+
+@app.get("/api/v2/devices/{path:path}", response_model=DeviceInfo)
+async def get_device(path: str):
+    """Get current state for a device at any depth in the tree.
 
     Args:
-        dev_id: Device identifier (e.g., "piezo1", "scope_main")
+        path: Slash-separated device path (e.g. "red_pitaya/osc/ch_a")
 
     Returns:
         DeviceInfo: Device information including:
             - id: Device identifier
             - kind: Device type
             - status: Connection status
-            - state: Current property values
+            - state: Current property values (nested for composite devices)
 
     Raises:
         HTTPException(404): Device not found in configuration
         HTTPException(500): Error reading device state
     """
-    logger.debug(f"GET /api/v2/devices/{dev_id} - fetching device state")
-
-    if dev_id not in manager.devices:
-        logger.warning(f"Device not found: {dev_id}")
-        raise HTTPException(404, f"Unknown device '{dev_id}'")
-
+    logger.debug(f"GET /api/v2/devices/{path}")
     try:
-        return await manager.get_device_state(dev_id)
+        dev = _resolve(path)
+    except KeyError:
+        raise HTTPException(404, f"Unknown device path '{path}'")
+    try:
+        st = await dev.read_state()
+        return DeviceInfo(
+            id=path,
+            driver=dev._api_driver,
+            status=dev._status,
+            state=st,
+        )
     except Exception as e:
-        logger.error(f"Failed to get state for device '{dev_id}': {e}", exc_info=True)
+        logger.error(f"Failed to get state for '{path}': {e}", exc_info=True)
         raise HTTPException(500, f"Error reading device state: {str(e)}")
 
 
-@app.patch("/api/v2/devices/{dev_id}", response_model=DeviceInfo)
-async def patch_device(dev_id: str, req: PatchRequest):
+@app.patch("/api/v2/devices/{path:path}", response_model=DeviceInfo)
+async def patch_device(path: str, req: PatchRequest):
+    """Update properties on a device at any depth in the tree.
+
+    The full nested state of the ROOT device is published to the event bus
+    after applying so all WebSocket clients stay in sync.
     """
-    Update device properties.
-
-    Args:
-        dev_id: Device identifier
-        req: PatchRequest containing properties to update
-            - properties: Dict[str, Any] - Property name-value pairs
-
-    Returns:
-        DeviceInfo: Updated device state after applying properties
-
-    Raises:
-        HTTPException(404): Device not found
-        HTTPException(400): Invalid property name or value
-        HTTPException(500): Error applying properties to device
-
-    Notes:
-        - Only provided properties are updated; others remain unchanged
-        - Property changes are published to event bus for real-time updates
-        - Read-only properties cannot be modified
-    """
-    logger.debug(
-        f"PATCH /api/v2/devices/{dev_id} - updating properties: {list(req.properties.keys())}"
-    )
-
-    if dev_id not in manager.devices:
-        logger.warning(f"Device not found: {dev_id}")
-        raise HTTPException(404, f"Unknown device '{dev_id}'")
+    root_id = _root_id(path)
+    if root_id not in manager.devices:
+        raise HTTPException(404, f"Unknown device '{root_id}'")
+    try:
+        dev = _resolve(path)
+    except KeyError:
+        raise HTTPException(404, f"Unknown device path '{path}'")
 
     try:
-        return await manager.apply_properties(dev_id, req.properties)
+        st = await dev.apply_properties(req.properties)
     except ValueError as e:
-        # Invalid property name or value
-        logger.warning(f"Invalid property update for '{dev_id}': {e}")
         raise HTTPException(400, f"Invalid property: {str(e)}")
     except Exception as e:
-        logger.error(f"Failed to apply properties to '{dev_id}': {e}", exc_info=True)
+        logger.error(f"Failed to apply properties to '{path}': {e}", exc_info=True)
         raise HTTPException(500, f"Error applying properties: {str(e)}")
 
+    # Publish full root state (nested) so WS clients see the complete picture
+    root_dev = manager.devices[root_id]
+    root_state = await root_dev.read_state()
+    await event_bus.publish({"type": "device.state", "id": root_id, "state": root_state})
 
-@app.get("/api/v2/devices/{dev_id}/spec", response_model=DeviceSpec)
-async def get_device_spec(dev_id: str):
-    """
-    Get device specification (capabilities and metadata).
-
-    Returns the device's complete API specification including available
-    properties, commands, and data sources. Used by clients to understand
-    device capabilities and build dynamic UIs.
-
-    Args:
-        dev_id: Device identifier
-
-    Returns:
-        DeviceSpec: Device specification containing:
-            - id: Device identifier
-            - kind: Device type
-            - doc: Device documentation/description
-            - properties: List of property definitions (name, type, range, etc.)
-            - commands: List of available commands with arguments
-            - data_sources: List of data sources for streaming/plotting
-
-    Raises:
-        HTTPException(404): Device not found
-        HTTPException(500): Error reading device specification
-
-    Notes:
-        - Spec is derived from driver class metadata (PROPERTIES, COMMANDS, DATA_SOURCES)
-        - Includes type information, constraints, and documentation
-        - Used for API discovery and client-side validation
-    """
-    logger.debug(f"GET /api/v2/devices/{dev_id}/spec - fetching device specification")
-
-    if dev_id not in manager.devices:
-        logger.warning(f"Device not found: {dev_id}")
-        raise HTTPException(404, f"Unknown device '{dev_id}'")
-
-    try:
-        return await manager.get_device_spec(dev_id)
-    except Exception as e:
-        logger.error(
-            f"Failed to get specification for device '{dev_id}': {e}", exc_info=True
-        )
-        raise HTTPException(500, f"Error reading device specification: {str(e)}")
-
-
-@app.post("/api/v2/devices/{dev_id}/commands")
-async def run_command(dev_id: str, req: CommandRequest):
-    """
-    Execute a device command.
-
-    Commands are device-specific actions selected from the driver methods
-    by a @api_method() decorator. Examples: "home" for motion devices,
-    "trigger" for scopes, etc.
-
-    Args:
-        dev_id: Device identifier
-        req: CommandRequest containing:
-            - name: Command name
-            - args: Dict of command arguments
-
-    Returns:
-        Command-specific result (varies by command)
-
-    Raises:
-        HTTPException(404): Device not found
-        HTTPException(400): Invalid command name or arguments
-        HTTPException(500): Command execution failed
-
-    Notes:
-        - Available commands listed in device spec (/api/v2/devices/{dev_id}/spec)
-        - Device state is published to event bus after command completes
-        - Some commands may return file paths or structured data
-    """
-    logger.debug(
-        f"POST /api/v2/devices/{dev_id}/commands - running command: {req.name}"
-    )
-
-    if dev_id not in manager.devices:
-        logger.warning(f"Device not found: {dev_id}")
-        raise HTTPException(404, f"Unknown device '{dev_id}'")
-
-    try:
-        res = await manager.run_command(dev_id, req.name, req.args)
-        logger.debug(f"Command '{req.name}' completed successfully for '{dev_id}'")
-        return res
-    except ValueError as e:
-        logger.warning(f"Invalid command for '{dev_id}': {e}")
-        raise HTTPException(400, f"Invalid command: {str(e)}")
-    except Exception as e:
-        logger.error(f"Command '{req.name}' failed for '{dev_id}': {e}", exc_info=True)
-        raise HTTPException(500, f"Command execution failed: {str(e)}")
+    return DeviceInfo(id=path, driver=dev._api_driver, status=dev._status, state=st)
 
 
 from time import monotonic
@@ -485,225 +515,85 @@ async def ws_events(ws: WebSocket):
         await event_bus.unsubscribe(q)
 
 
-@app.get("/api/v2/devices/{dev_id}/data")
-async def get_data_catalog(dev_id: str) -> Dict[str, Any]:
-    """
-    Get catalog of available data sources for a device.
 
-    Data sources provide streaming data, plots, or single-shot acquisitions.
-    Examples: oscilloscope traces, sensor readings, camera frames.
+@app.websocket("/api/v2/streams/{full_path:path}")
+async def ws_stream(ws: WebSocket, full_path: str):
+    """WebSocket endpoint for streaming data from any device in the tree.
 
-    Args:
-        dev_id: Device identifier
+    Path format:  /api/v2/streams/{device_path}/{source}
+    The LAST path segment is the data source name; everything before it is the
+    device path navigated via _resolve().
 
-    Returns:
-        Dict with:
-            - device: Device ID
-            - sources: List of data source names
-
-    Raises:
-        HTTPException(404): Device not found
-        HTTPException(500): Error reading data catalog
-
-    Notes:
-        - Each source can be queried for plot specs (/plot) or frames (/frame)
-        - Sources can be streamed via WebSocket (/api/v2/streams/{dev_id}/{source})
-    """
-    logger.debug(f"GET /api/v2/devices/{dev_id}/data - fetching data catalog")
-
-    if dev_id not in manager.devices:
-        logger.warning(f"Device not found: {dev_id}")
-        raise HTTPException(404, f"Unknown device '{dev_id}'")
-
-    try:
-        return await manager.get_data_catalog(dev_id)
-    except Exception as e:
-        logger.error(f"Failed to get data catalog for '{dev_id}': {e}", exc_info=True)
-        raise HTTPException(500, f"Error reading data catalog: {str(e)}")
-
-
-@app.get("/api/v2/devices/{dev_id}/data/{source}/plot")
-async def get_plot_spec(dev_id: str, source: str) -> Dict[str, Any]:
-    """
-    Get plot specification for a data source.
-
-    Plot specs describe how to visualize data from this source, including
-    axis labels, units, data ranges, and trace configurations.
-
-    Args:
-        dev_id: Device identifier
-        source: Data source name
-
-    Returns:
-        Dict with plot configuration:
-            - x-label, y-label: Axis labels
-            - x-unit, y-unit: Physical units
-            - x-values: Optional fixed x-axis values
-            - Additional source-specific fields
-
-    Raises:
-        HTTPException(404): Device or source not found
-        HTTPException(500): Error reading plot spec
-
-    Notes:
-        - Not all sources provide plot specs (check device spec)
-        - Spec format varies by source type (line plot, 2D image, etc.)
-    """
-    logger.debug(
-        f"GET /api/v2/devices/{dev_id}/data/{source}/plot - fetching plot spec"
-    )
-
-    if dev_id not in manager.devices:
-        logger.warning(f"Device not found: {dev_id}")
-        raise HTTPException(404, f"Unknown device '{dev_id}'")
-
-    try:
-        return await manager.get_plot_spec(dev_id, source)
-    except KeyError as e:
-        logger.warning(f"Data source '{source}' not found on '{dev_id}'")
-        raise HTTPException(404, f"Unknown data source '{source}': {str(e)}")
-    except Exception as e:
-        logger.error(
-            f"Failed to get plot spec for '{dev_id}/{source}': {e}", exc_info=True
-        )
-        raise HTTPException(500, f"Error reading plot spec: {str(e)}")
-
-
-@app.get("/api/v2/devices/{dev_id}/data/{source}/frame")
-async def get_one_frame(dev_id: str, source: str) -> Dict[str, Any]:
-    """
-    Get a single data frame from a source.
-
-    Performs a one-shot read of the data source. For continuous streaming,
-    use the WebSocket endpoint instead.
-
-    Args:
-        dev_id: Device identifier
-        source: Data source name
-
-    Returns:
-        Dict with frame data (format varies by source):
-            - Common fields: timestamp, data
-            - Source-specific fields vary
-
-    Raises:
-        HTTPException(404): Device or source not found
-        HTTPException(500): Error acquiring frame
-
-    Notes:
-        - May trigger hardware acquisition (e.g., oscilloscope capture)
-        - Use WebSocket streaming for high-rate continuous data
-        - Frame format defined by data source implementation
-    """
-    logger.debug(f"GET /api/v2/devices/{dev_id}/data/{source}/frame - fetching frame")
-
-    if dev_id not in manager.devices:
-        logger.warning(f"Device not found: {dev_id}")
-        raise HTTPException(404, f"Unknown device '{dev_id}'")
-
-    try:
-        return await manager.get_one_frame(dev_id, source)
-    except KeyError as e:
-        logger.warning(f"Data source '{source}' not found on '{dev_id}'")
-        raise HTTPException(404, f"Unknown data source '{source}': {str(e)}")
-    except Exception as e:
-        logger.error(
-            f"Failed to get frame from '{dev_id}/{source}': {e}", exc_info=True
-        )
-        raise HTTPException(500, f"Error acquiring frame: {str(e)}")
-
-
-@app.websocket("/api/v2/streams/{dev_id}/{source}")
-async def ws_stream(ws: WebSocket, dev_id: str, source: str):
-    """
-    WebSocket endpoint for streaming data from a device source.
-
-    Provides high-rate continuous data streaming from data sources like
-    oscilloscope traces, sensor readings, or camera frames.
-
-    Path Parameters:
-        dev_id: Device identifier
-        source: Data source name (from device's DATA_SOURCES)
+    Examples:
+        /api/v2/streams/picoscope/time_stream        → root device source
+        /api/v2/streams/red_pitaya/osc/scope_stream  → child device source
 
     Query Parameters:
-        rate: Optional acquisition/streaming rate in Hz (default: 12.5 Hz)
-
-    Message Format:
-        JSON frames with source-specific structure (e.g., {"data": [...], "timestamp": ...})
-
-    Notes:
-        - Automatically starts data source acquisition on connect
-        - Queue size limited to 64 frames (older frames dropped if not consumed)
-        - Connection closed with code 4404 if device/source not found
-        - Unsubscribes and stops streaming on disconnect
+        rate: Acquisition rate in Hz (default 12.5)
     """
     await ws.accept()
+
+    # Split last segment as source name
+    parts = [p for p in full_path.strip("/").split("/") if p]
+    if len(parts) < 2:
+        logger.warning(f"WS stream: invalid path '{full_path}' (need device/source)")
+        await ws.close(code=4404)
+        return
+
+    source = parts[-1]
+    device_path = "/".join(parts[:-1])
 
     qps = dict(ws.query_params)
     prod_hz = float(qps.get("rate", 12.5))
     prod_interval = (1.0 / prod_hz) if prod_hz > 0 else 0.08
 
-    logger.debug(
-        f"WS /api/v2/streams/{dev_id}/{source} - client connected (rate={prod_hz}Hz)"
-    )
+    logger.debug(f"WS /api/v2/streams/{full_path} - client connected (rate={prod_hz}Hz)")
 
-    # Check device exists
-    if dev_id not in manager.devices:
-        logger.warning(f"WS stream: device not found: {dev_id}")
+    # Resolve device
+    try:
+        dev = _resolve(device_path)
+    except KeyError:
+        logger.warning(f"WS stream: device not found at '{device_path}'")
         await ws.close(code=4404)
         return
 
     # Subscribe to data source
     try:
-        q = await manager.subscribe_stream(dev_id, source, maxsize=64)
-    except KeyError as e:
-        logger.warning(f"WS stream: data source '{source}' not found on '{dev_id}'")
+        ds = dev.get_datasource(source)
+        q = await ds.subscribe(maxsize=64)
+    except KeyError:
+        logger.warning(f"WS stream: source '{source}' not found on '{device_path}'")
         await ws.close(code=4404)
         return
     except Exception as e:
-        logger.error(
-            f"WS stream: failed to subscribe to '{dev_id}/{source}': {e}",
-            exc_info=True,
-        )
+        logger.error(f"WS stream: subscribe failed for '{full_path}': {e}", exc_info=True)
         await ws.close(code=1011)
         return
 
-    # Start data acquisition
+    # Start acquisition
     try:
-        await manager.start_stream(dev_id, source, interval=prod_interval)
-        logger.debug(f"WS stream: started acquisition for '{dev_id}/{source}'")
+        await ds.start(interval=prod_interval)
     except Exception as e:
-        logger.error(
-            f"WS stream: failed to start '{dev_id}/{source}': {e}", exc_info=True
-        )
+        logger.error(f"WS stream: start failed for '{full_path}': {e}", exc_info=True)
         await ws.close(code=1011)
         return
 
-    # Stream frames to client
+    # Stream frames
+    frame_count = 0
     try:
-        frame_count = 0
         while True:
             frame = await q.get()
             await ws.send_json(frame)
             frame_count += 1
-
     except WebSocketDisconnect:
-        logger.debug(
-            f"WS stream: client disconnected from '{dev_id}/{source}' ({frame_count} frames sent)"
-        )
+        logger.debug(f"WS stream: client disconnected from '{full_path}' ({frame_count} frames)")
     except Exception as e:
-        logger.error(
-            f"WS stream: error streaming '{dev_id}/{source}': {e}", exc_info=True
-        )
+        logger.error(f"WS stream: error on '{full_path}': {e}", exc_info=True)
     finally:
-        # Clean up subscription
         try:
-            dev = manager.devices.get(dev_id)
-            if dev:
-                await dev.get_datasource(source).unsubscribe(q)
-                logger.debug(f"WS stream: unsubscribed from '{dev_id}/{source}'")
+            await ds.unsubscribe(q)
         except Exception as e:
-            logger.warning(f"WS stream: cleanup failed for '{dev_id}/{source}': {e}")
+            logger.warning(f"WS stream: cleanup failed for '{full_path}': {e}")
 
 
 # @app.websocket("/api/v2/streams/{dev_id}")

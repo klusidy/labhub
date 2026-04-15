@@ -10,7 +10,7 @@ import numpy as np
 from collections import deque
 from scipy.signal import get_window, detrend as sp_detrend
 
-from ..base import Device, api_device, api_command, api_property, api_data, Frame
+from ..base import Device, ChildDevice, api_device, api_command, api_property, api_data, Frame
 from ..data_source import DataSource
 
 if TYPE_CHECKING:
@@ -48,6 +48,83 @@ RANGE_VALUES = {
     "50V": 50.0,
     "MAX_RANGE": 50.0,
 }
+
+
+RANGE_CHOICES = [
+    "10MV", "20MV", "50MV", "100MV", "200MV", "500MV",
+    "1V", "2V", "5V", "10V", "20V", "50V",
+]
+
+
+@api_device()
+class pico_channel(ChildDevice):
+    """One input channel of a PicoScope 5000a.
+
+    Class-level attribute ``_hw_index`` (0=A, 1=B, 2=C, 3=D) is overridden
+    by ``as_child()`` so that each instance maps to the correct hardware slot.
+    """
+
+    _hw_index: int = 0
+
+    async def connect(self) -> bool:
+        ch_letter = chr(ord("A") + self._hw_index)
+        channels_cfg = self._parent.options.get("channels", [])
+        cfg = next((c for c in channels_cfg if c.get("id") == ch_letter), {})
+
+        self._enable: bool = cfg.get("enable", self._hw_index == 0)
+        self._coupling: str = cfg.get("coupling", "DC")
+        self._range: str = cfg.get("range", "1V")
+        self._multiplier: float = RANGE_VALUES[self._range] / 2**15
+
+        def _apply():
+            self._apply_to_hardware()
+            return True
+
+        return await self._on_device(_apply)
+
+    def _apply_to_hardware(self) -> None:
+        """Call the SDK SetChannel. Must run inside the device executor thread."""
+        ch_letter = chr(ord("A") + self._hw_index)
+        _channel = ps.PS5000A_CHANNEL[f"PS5000A_CHANNEL_{ch_letter}"]
+        _enable = 1 if self._enable else 0
+        _coupling = ps.PS5000A_COUPLING[f"PS5000A_{self._coupling}"]
+        _range = ps.PS5000A_RANGE[f"PS5000A_{self._range}"]
+
+        self._parent.status[f"setCh{ch_letter}"] = ps.ps5000aSetChannel(
+            self._parent.chandle, _channel, _enable, _coupling, _range, 0
+        )
+        assert_pico_ok(self._parent.status[f"setCh{ch_letter}"])
+        self._multiplier = RANGE_VALUES[self._range] / 2**15
+        self._parent._pico_raw_source._needs_restart = True
+
+    # --- properties ---
+
+    @api_property(doc="Enable this channel")
+    def enable(self) -> bool:
+        return self._enable
+
+    @enable.setter
+    def enable(self, value: bool) -> None:
+        self._enable = value
+        self._apply_to_hardware()
+
+    @api_property(choices=["AC", "DC"], doc="Input coupling mode")
+    def coupling(self) -> str:
+        return self._coupling
+
+    @coupling.setter
+    def coupling(self, value: str) -> None:
+        self._coupling = value
+        self._apply_to_hardware()
+
+    @api_property(choices=RANGE_CHOICES, doc="Voltage range")
+    def range(self) -> str:
+        return self._range
+
+    @range.setter
+    def range(self, value: str) -> None:
+        self._range = value
+        self._apply_to_hardware()
 
 
 class PicoRawSource(DataSource):
@@ -96,7 +173,8 @@ class PicoRawSource(DataSource):
         # prepare buffers for active channels
         channels_active = []
         for ch in ("A", "B", "C", "D"):
-            if getattr(self.driver, f"channel_{ch}", {}).get("enable", 0):
+            child = self.driver.children.get(f"ch_{ch.lower()}")
+            if child and child._enable:
                 channels_active.append(ch)
 
         if not channels_active:
@@ -218,6 +296,7 @@ class ps5000a(Device):
 
     config_template = {
         "resolution": 12,
+        # Channel defaults — applied at connect time via pico_channel.connect()
         "channels": [
             {"id": "A", "coupling": "DC", "range": "1V", "enable": True},
             {"id": "B", "coupling": "DC", "range": "1V", "enable": False},
@@ -234,6 +313,12 @@ class ps5000a(Device):
         },
         "polling_interval": 1000,
     }
+
+    # Child channel devices — auto-instantiated after connect()
+    ch_a = pico_channel.as_child(_hw_index=0)
+    ch_b = pico_channel.as_child(_hw_index=1)
+    ch_c = pico_channel.as_child(_hw_index=2)
+    ch_d = pico_channel.as_child(_hw_index=3)
 
     def __init__(
         self,
@@ -329,18 +414,10 @@ class ps5000a(Device):
         res = await self._on_device(
             sync_connect
         )  # TODO - keep track of single thread like kinesis?
-        # TODO - sync_connect mechanism is in base, but what to do with the channel defaults?
-        # TODO - NO CHANNEL DEFAULTS IN CONFIG.YAML!!!
         if not res:
             return False
-
-        for channel_defaults in self.options.get("channels", []):
-            if "id" not in channel_defaults:
-                raise ValueError("channel config must include 'id' (A, B, C, or D)")
-            _coupling = channel_defaults.get("coupling", "DC")
-            _range = channel_defaults.get("range", "1V")
-            _enable = channel_defaults.get("enable", True)
-            await self.set_channel(channel_defaults["id"], _enable, _coupling, _range)
+        # Channel initialization is handled by pico_channel.connect()
+        # which runs automatically via _init_children() after this returns.
         return True
 
     async def disconnect(self) -> None:
@@ -568,106 +645,6 @@ class ps5000a(Device):
         self._rotation_inputs = value
         return value
 
-    @api_command()
-    async def set_channel(
-        self,
-        channel: Literal["A", "B", "C", "D"],
-        enable: bool,
-        coupling_type: Literal["AC", "DC"],
-        range: Literal[
-            "10MV",
-            "20MV",
-            "50MV",
-            "100MV",
-            "200MV",
-            "500MV",
-            "1V",
-            "2V",
-            "5V",
-            "10V",
-            "20V",
-            "50V",
-            "MAX_RANGES",
-        ],
-    ) -> dict:
-
-        _channel = ps.PS5000A_CHANNEL[f"PS5000A_CHANNEL_{channel}"]
-        _enable = 1 if enable else 0
-        _coupling_type = ps.PS5000A_COUPLING[f"PS5000A_{coupling_type}"]
-        _range = ps.PS5000A_RANGE[f"PS5000A_{range}"]
-        multiplier = (
-            RANGE_VALUES[range] / 2**15
-        )  # at least I think its always 16bits...
-
-        self.status[f"setCh{channel}"] = ps.ps5000aSetChannel(
-            self.chandle, _channel, _enable, _coupling_type, _range, 0
-        )
-        assert_pico_ok(self.status[f"setCh{channel}"])
-
-        ret = {
-            "status": self.status[f"setCh{channel}"],
-            "channel": _channel,
-            "enable": _enable,
-            "coupling_type": _coupling_type,
-            "range": _range,
-            "multiplier": multiplier,
-            "range_str": range,
-            "coupling_type_str": coupling_type,
-        }
-        setattr(self, f"channel_{channel}", ret)
-
-        # Signal data source to restart with new channel configuration
-        self._pico_raw_source._needs_restart = True
-
-        return ret
-
-    # Add channels settings to state to support the display in the UI
-    async def read_state(self) -> Dict[str, Any]:  # override
-        state = await super().read_state()
-        state["_channel_settings"] = {
-            ch: getattr(self, f"channel_{ch}", {}) for ch in ("A", "B", "C", "D")
-        }
-        state["_trigger_settings"] = (
-            self._trigger
-        )  # dict of last values for set_simple_trigger
-        return state
-
-    async def _post_apply_properties(self, properties: dict) -> None:
-        """Restore channel and trigger settings from profile."""
-        # Restore channel settings if present in profile
-        if "_channel_settings" in properties:
-            channel_settings = properties["_channel_settings"]
-            for ch, settings in channel_settings.items():
-                if settings:  # Only restore if channel was configured
-                    try:
-                        await self.set_channel(
-                            channel=ch,
-                            enable=bool(settings.get("enable", 0)),
-                            coupling_type=settings.get("coupling_type_str", "DC"),
-                            range=settings.get("range_str", "1V"),
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            f"{self.id}: Failed to restore channel {ch} settings: {e}"
-                        )
-
-        # Restore trigger settings if present in profile
-        if "_trigger_settings" in properties:
-            trigger = properties["_trigger_settings"]
-            if trigger:  # Only restore if trigger was configured
-                try:
-                    await self.set_simple_trigger(
-                        enable=bool(trigger.get("enable", 0)),
-                        source=trigger.get("source_str", "A"),
-                        threshold_mV=trigger.get("threshold_mV", 0.0),
-                        direction=trigger.get("direction_str", "RISING"),
-                        delay=trigger.get("delay", 0),
-                        auto_trigger_ms=trigger.get("auto_trigger_ms", 1000),
-                    )
-                except Exception as e:
-                    logger.warning(
-                        f"{self.id}: Failed to restore trigger settings: {e}"
-                    )
 
     @api_command()
     async def set_simple_trigger(
@@ -688,8 +665,11 @@ class ps5000a(Device):
             self.chandle, ctypes.byref(maxADC)
         )
 
-        _channel_range = getattr(self, f"channel_{source}", {}).get(
-            "range", ps.PS5000A_RANGE["PS5000A_1V"]
+        _src_ch = self.children.get(f"ch_{source.lower()}")
+        _channel_range = (
+            ps.PS5000A_RANGE[f"PS5000A_{_src_ch._range}"]
+            if _src_ch
+            else ps.PS5000A_RANGE["PS5000A_1V"]
         )
         _threshold = int(mV2adc(threshold_mV, _channel_range, maxADC))
         _direction = ps.PS5000A_THRESHOLD_DIRECTION[f"PS5000A_{direction}"]
@@ -749,7 +729,8 @@ class ps5000a(Device):
         channels_active = [
             ch
             for ch in ("A", "B", "C", "D")
-            if getattr(self, f"channel_{ch}", {}).get("enable", 0)
+            if self.children.get(f"ch_{ch.lower()}", None)
+            and self.children[f"ch_{ch.lower()}"]._enable
         ]
         if not channels_active:
             return {"ok": False, "error": "No channels enabled"}
@@ -904,7 +885,13 @@ class ps5000a(Device):
                 np.arange(total_samples) * self._time_interval_ns * 1e-3
             ).tolist(),
             "channel_settings": {
-                ch: getattr(self, f"channel_{ch}", {}) for ch in ("A", "B", "C", "D")
+                ch: {
+                    "multiplier": self.children[f"ch_{ch.lower()}"]._multiplier,
+                    "range_str": self.children[f"ch_{ch.lower()}"]._range,
+                    "coupling_type_str": self.children[f"ch_{ch.lower()}"]._coupling,
+                }
+                for ch in ("A", "B", "C", "D")
+                if f"ch_{ch.lower()}" in self.children
             },
         }
 

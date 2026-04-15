@@ -1,11 +1,15 @@
 devices:
 - id: example_device_01
   driver: example.example_device
-# influx:
-#   enabled: true
-#   url: http://localhost:8086
-#   token: your-token
-#   org: your-org
-#   bucket: your-bucket
-#   exe_path: C:/Program Files/InfluxData/influxd.exe
-#   snapshot_interval: 10.0
+- id: cham1
+  driver: red_pitaya.chameleon_mvp
+  hostname: 169.254.10.10
+  username: root
+  password: root
+  server_port: 2222
+  fpga_filename: chameleon_latest.bit
+  fpga_dir_src: null
+  server_dir_src: null
+  overwrite_server: false
+  polling_interval: 2000
+  should_connect: true

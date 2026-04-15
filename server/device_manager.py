@@ -237,20 +237,30 @@ class DeviceManager:
             logger.warning(f"Cannot start polling: device '{dev_id}' not found")
             return
 
+        async def poll_tree(dev: Device) -> None:
+            """Recursively poll a device and all its children."""
+            for k in dev._api_properties:
+                try:
+                    await dev.poll_property(k)
+                except Exception:
+                    pass  # poll_property already logs + updates status
+            for child in dev.children.values():
+                await poll_tree(child)
+
         async def polling_task(dev_id: str, dev: Device) -> None:
-            """Inner polling loop for a single device."""
-            keys = list(getattr(dev, "_api_properties", {}).keys())
+            """Inner polling loop for a single root device (and its subtree)."""
             logger.debug(
-                f"Polling task started for '{dev_id}' ({len(keys)} properties, interval={dev.polling_interval}ms)"
+                f"Polling task started for '{dev_id}' "
+                f"({len(dev._api_properties)} own properties, "
+                f"{len(dev.children)} direct children, interval={dev.polling_interval}ms)"
             )
 
             try:
                 while not self._stop_evt.is_set():
-                    # Poll all properties to update cache
-                    for k in keys:
-                        _ = await dev.poll_property(k)
+                    # Poll entire device tree (device + all children recursively)
+                    await poll_tree(dev)
 
-                    # Read cached state and broadcast
+                    # Read nested state and broadcast
                     st = await dev.read_state()
                     await self.event_bus.publish(
                         {"type": "device.state", "id": dev_id, "state": st}

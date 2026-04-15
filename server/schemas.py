@@ -77,3 +77,6 @@ class DeviceSpec(BaseModel):
     properties: List[PropertySpec]
     commands: List[CommandSpec]
     data_sources: List[DataSourceSpec]
+    children: Dict[str, 'DeviceSpec'] = Field(default_factory=dict)  # child device specs (recursive)
+
+DeviceSpec.model_rebuild()  # resolve forward reference

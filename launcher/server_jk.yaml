@@ -12,7 +12,7 @@ scripting:
   python: null
   startup_folder: null
 influx:
-  enabled: true
+  enabled: false
   url: http://localhost:8086
   token: wdB3AJlWGTtC04rig5KwT7CRAovJvttWCaT0sYlJTnZ-9JB0Yxa0EDl6d8JJOFd80DeTEz96wIvXAQE62GzxTw==
   org: jk
