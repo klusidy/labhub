@@ -42,7 +42,7 @@ def get_profile_monitor():
 
 
 @router.post("/reload")
-async def reload_all(manager=Depends(get_manager)):
+async def reload_all(manager=Depends(get_manager), monitor=Depends(get_profile_monitor)):
     """
     Reload all devices from config.yaml without restarting the process.
 
@@ -52,6 +52,7 @@ async def reload_all(manager=Depends(get_manager)):
     3. Reloads config.yaml
     4. Reconnects all devices
     5. Restarts polling
+    6. Restores write-policy properties from profile
 
     Returns:
         Dict with:
@@ -77,6 +78,15 @@ async def reload_all(manager=Depends(get_manager)):
         await manager.initialize_devices(cfg)
 
         await manager.start_polling()
+
+        # Restore write-policy properties from profile
+        if monitor:
+            for dev_id in list(manager.devices.keys()):
+                try:
+                    await monitor.apply_profile_to_device(dev_id)
+                except Exception as e:
+                    logger.warning(f"Failed to apply profile to '{dev_id}': {e}")
+
         logger.info("Reload complete")
 
         devices = [d.model_dump() for d in await manager.list_devices()]
@@ -88,7 +98,7 @@ async def reload_all(manager=Depends(get_manager)):
 
 
 @router.post("/reload/{dev_id}")
-async def reload_device(dev_id: str, manager=Depends(get_manager)):
+async def reload_device(dev_id: str, manager=Depends(get_manager), monitor=Depends(get_profile_monitor)):
     """
     Reload a single device from config.yaml.
 
@@ -138,6 +148,13 @@ async def reload_device(dev_id: str, manager=Depends(get_manager)):
         if not device_found:
             logger.warning(f"Device '{dev_id}' not found in config")
             raise HTTPException(404, f"Device '{dev_id}' not found in config")
+
+        # Restore write-policy properties from profile
+        if monitor:
+            try:
+                await monitor.apply_profile_to_device(dev_id)
+            except Exception as e:
+                logger.warning(f"Failed to apply profile to '{dev_id}': {e}")
 
         devices = [d.model_dump() for d in await manager.list_devices()]
         return {"ok": True, "devices": devices}
@@ -950,7 +967,7 @@ async def list_drivers():
 
 
 @router.post("/soft-reload")
-async def soft_reload(manager=Depends(get_manager)):
+async def soft_reload(manager=Depends(get_manager), monitor=Depends(get_profile_monitor)):
     """
     Intelligently reload devices based on config changes.
 
@@ -1041,6 +1058,14 @@ async def soft_reload(manager=Depends(get_manager)):
                         logger.error(f"Failed to restart device '{dev_id}': {e}")
                 else:
                     unchanged.append(dev_id)
+
+        # Restore write-policy properties for added/restarted devices
+        if monitor:
+            for dev_id in added + restarted:
+                try:
+                    await monitor.apply_profile_to_device(dev_id)
+                except Exception as e:
+                    logger.warning(f"Failed to apply profile to '{dev_id}': {e}")
 
         logger.info(
             f"Soft-reload complete: added={len(added)}, removed={len(removed)}, "
