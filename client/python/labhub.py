@@ -298,7 +298,13 @@ class DeviceProxy:
                 cname, cdoc, args_spec, returns = c, "", {}, None
 
             def _make(cname=cname, args_spec=args_spec, cdoc=cdoc, returns=returns):
-                def _cmd(**kwargs):
+                def _cmd(*args, **kwargs):
+                    # Map positional args to keyword args by position
+                    for i, val in enumerate(args):
+                        if i < len(args_spec):
+                            kw_name = args_spec[i].get("name")
+                            if kw_name:
+                                kwargs[kw_name] = val
                     timeout = kwargs.pop("_timeout", None)
                     for aspec in args_spec:
                         name = aspec.get("name")
@@ -330,12 +336,19 @@ class DeviceProxy:
             data_map[ds["name"]] = dsp
         self.__dict__["_data_sources"] = data_map
 
+        # Build child device proxies
+        for child_id, child_spec in (spec.get("children") or {}).items():
+            child_path = f"{dev_id}/{child_id}"
+            child_proxy = DeviceProxy(hub, child_path, child_spec)
+            self.__dict__[child_id] = child_proxy
+
         self.__doc__ = self._build_doc()
 
     def _build_doc(self) -> str:
-        kind = self._spec.get("kind", "?")
-        status = self._hub._devices.get(self._id, {}).get("status", "?")
-        lines = [f"{self._id}  [{kind}]  status: {status}"]
+        driver = self._spec.get("driver", "?")
+        root_id = self._id.split("/")[0]
+        status = self._hub._devices.get(root_id, {}).get("status", "?")
+        lines = [f"{self._id}  [{driver}]  status: {status}"]
         if self._spec.get("doc"):
             lines.append(self._spec["doc"])
 
@@ -343,9 +356,13 @@ class DeviceProxy:
         if self._spec.get("properties"):
             lines.append("")
             lines.append("Properties:")
-            state = self._hub._ensure_state(self._id)
+            try:
+                st = self._hub._ensure_state(self._id)
+                state_dict = st.get("state", {}) or {}
+            except Exception:
+                state_dict = {}
             for p in self._spec.get("properties", []):
-                current = state["state"].get(p["name"])
+                current = state_dict.get(p["name"])
                 lines.append(_fmt_param_line(p, current))
 
         # commands
@@ -365,6 +382,15 @@ class DeviceProxy:
                 plot_hint = "  (has plot)" if ds._spec.get("has_plot") else ""
                 doc = (ds._spec.get("doc") or "").strip()
                 lines.append(f"  .{name}{plot_hint}" + (f"  # {doc}" if doc else ""))
+
+        # child devices
+        children = self._spec.get("children") or {}
+        if children:
+            lines.append("")
+            lines.append("Child devices:")
+            for child_id, child_spec in children.items():
+                child_doc = (child_spec.get("doc") or "").strip()
+                lines.append(f"  .{child_id}" + (f"  # {child_doc}" if child_doc else ""))
 
         # usage hints
         lines.append("")
@@ -999,7 +1025,7 @@ class Hub:
 
     def _get_param(self, dev_id: str, name: str):
         st = self._ensure_state(dev_id)
-        return st["state"].get(name)
+        return (st.get("state") or {}).get(name)
 
     def _patch(self, path: str, json: Dict[str, Any]):
         return self._http.patch(path, json=json)
