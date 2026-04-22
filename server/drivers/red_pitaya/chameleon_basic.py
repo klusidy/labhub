@@ -1,5 +1,5 @@
 """
-Chameleon MVP — STEMlab 125-14 FPGA driver for labhub.
+Chameleon Basic — STEMlab 125-14 FPGA driver for labhub.
 
 Manages the full board lifecycle:
   1. SSH → upload server binary + bitfile
@@ -9,31 +9,37 @@ Manages the full board lifecycle:
 
 Device hierarchy::
 
-    chameleon_mvp           ← root Device (handles connection)
-    ├── router              ← 16×16 AXI-Stream crossbar
-    ├── adc_input           ← ADC input + equalization filter
-    ├── asg                 ← Arbitrary Signal Generator
-    ├── dac_out             ← Analog output enable
-    ├── scope               ← 4-channel oscilloscope (16 k samples)
-    └── sum_block           ← Weighted sum/diff of two signals
+    chameleon_basic          ← root Device (handles connection)
+    ├── router               ← 16×16 AXI-Stream crossbar
+    ├── adc_input            ← ADC input + equalization filter
+    ├── asg                  ← Arbitrary Signal Generator 0
+    ├── asg_1                ← Arbitrary Signal Generator 1
+    ├── asg_2                ← Arbitrary Signal Generator 2
+    ├── dac_out              ← Analog output enable
+    ├── scope                ← 4-channel oscilloscope (16 k samples)
+    └── sum_block            ← Weighted sum/diff of two signals
 
 Configuration (config.yaml)::
 
     - id: chameleon_01
-      driver: red_pitaya.chameleon_mvp
-      hostname: 169.254.2.8
-      fpga_dir_src: C:/path/to/fpga_bitfiles   # optional, defaults to chameleon2/fpga_bitfiles
-      server_dir_src: null                       # optional, defaults to chameleon2/server
+      driver: red_pitaya.chameleon_basic
+      hostname: 169.254.10.10
+      fpga_dir_src: C:/path/to/fpga_bitfiles   # optional
+      server_dir_src: null                      # optional
       overwrite_server: false
       should_connect: true
 
 Source/destination index constants (for router sel_* properties)::
 
     Sources (what to put in sel_*):
-        0 = ADC A,  1 = ADC B,  2 = ASG,  3 = SUM,  4 = DIFF
+        00 ADC_A   01 ADC_B   02 ZERO
+        03 ASG_0   04 ASG_1   05 ASG_2
+        08 SUM     09 DIFF
 
-    Destinations correspond to properties:
-        sel_dac_a, sel_dac_b, sel_scope_a/b/c/d, sel_sum_a/b
+    Destinations (which sel_* property to use):
+        00 DAC_A   01 DAC_B
+        02 SCOPE_A  03 SCOPE_B  04 SCOPE_C  05 SCOPE_D
+        08 SUM_A   09 SUM_B
 """
 
 from __future__ import annotations
@@ -59,9 +65,9 @@ logger = logging.getLogger(__name__)
 
 
 @api_device()
-class chameleon_mvp(Device):
+class chameleon_basic(Device):
     """
-    Chameleon FPGA board on a STEMlab 125-14.
+    Chameleon Basic FPGA board on a STEMlab 125-14.
 
     Connects via SSH, programs the FPGA, starts the register-access server,
     and exposes all discovered modules as child devices.
@@ -72,9 +78,9 @@ class chameleon_mvp(Device):
         "username": "root",
         "password": "root",
         "server_port": 2222,
-        "fpga_filename": "chameleon_latest.bit",
-        "fpga_dir_src": None,  # local directory containing the bitfile
-        "server_dir_src": None,  # local directory containing the server binary
+        "fpga_filename": "chameleon_basic_latest.bit",
+        "fpga_dir_src": None,
+        "server_dir_src": None,
         "overwrite_server": False,
         "polling_interval": 2000,
     }
@@ -87,19 +93,14 @@ class chameleon_mvp(Device):
     ):
         super().__init__(dev_id, options, manager)
         self._chameleon_manager = None
-        self._dev = None  # ChameleonDevice instance after connect
+        self._dev = None
 
     # -----------------------------------------------------------------------
     # Lifecycle
     # -----------------------------------------------------------------------
 
     def connect(self) -> bool:
-        """SSH into board, program FPGA, start server, discover modules.
-
-        Runs in a thread (blocking) — may take 10–30 seconds on first call
-        due to FPGA programming.
-        """
-        # Import here to keep the import optional at module level
+        """SSH into board, program FPGA, start server, discover modules."""
         from chameleon.manager import ChameleonManager
 
         try:
@@ -109,7 +110,7 @@ class chameleon_mvp(Device):
                 username=opt.get("username", "root"),
                 password=opt.get("password", "root"),
                 server_port=opt.get("server_port", 2222),
-                fpga_filename=opt.get("fpga_filename", "chameleon_latest.bit"),
+                fpga_filename=opt.get("fpga_filename", "chameleon_basic_latest.bit"),
                 overwrite_server=opt.get("overwrite_server", False),
             )
             if opt.get("fpga_dir_src"):
@@ -123,7 +124,7 @@ class chameleon_mvp(Device):
                 "%s: connected to %s — %d module(s) discovered",
                 self.id,
                 mgr_kwargs["hostname"],
-                len(self._dev.modules),
+                self._dev.fingerprint.n_modules,
             )
             return True
         except Exception as exc:
@@ -153,7 +154,7 @@ class chameleon_mvp(Device):
 
     @api_property(doc="Number of FPGA modules discovered via fingerprint ROM")
     def n_modules(self) -> int:
-        return len(self._dev.modules) if self._dev else 0
+        return self._dev.fingerprint.n_modules if self._dev else 0
 
     # -----------------------------------------------------------------------
     # Children
@@ -165,18 +166,37 @@ class chameleon_mvp(Device):
 
         Available sources (choose in sel_* properties):
             ADC_A, ADC_B   — analog inputs after the equalization filter
-            ASG            — arbitrary signal generator (digital, pre-DAC)
+            ZERO           — constant zero stream (use to silence a destination)
+            ASG_0          — arbitrary signal generator 0 output
+            ASG_1          — arbitrary signal generator 1 output
+            ASG_2          — arbitrary signal generator 2 output
             SUM            — sum_block weighted sum output
             DIFF           — sum_block weighted difference output
         """
 
         # Human-readable source names; index = hardware slot number.
         _SRC_NAMES: List[str] = [
-            "ADC_A", "ADC_B", "ASG", "SUM", "DIFF",
-            "src5", "src6", "src7", "src8", "src9",
+            "ADC_A",   # 0
+            "ADC_B",   # 1
+            "ZERO",    # 2
+            "ASG_0",   # 3
+            "ASG_1",   # 4  reserved
+            "ASG_2",   # 5  reserved
+            "src06",   # 6
+            "src07",   # 7
+            "SUM",     # 8
+            "DIFF",    # 9
             "src10", "src11", "src12", "src13", "src14", "src15",
         ]
-        _SRC_CHOICES = _SRC_NAMES  # alias for decorator
+        _SRC_CHOICES = _SRC_NAMES
+
+        _DST_NAMES: List[str] = [
+            "DAC_A", "DAC_B",
+            "SCOPE_A", "SCOPE_B", "SCOPE_C", "SCOPE_D",
+            "dst06", "dst07",
+            "SUM_A", "SUM_B",
+            "dst10", "dst11", "dst12", "dst13", "dst14", "dst15",
+        ]
 
         def connect(self) -> bool:
             from chameleon.modules.router import Router as _Router
@@ -275,16 +295,11 @@ class chameleon_mvp(Device):
             self._hw.sel[_R.DST_SUM_B] = self._src_to_idx(v)
 
         @api_command(
-            doc="Read all 16 routing slots. Returns list where index=destination, value=source name."
+            doc="Read all 16 routing slots. Returns dict of destination→source name."
         )
         def read_routing(self) -> Dict[str, str]:
             raw = self._hw.sel.read_all()
-            dst_names = [
-                "DAC_A", "DAC_B", "SCOPE_A", "SCOPE_B", "SCOPE_C", "SCOPE_D",
-                "SUM_A", "SUM_B", "dst8", "dst9", "dst10", "dst11",
-                "dst12", "dst13", "dst14", "dst15",
-            ]
-            return {dst_names[i]: self._idx_to_src(raw[i]) for i in range(16)}
+            return {self._DST_NAMES[i]: self._idx_to_src(raw[i]) for i in range(16)}
 
         @api_command(
             doc="Restore default routing: ADC A/B → DAC A/B, Scope A-D, SumBlock A/B"
@@ -311,9 +326,7 @@ class chameleon_mvp(Device):
         def sample_b(self) -> int:
             return int(self._hw.sample_b)
 
-        @api_property(
-            doc="Bypass equalization filter on channel A (True = bypass, default)"
-        )
+        @api_property(doc="Bypass equalization filter on channel A (True = bypass, default)")
         def bypass_a(self) -> bool:
             return self._hw.bypass_a
 
@@ -321,9 +334,7 @@ class chameleon_mvp(Device):
         def bypass_a(self, v: bool) -> None:
             self._hw.bypass_a = v
 
-        @api_property(
-            doc="Bypass equalization filter on channel B (True = bypass, default)"
-        )
+        @api_property(doc="Bypass equalization filter on channel B (True = bypass, default)")
         def bypass_b(self) -> bool:
             return self._hw.bypass_b
 
@@ -335,16 +346,15 @@ class chameleon_mvp(Device):
 
     @api_device()
     class asg(ChildDevice):
-        """Arbitrary Signal Generator — configurable waveform on the DAC path."""
+        """Arbitrary Signal Generator 0 — configurable waveform on the DAC path."""
 
-        # Class-level defaults (overwritten in connect)
+        _DEV_ATTR: str = "asg_0"
         _frequency_hz: float = 1000.0
         _amplitude: float = 0.5
         _waveform: str = "off"
 
         def connect(self) -> bool:
-            self._hw = self._parent._dev.asg
-            # Instance variables — safe to set here, connect() is called once
+            self._hw = getattr(self._parent._dev, self._DEV_ATTR)
             self._frequency_hz = 1000.0
             self._amplitude = 0.5
             self._waveform = "off"
@@ -363,9 +373,7 @@ class chameleon_mvp(Device):
             if self._waveform not in ("off", "dc"):
                 self._apply_waveform()
 
-        @api_property(
-            min=0.0, max=1.0, doc="Output amplitude as fraction of full scale (0–1)"
-        )
+        @api_property(min=0.0, max=1.0, doc="Output amplitude as fraction of full scale (0–1)")
         def amplitude(self) -> float:
             return self._amplitude
 
@@ -429,6 +437,18 @@ class chameleon_mvp(Device):
     # -----------------------------------------------------------------------
 
     @api_device()
+    class asg_1(asg):
+        """Arbitrary Signal Generator 1 — configurable waveform on the DAC path."""
+        _DEV_ATTR: str = "asg_1"
+
+    @api_device()
+    class asg_2(asg):
+        """Arbitrary Signal Generator 2 — configurable waveform on the DAC path."""
+        _DEV_ATTR: str = "asg_2"
+
+    # -----------------------------------------------------------------------
+
+    @api_device()
     class dac_out(ChildDevice):
         """DAC output — enable/disable the analog output stage."""
 
@@ -460,30 +480,21 @@ class chameleon_mvp(Device):
         """
 
         _TRIG_NAMES = [
-            "off",
-            "sw",
-            "ch0_rise",
-            "ch0_fall",
-            "ch1_rise",
-            "ch1_fall",
-            "ch2_rise",
-            "ch2_fall",
-            "ch3_rise",
-            "ch3_fall",
-            "ext_rise",
-            "ext_fall",
+            "off", "sw",
+            "ch0_rise", "ch0_fall",
+            "ch1_rise", "ch1_fall",
+            "ch2_rise", "ch2_fall",
+            "ch3_rise", "ch3_fall",
+            "ext_rise", "ext_fall",
         ]
 
         def connect(self) -> bool:
             from chameleon.modules.scope import Scope as _Scope
-
             self._hw: _Scope = self._parent._dev.scope
             self._Scope = _Scope
             return True
 
-        @api_property(
-            min=1, max=131071, doc="Decimation factor (1 = 125 MSa/s full rate)"
-        )
+        @api_property(min=1, max=131071, doc="Decimation factor (1 = 125 MSa/s full rate)")
         def decimation(self) -> int:
             return int(self._hw.decimation)
 
@@ -497,18 +508,12 @@ class chameleon_mvp(Device):
 
         @api_property(
             choices=[
-                "off",
-                "sw",
-                "ch0_rise",
-                "ch0_fall",
-                "ch1_rise",
-                "ch1_fall",
-                "ch2_rise",
-                "ch2_fall",
-                "ch3_rise",
-                "ch3_fall",
-                "ext_rise",
-                "ext_fall",
+                "off", "sw",
+                "ch0_rise", "ch0_fall",
+                "ch1_rise", "ch1_fall",
+                "ch2_rise", "ch2_fall",
+                "ch3_rise", "ch3_fall",
+                "ext_rise", "ext_fall",
             ],
             doc="Trigger source",
         )
@@ -525,9 +530,7 @@ class chameleon_mvp(Device):
             except ValueError:
                 self._hw.trig_source = 0
 
-        @api_property(
-            min=-32768, max=32767, doc="Trigger threshold (16-bit signed ADC counts)"
-        )
+        @api_property(min=-32768, max=32767, doc="Trigger threshold (16-bit signed ADC counts)")
         def trig_level(self) -> int:
             return int(self._hw.trig_level)
 
@@ -535,9 +538,7 @@ class chameleon_mvp(Device):
         def trig_level(self, v: int) -> None:
             self._hw.trig_level = int(v)
 
-        @api_property(
-            min=0, max=65535, doc="Trigger hysteresis band (ADC counts, unsigned)"
-        )
+        @api_property(min=0, max=65535, doc="Trigger hysteresis band (ADC counts, unsigned)")
         def trig_hyst(self) -> int:
             return int(self._hw.trig_hyst)
 
@@ -545,16 +546,13 @@ class chameleon_mvp(Device):
         def trig_hyst(self, v: int) -> None:
             self._hw.trig_hyst = int(v)
 
-        @api_property(
-            min=1, max=16383, doc="Number of pre-trigger samples (post = 16384 − pre)"
-        )
+        @api_property(min=1, max=16383, doc="Number of pre-trigger samples (post = 16384 − pre)")
         def pre_trig_len(self) -> int:
             return int(self._hw.pre_trig_len)
 
         @pre_trig_len.setter
         def pre_trig_len(self, v: int) -> None:
             from chameleon.modules.scope import BUF_DEPTH as _BD
-
             v = max(1, min(int(v), _BD - 1))
             self._hw.pre_trig_len = v
             self._hw.post_trig_len = _BD - v
@@ -567,8 +565,6 @@ class chameleon_mvp(Device):
             to defaults: trig_source=0/off, trig_level=0, trig_hyst=20).
             """
             hw = self._hw
-            # Read from Python cache (populated by polling).  Fall back to
-            # safe defaults so capture() always works on a freshly programmed board.
             ts_str = self._cache.get("trig_source", "sw")
             try:
                 ts_idx = self._TRIG_NAMES.index(ts_str)
@@ -584,7 +580,6 @@ class chameleon_mvp(Device):
                 "(keys: t, ch0–ch3, sample_rate_hz). timeout_s: max wait in seconds."
         )
         def capture(self, timeout_s: float = 5.0) -> Dict[str, Any]:
-            """Re-applies current trig settings then arms and waits for capture."""
             self._apply_trig_config()
             data = self._hw.capture(timeout=timeout_s)
             t, channels = self._Scope.unroll(data)
@@ -599,19 +594,7 @@ class chameleon_mvp(Device):
 
         @api_data(doc="Continuous 4-channel scope stream (repeating captures)")
         async def wave(self) -> AsyncIterator[Frame]:
-            """Repeatedly capture and stream scope data as time-ordered frames.
-
-            Recovery policy:
-            - Trigger timeout (trigger never fires): retries indefinitely,
-              re-applying trig config each time so fixing the setting in the
-              GUI immediately resumes the stream.
-            - Protocol/hardware errors (header mismatch, ACK mismatch,
-              unimplemented register type, etc.): up to MAX_PROTO_RETRIES
-              retries with trig config re-apply between attempts.
-            - Connection loss (OSError, NoneType.sendall, etc.): up to
-              MAX_RECONNECTS full parent reconnects before giving up.
-            All error counters reset on each successful capture.
-            """
+            """Repeatedly capture and stream scope data as time-ordered frames."""
             _MAX_PROTO_RETRIES = 5
             _MAX_RECONNECTS = 3
 
@@ -619,7 +602,6 @@ class chameleon_mvp(Device):
             reconnect_count = 0
             timeout_count = 0
 
-            # Apply trigger config once — ensures a fresh-programmed board can stream
             try:
                 await self._run_blocking_in_thread(self._apply_trig_config)
             except Exception as exc:
@@ -630,7 +612,6 @@ class chameleon_mvp(Device):
                     try:
                         data = await self._run_blocking_in_thread(self._hw.capture, 5.0)
                         t, channels = self._Scope.unroll(data)
-                        # Successful capture — reset all error counters
                         proto_errors = 0
                         reconnect_count = 0
                         timeout_count = 0
@@ -647,7 +628,6 @@ class chameleon_mvp(Device):
                         raise
 
                     except (AttributeError, OSError) as exc:
-                        # Connection-loss errors: NoneType.sendall, WinError 10038, etc.
                         reconnect_count += 1
                         logger.warning(
                             "%s.scope: connection lost in wave (reconnect %d/%d): %s",
@@ -663,29 +643,21 @@ class chameleon_mvp(Device):
                             await self._run_blocking_in_thread(self._parent.connect)
                             self._hw = self._parent._dev.scope
                             await self._run_blocking_in_thread(self._apply_trig_config)
-                            logger.info(
-                                "%s.scope: reconnected, resuming wave stream", self._parent.id
-                            )
+                            logger.info("%s.scope: reconnected, resuming wave stream", self._parent.id)
                             proto_errors = 0
                             timeout_count = 0
                         except Exception as reconnect_exc:
-                            logger.error(
-                                "%s.scope: reconnect failed: %s", self._parent.id, reconnect_exc
-                            )
+                            logger.error("%s.scope: reconnect failed: %s", self._parent.id, reconnect_exc)
 
                     except Exception as exc:
                         msg = str(exc).lower()
                         if "timed out" in msg or "timeout" in msg:
-                            # Trigger timeout — retry indefinitely; user may have set a
-                            # trigger condition that hasn't fired yet.  Re-applying trig
-                            # config picks up any setting changes made in the GUI.
                             timeout_count += 1
                             if timeout_count == 1 or timeout_count % 10 == 0:
                                 logger.warning(
                                     "%s.scope: capture timeout #%d (trig_source=%r) — "
                                     "retrying; change trig_source to 'sw' for free-running",
-                                    self._parent.id,
-                                    timeout_count,
+                                    self._parent.id, timeout_count,
                                     self._cache.get("trig_source", "?"),
                                 )
                             await asyncio.sleep(0.2)
@@ -694,8 +666,6 @@ class chameleon_mvp(Device):
                             except Exception:
                                 pass
                         else:
-                            # Protocol/hardware error: header mismatch, ACK mismatch,
-                            # unhandled register type, etc.
                             proto_errors += 1
                             logger.warning(
                                 "%s.scope: protocol/hardware error (%d/%d): %s",
@@ -718,7 +688,6 @@ class chameleon_mvp(Device):
         @wave.plot()
         def wave_plot(self) -> Dict[str, Any]:
             from chameleon.modules.scope import BUF_DEPTH as _BD, CLOCK_FREQ as _CLK
-
             dec = int(self._hw.decimation)
             pre = int(self._hw.pre_trig_len)
             dt_us = dec / _CLK * 1e6
@@ -748,9 +717,7 @@ class chameleon_mvp(Device):
             self._hw = self._parent._dev.sum_block
             return True
 
-        @api_property(
-            min=-2.0, max=1.9999, doc="Gain applied to input A (Q1.14, +1.0 = unity)"
-        )
+        @api_property(min=-2.0, max=1.9999, doc="Gain applied to input A (Q1.14, +1.0 = unity)")
         def gain_a(self) -> float:
             return self._hw.gain_a
 
@@ -758,9 +725,7 @@ class chameleon_mvp(Device):
         def gain_a(self, v: float) -> None:
             self._hw.gain_a = float(v)
 
-        @api_property(
-            min=-2.0, max=1.9999, doc="Gain applied to input B (Q1.14, +1.0 = unity)"
-        )
+        @api_property(min=-2.0, max=1.9999, doc="Gain applied to input B (Q1.14, +1.0 = unity)")
         def gain_b(self) -> float:
             return self._hw.gain_b
 
