@@ -5,7 +5,7 @@ export interface MacroArg {
   name: string;
   type: string;
   required: boolean;
-  default?: string;
+  default?: unknown;
 }
 
 export interface MacroFunction {

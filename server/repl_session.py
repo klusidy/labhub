@@ -30,12 +30,47 @@ class SessionInfo:
     is_temp_dir: bool = True  # Whether work_dir is a temp dir (should be cleaned up)
     output_buffer: List[Dict[str, str]] = field(default_factory=list)
     max_buffer_size: int = 1000
+    # Per-websocket subscriber queues (populated by background reader tasks)
+    _subscriber_queues: List[asyncio.Queue] = field(default_factory=list, init=False)
+    # Background reader tasks (one for stdout, one for stderr)
+    _reader_tasks: List["asyncio.Task[None]"] = field(default_factory=list, init=False)
 
     def add_output(self, stream: str, data: str):
-        """Add output to ring buffer"""
+        """Add output to ring buffer and fan out to all WebSocket subscribers."""
         self.output_buffer.append({"stream": stream, "data": data})
         if len(self.output_buffer) > self.max_buffer_size:
             self.output_buffer.pop(0)
+        for q in list(self._subscriber_queues):
+            try:
+                q.put_nowait({"stream": stream, "data": data})
+            except asyncio.QueueFull:
+                pass  # slow subscriber — drop rather than block
+
+    def subscribe(self, maxsize: int = 200) -> asyncio.Queue:
+        """Return a new queue that will receive all future output items."""
+        q: asyncio.Queue = asyncio.Queue(maxsize=maxsize)
+        self._subscriber_queues.append(q)
+        return q
+
+    def unsubscribe(self, q: asyncio.Queue) -> None:
+        """Remove a subscriber queue."""
+        try:
+            self._subscriber_queues.remove(q)
+        except ValueError:
+            pass
+
+    async def _read_stream_loop(self, stream, stream_name: str) -> None:
+        """Background task: read process stdout/stderr and fan out to subscribers."""
+        try:
+            while True:
+                line = await stream.readline()
+                if not line:
+                    break
+                self.add_output(stream_name, line.decode("utf-8", errors="replace"))
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"Error reading {stream_name} for session {self.session_id}: {e}")
 
 
 class ReplSessionManager:
@@ -147,6 +182,12 @@ class ReplSessionManager:
         self.sessions[session_id] = session
         self.client_sessions[client_id] = session_id
 
+        # Start persistent background readers — these outlive individual WS connections
+        session._reader_tasks = [
+            asyncio.create_task(session._read_stream_loop(process.stdout, "stdout")),
+            asyncio.create_task(session._read_stream_loop(process.stderr, "stderr")),
+        ]
+
         logger.info(f"Session {session_id} created successfully")
         return session
 
@@ -161,6 +202,12 @@ class ReplSessionManager:
         session = self.sessions.get(session_id)
         if not session:
             return
+
+        # Cancel background reader tasks
+        for task in session._reader_tasks:
+            task.cancel()
+        if session._reader_tasks:
+            await asyncio.gather(*session._reader_tasks, return_exceptions=True)
 
         # Terminate process if still running
         if session.process.returncode is None:

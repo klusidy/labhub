@@ -15,6 +15,9 @@ from dataclasses import dataclass, field
 
 logger = logging.getLogger("labhub.macros")
 
+# Resolved once at import time; macros.py lives at server/macros.py → parent is labhub root
+_LABHUB_ROOT = Path(__file__).resolve().parent.parent
+
 
 @dataclass
 class MacroFunction:
@@ -156,9 +159,13 @@ class MacroManager:
                 if arg_index >= 0:
                     func.args[arg_index]["required"] = False
                     try:
-                        func.args[arg_index]["default"] = ast.unparse(default)
+                        # Use literal_eval to get the actual Python value
+                        # (int, float, bool, str) rather than source-code string.
+                        func.args[arg_index]["default"] = ast.literal_eval(
+                            ast.unparse(default)
+                        )
                     except Exception:
-                        func.args[arg_index]["default"] = "..."
+                        func.args[arg_index]["default"] = ast.unparse(default)
 
         return func
 
@@ -243,7 +250,15 @@ class MacroManager:
             return False
 
         try:
-            file_path.write_text("", encoding="utf-8")
+            template = (
+                "import sys\n"
+                f'sys.path.append(r"{_LABHUB_ROOT}")\n'
+                "import client.python as labhub\n"
+                "labhub.connect()\n"
+                "\n"
+                "\n"
+            )
+            file_path.write_text(template, encoding="utf-8")
             logger.info(f"Created macro file: {filename}")
             self._parse_file(file_path)
             return True

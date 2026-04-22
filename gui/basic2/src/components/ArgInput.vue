@@ -4,6 +4,7 @@
     v-if="hasChoices"
     :model-value="currentValue"
     :options="selectOptions"
+    :disable="disable"
     dense
     outlined
     emit-value
@@ -15,6 +16,7 @@
   <q-toggle
     v-else-if="arg.type === 'bool'"
     :model-value="!!currentValue"
+    :disable="disable"
     @update:model-value="(v) => emit('update', v)"
   />
 
@@ -24,6 +26,7 @@
     :model-value="currentValue"
     type="number"
     :step="numStep"
+    :disable="disable"
     dense
     outlined
     @update:model-value="(v) => emit('update', v)"
@@ -33,6 +36,7 @@
   <q-input
     v-else
     :model-value="currentValue"
+    :disable="disable"
     dense
     outlined
     @update:model-value="(v) => emit('update', v)"
@@ -46,6 +50,7 @@ import type { CommandArg } from 'src/api/devices';
 const props = defineProps<{
   arg: CommandArg;
   value: unknown;
+  disable?: boolean;
 }>();
 
 const emit = defineEmits<{

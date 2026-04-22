@@ -61,7 +61,7 @@
           v-for="(line, idx) in store.output"
           :key="idx"
           class="output-line"
-          :class="{ 'stderr-line': line.stream === 'stderr' }"
+          :class="{ 'stderr-line': line.stream === 'stderr', 'stdin-line': line.stream === 'stdin' }"
         >
           {{ line.data }}
         </div>
@@ -151,6 +151,9 @@ function executeCommand() {
     commandHistory.value.push(cmd);
     historyIndex.value = commandHistory.value.length;
   }
+
+  // Echo input before sending so the user sees what they typed
+  store.addEchoLine(cmd);
 
   // Execute
   try {
@@ -255,6 +258,11 @@ async function restartSession() {
 
 .stderr-line {
   color: #ff5252;
+}
+
+.stdin-line {
+  color: #80cbc4;
+  opacity: 0.85;
 }
 
 .terminal-input {

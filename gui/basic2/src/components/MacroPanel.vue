@@ -84,7 +84,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, reactive } from 'vue';
+import { ref, computed, reactive, watch } from 'vue';
 import { useMacrosStore, type MacroFunction, type MacroArg } from 'stores/macros';
 import { useReplStore } from 'stores/repl';
 import ArgInput from './ArgInput.vue';
@@ -110,6 +110,23 @@ const functions = computed(() => {
 const argValues = reactive<Record<string, Record<string, unknown>>>({});
 const runningFunc = ref<string | null>(null);
 
+// Pre-populate argValues with parsed defaults so first-run uses displayed values
+watch(
+  functions,
+  (funcs) => {
+    for (const func of funcs) {
+      if (!argValues[func.name]) argValues[func.name] = {};
+      const funcArgs = argValues[func.name] as Record<string, unknown>;
+      for (const arg of func.args || []) {
+        if (!(arg.name in funcArgs)) {
+          funcArgs[arg.name] = toCommandArg(arg).default ?? null;
+        }
+      }
+    }
+  },
+  { immediate: true },
+);
+
 function hasArgs(func: MacroFunction): boolean {
   return Array.isArray(func.args) && func.args.length > 0;
 }
@@ -121,16 +138,20 @@ function formatSignature(func: MacroFunction): string {
     .join(', ');
 }
 
-// Convert MacroArg to CommandArg for ArgInput compatibility
+// Convert MacroArg to CommandArg for ArgInput compatibility.
+// The server already evaluates defaults via ast.literal_eval, so the value
+// arrives as the correct JS type (string, number, boolean) — no parsing needed.
 function toCommandArg(arg: MacroArg): CommandArg {
-  const result: CommandArg = {
-    name: arg.name,
-    required: arg.required,
-    default: arg.default,
-  };
+  const result: CommandArg = { name: arg.name, required: arg.required };
+
   if (arg.type && ['int', 'float', 'bool', 'str'].includes(arg.type)) {
     result.type = arg.type as 'int' | 'float' | 'bool' | 'str';
   }
+
+  if (arg.default !== undefined) {
+    result.default = arg.default;
+  }
+
   return result;
 }
 

@@ -2,7 +2,7 @@ import { defineStore } from 'pinia';
 import { ref } from 'vue';
 
 export interface ReplOutput {
-  stream: 'stdout' | 'stderr';
+  stream: 'stdout' | 'stderr' | 'stdin';
   data: string;
   timestamp: number;
 }
@@ -67,7 +67,7 @@ export const useReplStore = defineStore('repl', () => {
 
     return new Promise<void>((resolve, reject) => {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/api/v2/repl/session/${sessionId.value}/ws`;
+      const wsUrl = `${protocol}//${window.location.host}/api/v2/repl/session/${sessionId.value}/ws?offset=${output.value.length}`;
 
       const socket = new WebSocket(wsUrl);
 
@@ -178,6 +178,15 @@ export const useReplStore = defineStore('repl', () => {
     await connect();
   }
 
+  // Echo an input line to the output (so the user sees what they typed)
+  function addEchoLine(code: string) {
+    output.value.push({
+      stream: 'stdin',
+      data: `>>> ${code}\n`,
+      timestamp: Date.now(),
+    });
+  }
+
   // Clear output
   function clearOutput() {
     output.value = [];
@@ -194,6 +203,7 @@ export const useReplStore = defineStore('repl', () => {
     ensureConnected,
     executeCode,
     sendInterrupt,
+    addEchoLine,
     clearOutput,
   };
 });

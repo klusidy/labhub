@@ -36,7 +36,7 @@
             </td>
             <td>
               <PropertyInput
-                v-if="!prop.read_only"
+                v-if="!prop.read_only && !disabled"
                 :property="prop"
                 :value="deviceState?.[prop.name]"
                 @update="(val) => onUpdate(prop.name, val)"
@@ -81,6 +81,11 @@ const store = useDevicesStore();
 
 const spec = computed(() => store.getSpecForPath(props.deviceId));
 const deviceState = computed(() => store.getStateForPath(props.deviceId));
+
+const disabled = computed(() => {
+  const rootId = props.deviceId.split('/')[0];
+  return store.devices.find((d) => d.id === rootId)?.status !== 'connected';
+});
 
 const properties = computed(() => {
   const all = spec.value?.properties || [];

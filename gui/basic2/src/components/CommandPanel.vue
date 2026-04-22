@@ -29,6 +29,7 @@
               label="Run"
               padding="4px 16px"
               :loading="runningCmd === cmd.name"
+              :disable="disabled"
               @click.stop="onRun(cmd)"
             />
             <q-btn
@@ -62,6 +63,7 @@
                 <ArgInput
                   :arg="arg"
                   :value="argValues[cmd.name]?.[arg.name]"
+                  :disable="disabled"
                   @update="(v) => setArg(cmd.name, arg.name, v)"
                 />
               </div>
@@ -87,7 +89,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, reactive } from 'vue';
+import { ref, computed, reactive, watch } from 'vue';
 import { useDevicesStore } from 'stores/devices';
 import ArgInput from './ArgInput.vue';
 import type { CommandSpec, CommandArg } from 'src/api/devices';
@@ -99,6 +101,11 @@ const props = defineProps<{
 
 const store = useDevicesStore();
 const spec = computed(() => store.getSpecForPath(props.deviceId));
+
+const disabled = computed(() => {
+  const rootId = props.deviceId.split('/')[0];
+  return store.devices.find((d) => d.id === rootId)?.status !== 'connected';
+});
 
 const commands = computed(() => {
   const all = spec.value?.commands || [];
@@ -112,6 +119,23 @@ const argValues = reactive<Record<string, Record<string, unknown>>>({});
 const cmdResults = reactive<Record<string, unknown>>({});
 const cmdErrors = reactive<Record<string, string>>({});
 const runningCmd = ref<string | null>(null);
+
+// Pre-populate argValues with defaults so first-run uses displayed values
+watch(
+  commands,
+  (cmds) => {
+    for (const cmd of cmds) {
+      if (!argValues[cmd.name]) argValues[cmd.name] = {};
+      const cmdArgs = argValues[cmd.name] as Record<string, unknown>;
+      for (const arg of cmd.args || []) {
+        if (!(arg.name in cmdArgs)) {
+          cmdArgs[arg.name] = arg.default ?? null;
+        }
+      }
+    }
+  },
+  { immediate: true },
+);
 
 function hasArgs(cmd: CommandSpec): boolean {
   return Array.isArray(cmd.args) && cmd.args.length > 0;

@@ -23,8 +23,8 @@ export interface TreeNode {
   children?: TreeNode[] | undefined;
   // Metadata for selection handling
   nodeType: 'device' | 'childDevice' | 'category' | 'property' | 'command' | 'dataSource';
-  deviceId: string;    // root device ID (for connect/disconnect)
-  devicePath: string;  // full path, e.g. 'multi_device/channel_a'
+  deviceId: string; // root device ID (for connect/disconnect)
+  devicePath: string; // full path, e.g. 'multi_device/channel_a'
   itemName?: string | undefined;
   connected?: boolean | undefined;
 }
@@ -80,11 +80,7 @@ export const useDevicesStore = defineStore('devices', () => {
 
   // --- Tree building ---
 
-  function buildDeviceSubtree(
-    devicePath: string,
-    rootId: string,
-    spec: DeviceSpec,
-  ): TreeNode[] {
+  function buildDeviceSubtree(devicePath: string, rootId: string, spec: DeviceSpec): TreeNode[] {
     const nodes: TreeNode[] = [];
 
     // Child devices first (recursively)
@@ -186,7 +182,7 @@ export const useDevicesStore = defineStore('devices', () => {
         nodeType: 'device' as const,
         deviceId: device.id,
         devicePath: device.id,
-        connected: true,
+        connected: device.status === 'connected',
         children: children.length > 0 ? children : undefined,
       };
     });
@@ -389,7 +385,11 @@ export const useDevicesStore = defineStore('devices', () => {
               id: existing.id,
               driver: existing.driver,
               state: msg.state as Record<string, unknown>,
-              status: 'connected',
+              // Use status from event if present, otherwise keep existing
+              status: ((msg.status as string | undefined) ?? existing.status) as
+                | 'connected'
+                | 'disconnected'
+                | 'unhealthy',
               ...(existing.doc !== undefined ? { doc: existing.doc } : {}),
             };
           }

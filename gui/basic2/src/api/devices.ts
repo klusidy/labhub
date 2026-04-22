@@ -51,6 +51,7 @@ export interface DataSourceSpec {
 export interface DeviceSpec {
   id?: string;
   driver?: string;
+  doc?: string;
   properties?: PropertySpec[];
   commands?: CommandSpec[];
   data_sources?: DataSourceSpec[];
@@ -62,11 +63,14 @@ export interface PlotSpec {
   'x-label'?: string;
   'y-label'?: string;
   'x-values'?: number[];
-  channel_settings?: Record<string, {
-    multiplier?: number;
-    range_str?: string;
-    coupling_type_str?: string;
-  }>;
+  channel_settings?: Record<
+    string,
+    {
+      multiplier?: number;
+      range_str?: string;
+      coupling_type_str?: string;
+    }
+  >;
 }
 
 // Encode a device path (preserves '/' separators between segments)
@@ -90,7 +94,7 @@ export async function getDeviceSpec(id: string): Promise<DeviceSpec | null> {
 
 export async function patchProperties(
   id: string,
-  properties: Record<string, unknown>
+  properties: Record<string, unknown>,
 ): Promise<DeviceState> {
   const r = await fetch(`${API_BASE}/devices/${encodePath(id)}`, {
     method: 'PATCH',
@@ -113,7 +117,7 @@ export async function patchProperties(
 export async function runCommand(
   id: string,
   name: string,
-  args: Record<string, unknown> = {}
+  args: Record<string, unknown> = {},
 ): Promise<unknown> {
   const r = await fetch(`${API_BASE}/devices/${encodePath(id)}/commands`, {
     method: 'POST',
@@ -126,7 +130,7 @@ export async function runCommand(
 
 export async function getPlotSpec(id: string, source: string): Promise<PlotSpec> {
   const r = await fetch(
-    `${API_BASE}/devices/${encodePath(id)}/data/${encodeURIComponent(source)}/plot`
+    `${API_BASE}/devices/${encodePath(id)}/data/${encodeURIComponent(source)}/plot`,
   );
   if (!r.ok) throw new Error(`Failed to get plot spec: ${r.status}`);
   return r.json();
@@ -134,14 +138,16 @@ export async function getPlotSpec(id: string, source: string): Promise<PlotSpec>
 
 export async function getFrame(id: string, source: string): Promise<unknown> {
   const r = await fetch(
-    `${API_BASE}/devices/${encodePath(id)}/data/${encodeURIComponent(source)}/frame`
+    `${API_BASE}/devices/${encodePath(id)}/data/${encodeURIComponent(source)}/frame`,
   );
   if (!r.ok) throw new Error(`Failed to get frame: ${r.status}`);
   return r.json();
 }
 
 // Admin API functions
-export async function disconnectDevice(id: string): Promise<{ status: string; devices: DeviceState[] }> {
+export async function disconnectDevice(
+  id: string,
+): Promise<{ status: string; devices: DeviceState[] }> {
   const r = await fetch(`${API_BASE}/admin/device/${encodePath(id)}/disconnect`, {
     method: 'POST',
   });
@@ -149,7 +155,9 @@ export async function disconnectDevice(id: string): Promise<{ status: string; de
   return r.json();
 }
 
-export async function connectDevice(id: string): Promise<{ status: string; devices: DeviceState[] }> {
+export async function connectDevice(
+  id: string,
+): Promise<{ status: string; devices: DeviceState[] }> {
   const r = await fetch(`${API_BASE}/admin/device/${encodePath(id)}/connect`, {
     method: 'POST',
   });
@@ -171,7 +179,7 @@ export function openDataStream(
   id: string,
   source: string,
   rate?: number,
-  format: 'json' | 'msgpack' = 'json'
+  format: 'json' | 'msgpack' = 'json',
 ): WebSocket {
   const qs = new URLSearchParams();
   if (rate) qs.set('rate', String(rate));

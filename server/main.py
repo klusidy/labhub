@@ -904,75 +904,65 @@ async def repl_websocket(websocket: WebSocket, session_id: str):
         await websocket.close()
         return
 
-    # Send buffered output history for reconnection
-    for output in session.output_buffer:
-        await websocket.send_json({"type": "output", **output})
+    # Send buffered output history for reconnection.
+    # Client passes ?offset=N (# of messages already displayed) so we skip those.
+    try:
+        offset = int(websocket.query_params.get("offset", 0))
+    except (ValueError, TypeError):
+        offset = 0
+    for item in session.output_buffer[offset:]:
+        await websocket.send_json({"type": "output", **item})
 
-    # Create tasks for reading stdout/stderr and handling client messages
-    async def read_stream(stream, stream_name: str):
-        """Read from process stream and send to WebSocket"""
+    # Subscribe to future output from the session's background reader tasks.
+    # This avoids reading directly from process.stdout/stderr (which can only
+    # be consumed by one reader at a time) and enables clean reconnections.
+    output_queue = session.subscribe()
+
+    async def forward_output():
+        """Forward queued output items to the WebSocket."""
         try:
             while True:
-                line = await stream.readline()
-                if not line:
-                    break
-
-                text = line.decode("utf-8", errors="replace")
-
-                # Buffer output for reconnection
-                session.add_output(stream_name, text)
-
-                # Send to client
-                await websocket.send_json({
-                    "type": "output",
-                    "stream": stream_name,
-                    "data": text,
-                })
+                item = await output_queue.get()
+                await websocket.send_json({"type": "output", **item})
+        except asyncio.CancelledError:
+            pass
         except Exception as e:
-            logger.error(f"Error reading {stream_name}: {e}")
+            logger.error(f"Error forwarding output for session {session_id}: {e}")
 
     async def handle_client_messages():
         """Handle incoming messages from client"""
-        try:
-            while True:
-                data = await websocket.receive_json()
-                msg_type = data.get("type")
+        while True:
+            data = await websocket.receive_json()
+            msg_type = data.get("type")
 
-                if msg_type == "execute":
-                    # Execute code in REPL
-                    code = data.get("code", "")
-                    await repl_manager.execute_code(session_id, code)
+            if msg_type == "execute":
+                code = data.get("code", "")
+                await repl_manager.execute_code(session_id, code)
 
-                elif msg_type == "interrupt":
-                    # Send interrupt signal (Ctrl+C)
-                    await repl_manager.send_interrupt(session_id)
-                    await websocket.send_json({
-                        "type": "output",
-                        "stream": "stdout",
-                        "data": "^C\n",
-                    })
+            elif msg_type == "interrupt":
+                await repl_manager.send_interrupt(session_id)
+                await websocket.send_json({
+                    "type": "output",
+                    "stream": "stdout",
+                    "data": "^C\n",
+                })
 
-                elif msg_type == "ping":
-                    # Keep-alive ping
-                    await websocket.send_json({"type": "pong"})
+            elif msg_type == "ping":
+                await websocket.send_json({"type": "pong"})
 
-        except WebSocketDisconnect:
-            logger.info(f"Client disconnected from REPL session {session_id}")
-        except Exception as e:
-            logger.error(f"Error handling client message: {e}")
-
-    # Run tasks concurrently
+    forward_task = asyncio.create_task(forward_output())
     try:
-        await asyncio.gather(
-            read_stream(session.process.stdout, "stdout"),
-            read_stream(session.process.stderr, "stderr"),
-            handle_client_messages(),
-        )
+        await handle_client_messages()
+    except WebSocketDisconnect:
+        logger.info(f"Client disconnected from REPL session {session_id}")
     except Exception as e:
         logger.error(f"WebSocket error for session {session_id}: {e}")
     finally:
+        forward_task.cancel()
+        await asyncio.gather(forward_task, return_exceptions=True)
+        session.unsubscribe(output_queue)
         try:
             await websocket.close()
-        except:
+        except Exception:
             pass
         logger.info(f"WebSocket closed for REPL session {session_id}")

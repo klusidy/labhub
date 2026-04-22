@@ -133,6 +133,34 @@
       <DataSourcePanel v-if="hasDataSources" :device-id="selectedDevicePath!" />
       <PropertyTable v-if="hasProperties" :device-id="selectedDevicePath!" />
       <CommandPanel v-if="hasCommands" :device-id="selectedDevicePath!" />
+
+      <!-- Child device sections -->
+      <template
+        v-if="selectedSpec?.children && Object.keys(selectedSpec.children).length > 0"
+      >
+        <template v-for="(childSpec, childId) in selectedSpec.children" :key="String(childId)">
+          <q-separator class="q-my-md" />
+          <div class="row items-center q-mb-sm">
+            <q-icon name="device_hub" color="blue-grey-6" size="sm" class="q-mr-xs" />
+            <span class="text-subtitle1 text-grey-7">{{ childId }}</span>
+            <span v-if="childSpec.doc" class="text-caption text-grey-5 q-ml-sm"
+              >— {{ childSpec.doc }}</span
+            >
+          </div>
+          <DataSourcePanel
+            v-if="(childSpec.data_sources?.length ?? 0) > 0"
+            :device-id="`${selectedDevicePath}/${String(childId)}`"
+          />
+          <PropertyTable
+            v-if="(childSpec.properties?.length ?? 0) > 0"
+            :device-id="`${selectedDevicePath}/${String(childId)}`"
+          />
+          <CommandPanel
+            v-if="(childSpec.commands?.length ?? 0) > 0"
+            :device-id="`${selectedDevicePath}/${String(childId)}`"
+          />
+        </template>
+      </template>
     </div>
 
     <!-- Disconnected device selected - show config panel -->

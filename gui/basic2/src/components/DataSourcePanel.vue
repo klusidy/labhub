@@ -28,6 +28,7 @@
               label="Once"
               padding="4px 12px"
               :loading="loadingSource === ds.name"
+              :disable="disabled"
               @click.stop="onOnce(ds.name)"
             />
             <q-btn
@@ -37,6 +38,7 @@
               :text-color="runningSource === ds.name ? 'white' : 'light-blue-10'"
               :label="runningSource === ds.name ? 'Stop' : 'Start'"
               padding="4px 12px"
+              :disable="disabled"
               @click.stop="onToggle(ds.name)"
             />
 
@@ -124,6 +126,11 @@ const props = defineProps<{
 
 const store = useDevicesStore();
 const spec = computed(() => store.getSpecForPath(props.deviceId));
+
+const disabled = computed(() => {
+  const rootId = props.deviceId.split('/')[0];
+  return store.devices.find((d) => d.id === rootId)?.status !== 'connected';
+});
 
 const dataSources = computed(() => {
   const all = spec.value?.data_sources || [];
