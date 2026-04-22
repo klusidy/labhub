@@ -57,11 +57,110 @@ from ..base import (
     api_data,
     Frame,
 )
+from ..data_source import DataSource
 
 if TYPE_CHECKING:
     from ...device_manager import DeviceManager
 
 logger = logging.getLogger(__name__)
+
+
+class ScopeRawSource(DataSource):
+    """Continuous scope acquisition loop, serialised behind the device lock.
+
+    Subscribers receive raw capture dicts (keys: ch0–ch3, wp_trigger,
+    pre_trig_len, sample_period_s) exactly as returned by Scope.capture().
+    Set _needs_restart = True to abort the current capture and re-arm with
+    fresh trigger config (e.g. after decimation changes).
+    """
+
+    def __init__(self, hw, dev_lock, run_blocking_fn, apply_trig_fn, parent_id):
+        self._hw = hw
+        self._dev_lock = dev_lock
+        self._run_blocking = run_blocking_fn
+        self._apply_trig = apply_trig_fn
+        self._parent_id = parent_id
+        self._needs_restart = False
+        super().__init__("scope_raw")
+
+    # Override start() — we manage our own task instead of the generator pattern.
+    async def start(self, interval=None, force_restart=False):
+        self._needs_restart = False
+        if self.running() and not force_restart:
+            return
+        if force_restart:
+            await self.stop()
+
+        self._task = asyncio.create_task(self._poller(), name="ScopeRawStream")
+
+        def on_done(t: asyncio.Task):
+            try:
+                if not t.cancelled() and (exc := t.exception()):
+                    logger.error("%s.scope: raw stream crashed: %s", self._parent_id, exc)
+            except asyncio.CancelledError:
+                pass
+            finally:
+                self._task = None
+                if self._needs_restart:
+                    asyncio.create_task(self.start(force_restart=True))
+
+        self._task.add_done_callback(on_done)
+
+    async def _poller(self):
+        _timeout_count = 0
+        _proto_errors = 0
+        _MAX_PROTO = 5
+
+        while True:
+            async with self._lock:
+                if not self._subscribers:
+                    break
+
+            if self._needs_restart:
+                return  # on_done will restart
+
+            try:
+                async with self._dev_lock:
+                    await self._run_blocking(self._apply_trig)
+                    data = await self._run_blocking(self._hw.capture, 5.0)
+                _timeout_count = 0
+                _proto_errors = 0
+
+            except asyncio.CancelledError:
+                raise
+
+            except (AttributeError, OSError) as exc:
+                logger.warning(
+                    "%s.scope: connection error in raw stream: %s", self._parent_id, exc
+                )
+                await asyncio.sleep(3.0)
+                continue
+
+            except Exception as exc:
+                msg = str(exc).lower()
+                if "timed out" in msg or "timeout" in msg:
+                    _timeout_count += 1
+                    if _timeout_count == 1 or _timeout_count % 10 == 0:
+                        logger.warning(
+                            "%s.scope: capture timeout #%d — set trig_source='sw' for free-running",
+                            self._parent_id,
+                            _timeout_count,
+                        )
+                    await asyncio.sleep(0.2)
+                else:
+                    _proto_errors += 1
+                    logger.warning(
+                        "%s.scope: capture error (%d/%d): %s",
+                        self._parent_id, _proto_errors, _MAX_PROTO, exc,
+                    )
+                    if _proto_errors >= _MAX_PROTO:
+                        raise RuntimeError(
+                            f"scope raw stream: too many consecutive errors ({_MAX_PROTO})"
+                        ) from exc
+                    await asyncio.sleep(0.5)
+                continue
+
+            await self._fan_out(data)
 
 
 @api_device()
@@ -563,6 +662,13 @@ class chameleon_basic(Device):
 
             self._hw: _Scope = self._parent._dev.scope
             self._Scope = _Scope
+            self._raw_source = ScopeRawSource(
+                hw=self._hw,
+                dev_lock=self._lock,
+                run_blocking_fn=self._run_blocking_in_thread,
+                apply_trig_fn=self._apply_trig_config,
+                parent_id=self._parent.id,
+            )
             return True
 
         @api_property(
@@ -680,123 +786,39 @@ class chameleon_basic(Device):
 
         @api_data(doc="Continuous 4-channel scope stream (repeating captures)")
         async def wave(self) -> AsyncIterator[Frame]:
-            """Repeatedly capture and stream scope data as time-ordered frames."""
-            _MAX_PROTO_RETRIES = 5
-            _MAX_RECONNECTS = 3
-
-            proto_errors = 0
-            reconnect_count = 0
-            timeout_count = 0
-
-            try:
-                await self._run_blocking_in_thread(self._apply_trig_config)
-            except Exception as exc:
-                logger.warning(
-                    "%s.scope: initial trig config failed: %s", self._parent.id, exc
-                )
-
+            """Subscribe to ScopeRawSource and yield time-ordered scope frames."""
+            queue = await self._raw_source.subscribe(maxsize=2)
+            await self._raw_source.start()
             try:
                 while True:
                     try:
-                        data = await self._run_blocking_in_thread(self._hw.capture, 5.0)
-                        t, channels = self._Scope.unroll(data)
-                        proto_errors = 0
-                        reconnect_count = 0
-                        timeout_count = 0
-                        yield {
-                            "series": [
-                                {"name": "Ch A", "data": channels[0].tolist()},
-                                {"name": "Ch B", "data": channels[1].tolist()},
-                                {"name": "Ch C", "data": channels[2].tolist()},
-                                {"name": "Ch D", "data": channels[3].tolist()},
-                            ]
-                        }
-
-                    except asyncio.CancelledError:
-                        raise
-
-                    except (AttributeError, OSError) as exc:
-                        reconnect_count += 1
+                        data = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    except asyncio.TimeoutError:
                         logger.warning(
-                            "%s.scope: connection lost in wave (reconnect %d/%d): %s",
+                            "%s.scope: no data from raw source for 15 s — "
+                            "check trig_source (use 'sw' for free-running)",
                             self._parent.id,
-                            reconnect_count,
-                            _MAX_RECONNECTS,
-                            exc,
                         )
-                        if reconnect_count > _MAX_RECONNECTS:
-                            raise RuntimeError(
-                                f"wave: too many reconnect attempts ({_MAX_RECONNECTS}), giving up"
-                            ) from exc
-                        await asyncio.sleep(3.0)
-                        try:
-                            await self._parent.disconnect()
-                            await self._run_blocking_in_thread(self._parent.connect)
-                            self._hw = self._parent._dev.scope
-                            await self._run_blocking_in_thread(self._apply_trig_config)
-                            logger.info(
-                                "%s.scope: reconnected, resuming wave stream",
-                                self._parent.id,
-                            )
-                            proto_errors = 0
-                            timeout_count = 0
-                        except Exception as reconnect_exc:
-                            logger.error(
-                                "%s.scope: reconnect failed: %s",
-                                self._parent.id,
-                                reconnect_exc,
-                            )
-
-                    except Exception as exc:
-                        msg = str(exc).lower()
-                        if "timed out" in msg or "timeout" in msg:
-                            timeout_count += 1
-                            if timeout_count == 1 or timeout_count % 10 == 0:
-                                logger.warning(
-                                    "%s.scope: capture timeout #%d (trig_source=%r) — "
-                                    "retrying; change trig_source to 'sw' for free-running",
-                                    self._parent.id,
-                                    timeout_count,
-                                    self._cache.get("trig_source", "?"),
-                                )
-                            await asyncio.sleep(0.2)
-                            try:
-                                await self._run_blocking_in_thread(
-                                    self._apply_trig_config
-                                )
-                            except Exception:
-                                pass
-                        else:
-                            proto_errors += 1
-                            logger.warning(
-                                "%s.scope: protocol/hardware error (%d/%d): %s",
-                                self._parent.id,
-                                proto_errors,
-                                _MAX_PROTO_RETRIES,
-                                exc,
-                            )
-                            if proto_errors >= _MAX_PROTO_RETRIES:
-                                raise RuntimeError(
-                                    f"wave: too many consecutive protocol errors "
-                                    f"({_MAX_PROTO_RETRIES}), giving up"
-                                ) from exc
-                            await asyncio.sleep(0.5)
-                            try:
-                                await self._run_blocking_in_thread(
-                                    self._apply_trig_config
-                                )
-                            except Exception:
-                                pass
-
+                        continue
+                    t, channels = self._Scope.unroll(data)
+                    yield {
+                        "series": [
+                            {"name": "Ch A", "data": channels[0].tolist()},
+                            {"name": "Ch B", "data": channels[1].tolist()},
+                            {"name": "Ch C", "data": channels[2].tolist()},
+                            {"name": "Ch D", "data": channels[3].tolist()},
+                        ]
+                    }
             finally:
+                await self._raw_source.unsubscribe(queue)
                 logger.debug("%s.scope: wave stream stopped", self._parent.id)
 
         @wave.plot()
         def wave_plot(self) -> Dict[str, Any]:
             from chameleon.modules.scope import BUF_DEPTH as _BD, CLOCK_FREQ as _CLK
 
-            dec = int(self._hw.decimation)
-            pre = int(self._hw.pre_trig_len)
+            dec = max(1, int(self._cache.get("decimation", 1)))
+            pre = int(self._cache.get("pre_trig_len", _BD // 2))
             dt_us = dec / _CLK * 1e6
             t_us = [(i - pre) * dt_us for i in range(_BD)]
             return {
