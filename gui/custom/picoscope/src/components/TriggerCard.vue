@@ -123,7 +123,7 @@
 </template>
 
 <script setup lang="ts">
-  import { computed, reactive, watch } from 'vue'
+  import { reactive } from 'vue'
   import { debounce } from 'lodash-es'
   import { usePicoscopeStore } from 'stores/picoscope'
   import type { HwChannelId } from 'src/api/picoscope'
@@ -156,31 +156,10 @@
     { label: '↘', value: 'FALLING' as Edge },
   ]
 
-  // synchronize backend -> local UI state
+  // Trigger settings are no longer in server state; UI is local-only.
+  // Commands still reach the server via setTriggerSimple.
 
   const ps = usePicoscopeStore()
-
-  watch(
-    () => ps.trigger(),
-    (raw) => {
-      if (!raw || Object.keys(raw).length === 0) {
-        trigger.enable = false
-        trigger.channel = 'A'
-        trigger.thresholdMv = 0.0
-        trigger.edge = 'RISING_OR_FALLING'
-        trigger.delaySamples = 0
-        trigger.autoTriggerMs = 1000
-      } else {
-        trigger.enable = 1 === raw.enable
-        trigger.channel = raw.source_str
-        trigger.thresholdMv = raw.threshold_mV
-        trigger.edge = raw.direction_str as Edge
-        trigger.delaySamples = raw.delay
-        trigger.autoTriggerMs = raw.auto_trigger_ms
-      }
-    },
-    { immediate: true }
-  )
 
   import { toRaw } from 'vue'
   function applyTriggerUpdate() {

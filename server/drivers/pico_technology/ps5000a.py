@@ -10,7 +10,15 @@ import numpy as np
 from collections import deque
 from scipy.signal import get_window, detrend as sp_detrend
 
-from ..base import Device, ChildDevice, api_device, api_command, api_property, api_data, Frame
+from ..base import (
+    Device,
+    ChildDevice,
+    api_device,
+    api_command,
+    api_property,
+    api_data,
+    Frame,
+)
 from ..data_source import DataSource
 
 if TYPE_CHECKING:
@@ -51,8 +59,18 @@ RANGE_VALUES = {
 
 
 RANGE_CHOICES = [
-    "10MV", "20MV", "50MV", "100MV", "200MV", "500MV",
-    "1V", "2V", "5V", "10V", "20V", "50V",
+    "10MV",
+    "20MV",
+    "50MV",
+    "100MV",
+    "200MV",
+    "500MV",
+    "1V",
+    "2V",
+    "5V",
+    "10V",
+    "20V",
+    "50V",
 ]
 
 
@@ -339,10 +357,10 @@ class ps5000a(Device):
             f"PS5000A_DR_{self.requested_resolution}BIT"
         ]
 
-        self._timebase = 10  # todo set default timebase in config.yaml
-        self._max_samples = 134217472  # TODO  - this should be initialized!!!
+        self._timebase = 12  # todo set default timebase in config.yaml
+        self._max_samples = 10_000  # TODO  - this should be initialized!!!
         self._time_interval_ns = 32.0
-        self._sampling_frequency = 1e9 / 32
+        self._sampling_frequency = 10_000_000
 
         self._pre_trigger_samples = 0
         self._post_trigger_samples = 5000
@@ -507,10 +525,10 @@ class ps5000a(Device):
             if self.status["getTimebase2"] == 0:
                 break
         else:  # if not break
-            raise RuntimeError(
-                f"Could not set timebase for requested frequency {value}Hz"
-            )
-            print(f"Could not set timebase for requested frequency {value}Hz")
+            # raise RuntimeError(
+            #    f"Could not set timebase for requested frequency {value}Hz"
+            # )
+            logger.error(f"Could not set timebase for requested frequency {value}Hz")
             return
 
         self._timebase = timebase_candidate
@@ -644,7 +662,6 @@ class ps5000a(Device):
     def rotation_inputs(self, value: str) -> str:
         self._rotation_inputs = value
         return value
-
 
     @api_command()
     async def set_simple_trigger(

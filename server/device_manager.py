@@ -263,7 +263,7 @@ class DeviceManager:
                     # Read nested state and broadcast
                     st = await dev.read_state()
                     await self.event_bus.publish(
-                        {"type": "device.state", "id": dev_id, "state": st}
+                        {"type": "device.state", "id": dev_id, "state": st, "status": dev._status}
                     )
 
                     # Wait for next poll cycle
@@ -453,7 +453,7 @@ class DeviceManager:
 
         # Broadcast updated state
         await self.event_bus.publish(
-            {"type": "device.state", "id": dev_id, "state": st}
+            {"type": "device.state", "id": dev_id, "state": st, "status": dev._status}
         )
 
         return DeviceInfo(
@@ -528,7 +528,7 @@ class DeviceManager:
         # Broadcast updated state so clients see changes
         st = await dev.read_state()
         await self.event_bus.publish(
-            {"type": "device.state", "id": dev_id, "state": st}
+            {"type": "device.state", "id": dev_id, "state": st, "status": dev._status}
         )
 
         return res
@@ -753,7 +753,7 @@ class DeviceManager:
                 # Publish updated state
                 state = await device.read_state()
                 await self.event_bus.publish(
-                    {"type": "device.state", "id": dev_id, "state": state}
+                    {"type": "device.state", "id": dev_id, "state": state, "status": device._status}
                 )
 
             except Exception as e:
@@ -800,7 +800,7 @@ class DeviceManager:
                 # Publish updated state
                 state = await device.read_state()
                 await self.event_bus.publish(
-                    {"type": "device.state", "id": dev_id, "state": state}
+                    {"type": "device.state", "id": dev_id, "state": state, "status": device._status}
                 )
 
             except PropertyResolutionError as e:

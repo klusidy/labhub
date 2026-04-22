@@ -34,28 +34,18 @@ export const ChannelIndex: Record<HwChannelId, number> = {
 export const ChannelIdFromIndex = (i: number): HwChannelId =>
   (['A', 'B', 'C', 'D'] as HwChannelId[])[i] ?? 'A'
 
+// Channel settings as exposed by pico_channel ChildDevice properties
 export interface ChannelSettings {
-  status: number
-  channel: number
-  enable: 0 | 1
-  coupling_type: number
-  range: number
+  enable: boolean
+  coupling: 'AC' | 'DC'
+  range: Range
+}
+
+// Shape returned by PlotSpec.channel_settings (subset, for multiplier lookup)
+export interface PlotChannelSettings {
   multiplier: number
   range_str: Range
   coupling_type_str: 'AC' | 'DC'
-}
-
-export interface TriggerSettingsRaw {
-  status: number
-  enable: 0 | 1
-  source: number
-  source_str: string
-  threshold: number
-  threshold_mV: number
-  direction: number
-  direction_str: string
-  delay: number
-  auto_trigger_ms: number
 }
 
 export interface PicoscopeState {
@@ -68,8 +58,11 @@ export interface PicoscopeState {
   post_trigger_samples_seconds: number
   downsample_window: number
 
-  _channel_settings: Record<HwChannelId, ChannelSettings>
-  _trigger_settings: TriggerSettingsRaw
+  // Child channel devices — nested state from pico_channel ChildDevices
+  ch_a: ChannelSettings
+  ch_b: ChannelSettings
+  ch_c: ChannelSettings
+  ch_d: ChannelSettings
 
   [key: string]: unknown
 }
@@ -157,7 +150,7 @@ export interface PlotSpec {
   'x-label': string
   'y-label': string
   'x-values': number[]
-  channel_settings?: Record<HwChannelId, ChannelSettings>
+  channel_settings?: Record<HwChannelId, PlotChannelSettings>
 }
 
 //
@@ -219,18 +212,26 @@ export async function patchPicoscopeProperties(
   return parseJSON<PicoscopeDevice>(r)
 }
 
+// PATCH channel child device — replaces the old set_channel command
+export async function patchChannelProperties(
+  channel: HwChannelId,
+  properties: Partial<ChannelSettings>
+): Promise<unknown> {
+  const chKey = `ch_${channel.toLowerCase()}`
+  const r = await fetch(api(`/devices/picoscope/${chKey}`), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ properties }),
+  })
+  if (!r.ok) throw new Error(`patch channel ${channel} failed: HTTP ${r.status}`)
+  return r.json()
+}
+
 //
 // ─────────────────────────────────────────────────────────────────────────────
 //  Commands (POST /api/v2/devices/picoscope/commands)
 // ─────────────────────────────────────────────────────────────────────────────
 //
-
-export interface SetChannelArgs {
-  channel: HwChannelId
-  enable: boolean
-  coupling_type: 'AC' | 'DC'
-  range: '10MV' | '20MV' | '50MV' | '100MV' | '200MV' | '500MV' | '1V' | '2V' | '5V' | '10V' | '20V' // | '50V' | 'MAX_RANGES';
-}
 
 export type TriggerDirection = 'RISING' | 'FALLING' | 'RISING_OR_FALLING'
 
@@ -249,10 +250,9 @@ export interface AcquireToFileArgs {
   acquisition_duration_s: number | null
 }
 
-export type PicoscopeCommandName = 'set_channel' | 'set_simple_trigger' | 'acquire_to_file'
+export type PicoscopeCommandName = 'set_simple_trigger' | 'acquire_to_file'
 
 export interface CommandArgsMap {
-  set_channel: SetChannelArgs
   set_simple_trigger: SetSimpleTriggerArgs
   acquire_to_file: AcquireToFileArgs
 }

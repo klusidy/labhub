@@ -164,7 +164,7 @@
       if (!Array.isArray(frame[key])) return false
       // For hardware channels, respect the enable flag
       if (HW_CHANNELS.includes(key as HwChannelId)) {
-        return ps.channels()?.[key as HwChannelId]?.enable === 1
+        return !!ps.channels()?.[key as HwChannelId]?.enable
       }
       // Virtual channels (X, Y, etc.) — always show if data present
       return true

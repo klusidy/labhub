@@ -8,15 +8,17 @@ import {
   getPicoscopeSpec,
   getPicoscopePlotSpec,
   patchPicoscopeProperties,
+  patchChannelProperties,
   sendPicoscopeCommand,
   openEventsSocket,
   type PicoscopeDevice,
   type PicoscopeSpec,
   type PlotSpec,
   type PicoscopePropertiesPatch,
-  type SetChannelArgs,
+  type ChannelSettings,
   type SetSimpleTriggerArgs,
   type AcquireToFileArgs,
+  type HwChannelId,
   ChannelIndex,
   ChannelIdFromIndex,
 } from 'src/api/picoscope'
@@ -46,8 +48,18 @@ export const usePicoscopeStore = defineStore('picoscope', () => {
   //
 
   const state = () => device.value?.state
-  const channels = () => device.value?.state?._channel_settings
-  const trigger = () => device.value?.state?._trigger_settings
+
+  // Map child device states ch_a..ch_d → Record<HwChannelId, ChannelSettings>
+  const channels = (): Record<HwChannelId, ChannelSettings> | undefined => {
+    const st = device.value?.state
+    if (!st?.ch_a) return undefined
+    return {
+      A: st.ch_a as ChannelSettings,
+      B: st.ch_b as ChannelSettings,
+      C: st.ch_c as ChannelSettings,
+      D: st.ch_d as ChannelSettings,
+    }
+  }
 
   //
   // ───────────────────────────────────────────
@@ -103,13 +115,13 @@ export const usePicoscopeStore = defineStore('picoscope', () => {
     }
   }
 
-  /** set_channel command */
-  async function setChannel(args: SetChannelArgs) {
+  /** PATCH channel child device properties (replaces set_channel command) */
+  async function patchChannel(channel: HwChannelId, props: Partial<ChannelSettings>) {
     try {
-      await sendPicoscopeCommand('set_channel', args)
+      await patchChannelProperties(channel, props)
       await refresh()
     } catch (e) {
-      console.error('setChannel failed:', e)
+      console.error('patchChannel failed:', e)
     }
   }
 
@@ -202,13 +214,12 @@ export const usePicoscopeStore = defineStore('picoscope', () => {
     // getters
     state,
     channels,
-    trigger,
 
     // actions
     init,
     refresh,
     patchProps,
-    setChannel,
+    patchChannel,
     setTriggerSimple,
     acquireToFile,
     fetchPlotSpec,

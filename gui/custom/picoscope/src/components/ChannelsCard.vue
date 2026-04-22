@@ -113,9 +113,10 @@ watch(
   ch => {
     if (!ch) return
     for (const id of ['A','B','C','D'] as HwChannelId[]) {
-      local[id].enabled  = ch[id].enable === 1
-      local[id].coupling = ch[id].coupling_type_str
-      local[id].range    = ch[id].range_str
+      if (!ch[id]) continue
+      local[id].enabled  = ch[id].enable
+      local[id].coupling = ch[id].coupling
+      local[id].range    = ch[id].range
     }
   },
   { immediate: true }
@@ -130,10 +131,9 @@ function applyChannelUpdate(id: HwChannelId) {
 const debouncedChannelUpdate = debounce(async (id: HwChannelId, ch: LocalChannel) => {
   const v = local[id]
 
-  await ps.setChannel({
-    channel: id,
+  await ps.patchChannel(id, {
     enable: v.enabled,
-    coupling_type: v.coupling,
+    coupling: v.coupling,
     range: v.range,
   })
 }, 200)

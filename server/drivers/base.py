@@ -251,11 +251,21 @@ class Device:
     # ------------------------------------------------------------------
 
     async def _connect(self) -> None:
-        """Internal connect: calls connect(), sets status, inits children."""
-        if asyncio.iscoroutinefunction(self.connect):
-            success = await self.connect()
-        else:
-            success = await self._run_blocking_in_thread(self.connect)
+        """Internal connect: calls connect(), sets status, inits children.
+
+        Exceptions raised by connect() are caught and treated as a failed
+        connection (status → disconnected) so the device is always added to
+        the manager even when hardware is unavailable.
+        """
+        try:
+            if asyncio.iscoroutinefunction(self.connect):
+                success = await self.connect()
+            else:
+                success = await self._run_blocking_in_thread(self.connect)
+        except Exception as e:
+            logger.error(f"{self.id}: connect() raised: {e}", exc_info=True)
+            self._status = "disconnected"
+            return
 
         if success:
             self._status = "connected"
