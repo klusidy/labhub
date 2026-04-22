@@ -176,30 +176,47 @@ class chameleon_basic(Device):
 
         # Human-readable source names; index = hardware slot number.
         _SRC_NAMES: List[str] = [
-            "ADC_A",   # 0
-            "ADC_B",   # 1
-            "ZERO",    # 2
-            "ASG_0",   # 3
-            "ASG_1",   # 4  reserved
-            "ASG_2",   # 5  reserved
-            "src06",   # 6
-            "src07",   # 7
-            "SUM",     # 8
-            "DIFF",    # 9
-            "src10", "src11", "src12", "src13", "src14", "src15",
+            "ADC_A",  # 0
+            "ADC_B",  # 1
+            "ZERO",  # 2
+            "ASG_0",  # 3
+            "ASG_1",  # 4  reserved
+            "ASG_2",  # 5  reserved
+            "src06",  # 6
+            "src07",  # 7
+            "SUM",  # 8
+            "DIFF",  # 9
+            "src10",
+            "src11",
+            "src12",
+            "src13",
+            "src14",
+            "src15",
         ]
         _SRC_CHOICES = _SRC_NAMES
 
         _DST_NAMES: List[str] = [
-            "DAC_A", "DAC_B",
-            "SCOPE_A", "SCOPE_B", "SCOPE_C", "SCOPE_D",
-            "dst06", "dst07",
-            "SUM_A", "SUM_B",
-            "dst10", "dst11", "dst12", "dst13", "dst14", "dst15",
+            "DAC_A",
+            "DAC_B",
+            "SCOPE_A",
+            "SCOPE_B",
+            "SCOPE_C",
+            "SCOPE_D",
+            "dst06",
+            "dst07",
+            "SUM_A",
+            "SUM_B",
+            "dst10",
+            "dst11",
+            "dst12",
+            "dst13",
+            "dst14",
+            "dst15",
         ]
 
         def connect(self) -> bool:
             from chameleon.modules.router import Router as _Router
+
             self._hw: _Router = self._parent._dev.router
             return True
 
@@ -217,81 +234,97 @@ class chameleon_basic(Device):
         @api_property(choices=_SRC_CHOICES, doc="Signal source for DAC A output")
         def sel_dac_a(self) -> str:
             from chameleon.modules.router import Router as _R
+
             return self._idx_to_src(self._hw.sel[_R.DST_DAC_A])
 
         @sel_dac_a.setter
         def sel_dac_a(self, v: str) -> None:
             from chameleon.modules.router import Router as _R
+
             self._hw.sel[_R.DST_DAC_A] = self._src_to_idx(v)
 
         @api_property(choices=_SRC_CHOICES, doc="Signal source for DAC B output")
         def sel_dac_b(self) -> str:
             from chameleon.modules.router import Router as _R
+
             return self._idx_to_src(self._hw.sel[_R.DST_DAC_B])
 
         @sel_dac_b.setter
         def sel_dac_b(self, v: str) -> None:
             from chameleon.modules.router import Router as _R
+
             self._hw.sel[_R.DST_DAC_B] = self._src_to_idx(v)
 
         @api_property(choices=_SRC_CHOICES, doc="Signal source for Scope channel A")
         def sel_scope_a(self) -> str:
             from chameleon.modules.router import Router as _R
+
             return self._idx_to_src(self._hw.sel[_R.DST_SCOPE_A])
 
         @sel_scope_a.setter
         def sel_scope_a(self, v: str) -> None:
             from chameleon.modules.router import Router as _R
+
             self._hw.sel[_R.DST_SCOPE_A] = self._src_to_idx(v)
 
         @api_property(choices=_SRC_CHOICES, doc="Signal source for Scope channel B")
         def sel_scope_b(self) -> str:
             from chameleon.modules.router import Router as _R
+
             return self._idx_to_src(self._hw.sel[_R.DST_SCOPE_B])
 
         @sel_scope_b.setter
         def sel_scope_b(self, v: str) -> None:
             from chameleon.modules.router import Router as _R
+
             self._hw.sel[_R.DST_SCOPE_B] = self._src_to_idx(v)
 
         @api_property(choices=_SRC_CHOICES, doc="Signal source for Scope channel C")
         def sel_scope_c(self) -> str:
             from chameleon.modules.router import Router as _R
+
             return self._idx_to_src(self._hw.sel[_R.DST_SCOPE_C])
 
         @sel_scope_c.setter
         def sel_scope_c(self, v: str) -> None:
             from chameleon.modules.router import Router as _R
+
             self._hw.sel[_R.DST_SCOPE_C] = self._src_to_idx(v)
 
         @api_property(choices=_SRC_CHOICES, doc="Signal source for Scope channel D")
         def sel_scope_d(self) -> str:
             from chameleon.modules.router import Router as _R
+
             return self._idx_to_src(self._hw.sel[_R.DST_SCOPE_D])
 
         @sel_scope_d.setter
         def sel_scope_d(self, v: str) -> None:
             from chameleon.modules.router import Router as _R
+
             self._hw.sel[_R.DST_SCOPE_D] = self._src_to_idx(v)
 
         @api_property(choices=_SRC_CHOICES, doc="Signal source for SumBlock input A")
         def sel_sum_a(self) -> str:
             from chameleon.modules.router import Router as _R
+
             return self._idx_to_src(self._hw.sel[_R.DST_SUM_A])
 
         @sel_sum_a.setter
         def sel_sum_a(self, v: str) -> None:
             from chameleon.modules.router import Router as _R
+
             self._hw.sel[_R.DST_SUM_A] = self._src_to_idx(v)
 
         @api_property(choices=_SRC_CHOICES, doc="Signal source for SumBlock input B")
         def sel_sum_b(self) -> str:
             from chameleon.modules.router import Router as _R
+
             return self._idx_to_src(self._hw.sel[_R.DST_SUM_B])
 
         @sel_sum_b.setter
         def sel_sum_b(self, v: str) -> None:
             from chameleon.modules.router import Router as _R
+
             self._hw.sel[_R.DST_SUM_B] = self._src_to_idx(v)
 
         @api_command(
@@ -326,7 +359,9 @@ class chameleon_basic(Device):
         def sample_b(self) -> int:
             return int(self._hw.sample_b)
 
-        @api_property(doc="Bypass equalization filter on channel A (True = bypass, default)")
+        @api_property(
+            doc="Bypass equalization filter on channel A (True = bypass, default)"
+        )
         def bypass_a(self) -> bool:
             return self._hw.bypass_a
 
@@ -334,7 +369,9 @@ class chameleon_basic(Device):
         def bypass_a(self, v: bool) -> None:
             self._hw.bypass_a = v
 
-        @api_property(doc="Bypass equalization filter on channel B (True = bypass, default)")
+        @api_property(
+            doc="Bypass equalization filter on channel B (True = bypass, default)"
+        )
         def bypass_b(self) -> bool:
             return self._hw.bypass_b
 
@@ -345,7 +382,7 @@ class chameleon_basic(Device):
     # -----------------------------------------------------------------------
 
     @api_device()
-    class asg(ChildDevice):
+    class asg_0(ChildDevice):
         """Arbitrary Signal Generator 0 — configurable waveform on the DAC path."""
 
         _DEV_ATTR: str = "asg_0"
@@ -355,7 +392,10 @@ class chameleon_basic(Device):
 
         def connect(self) -> bool:
             self._hw = getattr(self._parent._dev, self._DEV_ATTR)
-            self._frequency_hz = 1000.0
+            try:
+                self._frequency_hz = float(self._hw.frequency)
+            except Exception:
+                self._frequency_hz = 1000.0
             self._amplitude = 0.5
             self._waveform = "off"
             return True
@@ -373,7 +413,9 @@ class chameleon_basic(Device):
             if self._waveform not in ("off", "dc"):
                 self._apply_waveform()
 
-        @api_property(min=0.0, max=1.0, doc="Output amplitude as fraction of full scale (0–1)")
+        @api_property(
+            min=0.0, max=1.0, doc="Output amplitude as fraction of full scale (0–1)"
+        )
         def amplitude(self) -> float:
             return self._amplitude
 
@@ -395,11 +437,31 @@ class chameleon_basic(Device):
         def is_running(self) -> bool:
             return self._hw.is_running
 
+        @api_property(
+            doc="Size of waveform tabli in samples (affect which frequencies can be generated precisely)",
+            max=8192,
+        )
+        def table_size(self) -> int:
+            table_size_uint = self._hw.table_size
+            n_samples = (table_size_uint + 1) >> 16
+            return n_samples
+
+        @table_size.setter
+        def table_size(self, v: int) -> None:
+            n_samples = max(1, min(int(v), 8192))
+            self._hw.table_size = (n_samples << 16) - 1
+            if self._waveform not in ("off", "dc"):
+                self._apply_waveform()
+
         def _apply_waveform(self) -> None:
             if self._waveform == "sine":
-                self._hw.load_sine(self._frequency_hz, self._amplitude)
+                self._hw.load_sine(
+                    self._frequency_hz, self._amplitude, n_samples=self.table_size
+                )
             elif self._waveform == "ramp":
-                self._hw.load_ramp(self._frequency_hz, self._amplitude)
+                self._hw.load_ramp(
+                    self._frequency_hz, self._amplitude, n_samples=self.table_size
+                )
             elif self._waveform == "dc":
                 self._hw.load_dc(self._amplitude)
             else:
@@ -437,13 +499,15 @@ class chameleon_basic(Device):
     # -----------------------------------------------------------------------
 
     @api_device()
-    class asg_1(asg):
+    class asg_1(asg_0):
         """Arbitrary Signal Generator 1 — configurable waveform on the DAC path."""
+
         _DEV_ATTR: str = "asg_1"
 
     @api_device()
-    class asg_2(asg):
+    class asg_2(asg_0):
         """Arbitrary Signal Generator 2 — configurable waveform on the DAC path."""
+
         _DEV_ATTR: str = "asg_2"
 
     # -----------------------------------------------------------------------
@@ -480,21 +544,30 @@ class chameleon_basic(Device):
         """
 
         _TRIG_NAMES = [
-            "off", "sw",
-            "ch0_rise", "ch0_fall",
-            "ch1_rise", "ch1_fall",
-            "ch2_rise", "ch2_fall",
-            "ch3_rise", "ch3_fall",
-            "ext_rise", "ext_fall",
+            "off",
+            "sw",
+            "ch0_rise",
+            "ch0_fall",
+            "ch1_rise",
+            "ch1_fall",
+            "ch2_rise",
+            "ch2_fall",
+            "ch3_rise",
+            "ch3_fall",
+            "ext_rise",
+            "ext_fall",
         ]
 
         def connect(self) -> bool:
             from chameleon.modules.scope import Scope as _Scope
+
             self._hw: _Scope = self._parent._dev.scope
             self._Scope = _Scope
             return True
 
-        @api_property(min=1, max=131071, doc="Decimation factor (1 = 125 MSa/s full rate)")
+        @api_property(
+            min=1, max=131071, doc="Decimation factor (1 = 125 MSa/s full rate)"
+        )
         def decimation(self) -> int:
             return int(self._hw.decimation)
 
@@ -508,12 +581,18 @@ class chameleon_basic(Device):
 
         @api_property(
             choices=[
-                "off", "sw",
-                "ch0_rise", "ch0_fall",
-                "ch1_rise", "ch1_fall",
-                "ch2_rise", "ch2_fall",
-                "ch3_rise", "ch3_fall",
-                "ext_rise", "ext_fall",
+                "off",
+                "sw",
+                "ch0_rise",
+                "ch0_fall",
+                "ch1_rise",
+                "ch1_fall",
+                "ch2_rise",
+                "ch2_fall",
+                "ch3_rise",
+                "ch3_fall",
+                "ext_rise",
+                "ext_fall",
             ],
             doc="Trigger source",
         )
@@ -530,7 +609,9 @@ class chameleon_basic(Device):
             except ValueError:
                 self._hw.trig_source = 0
 
-        @api_property(min=-32768, max=32767, doc="Trigger threshold (16-bit signed ADC counts)")
+        @api_property(
+            min=-32768, max=32767, doc="Trigger threshold (16-bit signed ADC counts)"
+        )
         def trig_level(self) -> int:
             return int(self._hw.trig_level)
 
@@ -538,7 +619,9 @@ class chameleon_basic(Device):
         def trig_level(self, v: int) -> None:
             self._hw.trig_level = int(v)
 
-        @api_property(min=0, max=65535, doc="Trigger hysteresis band (ADC counts, unsigned)")
+        @api_property(
+            min=0, max=65535, doc="Trigger hysteresis band (ADC counts, unsigned)"
+        )
         def trig_hyst(self) -> int:
             return int(self._hw.trig_hyst)
 
@@ -546,13 +629,16 @@ class chameleon_basic(Device):
         def trig_hyst(self, v: int) -> None:
             self._hw.trig_hyst = int(v)
 
-        @api_property(min=1, max=16383, doc="Number of pre-trigger samples (post = 16384 − pre)")
+        @api_property(
+            min=1, max=16383, doc="Number of pre-trigger samples (post = 16384 − pre)"
+        )
         def pre_trig_len(self) -> int:
             return int(self._hw.pre_trig_len)
 
         @pre_trig_len.setter
         def pre_trig_len(self, v: int) -> None:
             from chameleon.modules.scope import BUF_DEPTH as _BD
+
             v = max(1, min(int(v), _BD - 1))
             self._hw.pre_trig_len = v
             self._hw.post_trig_len = _BD - v
@@ -571,13 +657,13 @@ class chameleon_basic(Device):
             except ValueError:
                 ts_idx = 1  # sw = immediate trigger
             hw.trig_source = ts_idx
-            hw.trig_level  = int(self._cache.get("trig_level", 0))
-            hw.trig_hyst   = int(self._cache.get("trig_hyst", 20))
-            hw.decimation  = max(1, int(self._cache.get("decimation", 1)))
+            hw.trig_level = int(self._cache.get("trig_level", 0))
+            hw.trig_hyst = int(self._cache.get("trig_hyst", 20))
+            hw.decimation = max(1, int(self._cache.get("decimation", 1)))
 
         @api_command(
             doc="Arm scope and wait for capture. Returns time-ordered 4-channel data "
-                "(keys: t, ch0–ch3, sample_rate_hz). timeout_s: max wait in seconds."
+            "(keys: t, ch0–ch3, sample_rate_hz). timeout_s: max wait in seconds."
         )
         def capture(self, timeout_s: float = 5.0) -> Dict[str, Any]:
             self._apply_trig_config()
@@ -605,7 +691,9 @@ class chameleon_basic(Device):
             try:
                 await self._run_blocking_in_thread(self._apply_trig_config)
             except Exception as exc:
-                logger.warning("%s.scope: initial trig config failed: %s", self._parent.id, exc)
+                logger.warning(
+                    "%s.scope: initial trig config failed: %s", self._parent.id, exc
+                )
 
             try:
                 while True:
@@ -631,7 +719,10 @@ class chameleon_basic(Device):
                         reconnect_count += 1
                         logger.warning(
                             "%s.scope: connection lost in wave (reconnect %d/%d): %s",
-                            self._parent.id, reconnect_count, _MAX_RECONNECTS, exc,
+                            self._parent.id,
+                            reconnect_count,
+                            _MAX_RECONNECTS,
+                            exc,
                         )
                         if reconnect_count > _MAX_RECONNECTS:
                             raise RuntimeError(
@@ -643,11 +734,18 @@ class chameleon_basic(Device):
                             await self._run_blocking_in_thread(self._parent.connect)
                             self._hw = self._parent._dev.scope
                             await self._run_blocking_in_thread(self._apply_trig_config)
-                            logger.info("%s.scope: reconnected, resuming wave stream", self._parent.id)
+                            logger.info(
+                                "%s.scope: reconnected, resuming wave stream",
+                                self._parent.id,
+                            )
                             proto_errors = 0
                             timeout_count = 0
                         except Exception as reconnect_exc:
-                            logger.error("%s.scope: reconnect failed: %s", self._parent.id, reconnect_exc)
+                            logger.error(
+                                "%s.scope: reconnect failed: %s",
+                                self._parent.id,
+                                reconnect_exc,
+                            )
 
                     except Exception as exc:
                         msg = str(exc).lower()
@@ -657,19 +755,25 @@ class chameleon_basic(Device):
                                 logger.warning(
                                     "%s.scope: capture timeout #%d (trig_source=%r) — "
                                     "retrying; change trig_source to 'sw' for free-running",
-                                    self._parent.id, timeout_count,
+                                    self._parent.id,
+                                    timeout_count,
                                     self._cache.get("trig_source", "?"),
                                 )
                             await asyncio.sleep(0.2)
                             try:
-                                await self._run_blocking_in_thread(self._apply_trig_config)
+                                await self._run_blocking_in_thread(
+                                    self._apply_trig_config
+                                )
                             except Exception:
                                 pass
                         else:
                             proto_errors += 1
                             logger.warning(
                                 "%s.scope: protocol/hardware error (%d/%d): %s",
-                                self._parent.id, proto_errors, _MAX_PROTO_RETRIES, exc,
+                                self._parent.id,
+                                proto_errors,
+                                _MAX_PROTO_RETRIES,
+                                exc,
                             )
                             if proto_errors >= _MAX_PROTO_RETRIES:
                                 raise RuntimeError(
@@ -678,7 +782,9 @@ class chameleon_basic(Device):
                                 ) from exc
                             await asyncio.sleep(0.5)
                             try:
-                                await self._run_blocking_in_thread(self._apply_trig_config)
+                                await self._run_blocking_in_thread(
+                                    self._apply_trig_config
+                                )
                             except Exception:
                                 pass
 
@@ -688,6 +794,7 @@ class chameleon_basic(Device):
         @wave.plot()
         def wave_plot(self) -> Dict[str, Any]:
             from chameleon.modules.scope import BUF_DEPTH as _BD, CLOCK_FREQ as _CLK
+
             dec = int(self._hw.decimation)
             pre = int(self._hw.pre_trig_len)
             dt_us = dec / _CLK * 1e6
@@ -717,7 +824,9 @@ class chameleon_basic(Device):
             self._hw = self._parent._dev.sum_block
             return True
 
-        @api_property(min=-2.0, max=1.9999, doc="Gain applied to input A (Q1.14, +1.0 = unity)")
+        @api_property(
+            min=-2.0, max=1.9999, doc="Gain applied to input A (Q1.14, +1.0 = unity)"
+        )
         def gain_a(self) -> float:
             return self._hw.gain_a
 
@@ -725,7 +834,9 @@ class chameleon_basic(Device):
         def gain_a(self, v: float) -> None:
             self._hw.gain_a = float(v)
 
-        @api_property(min=-2.0, max=1.9999, doc="Gain applied to input B (Q1.14, +1.0 = unity)")
+        @api_property(
+            min=-2.0, max=1.9999, doc="Gain applied to input B (Q1.14, +1.0 = unity)"
+        )
         def gain_b(self) -> float:
             return self._hw.gain_b
 
