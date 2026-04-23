@@ -97,7 +97,9 @@ class ConfigureDialog(QDialog):
         self.port_edit = QLineEdit()
         self.max_workers_spin = QSpinBox()
         self.max_workers_spin.setRange(1, 128)
-        self.max_workers_spin.setToolTip("Thread pool size for blocking driver operations")
+        self.max_workers_spin.setToolTip(
+            "Thread pool size for blocking driver operations"
+        )
         server_layout.addRow("Host:", self.host_edit)
         server_layout.addRow("Port:", self.port_edit)
         server_layout.addRow("Max Workers:", self.max_workers_spin)
@@ -323,7 +325,9 @@ class ConfigureDialog(QDialog):
         self.influx_snapshot_interval_spin.setRange(0.1, 3600.0)
         self.influx_snapshot_interval_spin.setDecimals(1)
         self.influx_snapshot_interval_spin.setSuffix(" s")
-        influx_tuning_layout.addRow("Snapshot interval:", self.influx_snapshot_interval_spin)
+        influx_tuning_layout.addRow(
+            "Snapshot interval:", self.influx_snapshot_interval_spin
+        )
 
         influx_layout.addWidget(influx_tuning_group)
 
@@ -532,7 +536,9 @@ class ConfigureDialog(QDialog):
             else str(LABHUB_DIR)
         )
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "Select influxd executable", start_dir,
+            self,
+            "Select influxd executable",
+            start_dir,
             "Executable (influxd.exe influxd);;All Files (*)",
         )
         if file_path:
@@ -558,7 +564,9 @@ class ConfigureDialog(QDialog):
         current = (self.guis_table.item(row, 2) or QTableWidgetItem("")).text()
         start_dir = current if current else str(LABHUB_DIR)
         folder_path = QFileDialog.getExistingDirectory(
-            self, "Select GUI dist folder", start_dir,
+            self,
+            "Select GUI dist folder",
+            start_dir,
         )
         if folder_path:
             self.guis_table.setItem(row, 2, QTableWidgetItem(folder_path))
@@ -607,13 +615,21 @@ class ConfigureDialog(QDialog):
         # Custom GUIs
         cfg.custom_guis = []
         for row in range(self.guis_table.rowCount()):
-            device_id = (self.guis_table.item(row, 0) or QTableWidgetItem("")).text().strip()
-            route = (self.guis_table.item(row, 1) or QTableWidgetItem("")).text().strip()
+            device_id = (
+                (self.guis_table.item(row, 0) or QTableWidgetItem("")).text().strip()
+            )
+            route = (
+                (self.guis_table.item(row, 1) or QTableWidgetItem("")).text().strip()
+            )
             dist = (self.guis_table.item(row, 2) or QTableWidgetItem("")).text().strip()
             if device_id and route and dist:
-                cfg.custom_guis.append(CustomGuiEntry(
-                    device_id=device_id, route=route, dist=dist,
-                ))
+                cfg.custom_guis.append(
+                    CustomGuiEntry(
+                        device_id=device_id,
+                        route=route,
+                        dist=dist,
+                    )
+                )
 
         # Re-resolve paths and update convenience attribute
         cfg._resolve_paths()
@@ -911,7 +927,7 @@ class Launcher:
         except Exception:
             return False
 
-    def _wait_server_ready(self, timeout=20.0):
+    def _wait_server_ready(self, timeout=60.0):
         """Wait until server responds or process dies. Returns (ok, reason_str)."""
         t0 = time.monotonic()
         paths = ["/api/v2/devices", "/docs"]
@@ -967,31 +983,34 @@ class Launcher:
         try:
             self.proc = subprocess.Popen(cmd, cwd=cwd, env=env)
 
-            ok, reason = self._wait_server_ready(timeout=20.0)
+            # Server starts accepting HTTP immediately; devices connect in the background.
+            # Use a short timeout — if the server process crashes it won't respond at all.
+            ok, reason = self._wait_server_ready(timeout=15.0)
             if ok:
                 self.tray.setIcon(self.icon_green)
                 self.tray.setToolTip("LabHub: running")
                 self.tray.showMessage(
                     "LabHub", "Server started successfully", self.icon_green, 1200
                 )
-            else:
-                try:
-                    if self.proc and self.proc.poll() is None:
-                        self.proc.terminate()
-                        self.proc.wait(timeout=3)
-                except Exception:
-                    try:
-                        if self.proc and self.proc.poll() is None:
-                            self.proc.kill()
-                    except Exception:
-                        pass
+            elif self.proc and self.proc.poll() is not None:
+                # Process exited — genuine failure
                 self.tray.setIcon(self.icon_red)
                 self.tray.setToolTip("LabHub: stopped")
                 self.tray.showMessage(
                     "LabHub",
-                    f"Failed to start server ({reason}).",
+                    f"Server process exited unexpectedly ({reason}).",
                     QSystemTrayIcon.Critical,
                     6000,
+                )
+            else:
+                # Process still running but not responding — show warning but keep it alive
+                self.tray.setIcon(self.icon_green)
+                self.tray.setToolTip("LabHub: running (slow startup)")
+                self.tray.showMessage(
+                    "LabHub",
+                    "Server is running but took longer than expected to respond.",
+                    QSystemTrayIcon.Warning,
+                    4000,
                 )
 
         except Exception as e:

@@ -40,10 +40,58 @@ init_logging(level=server_cfg.logging.level, log_file=server_cfg.logging.file)
 logger = logging.getLogger("labhub.main")
 
 
+async def _background_device_startup() -> None:
+    """Connect all devices, start polling, InfluxDB, and profile monitor.
+
+    Runs as a background asyncio task so the HTTP server becomes reachable
+    immediately after the lock is acquired.  Devices that take a long time
+    to connect (or are unreachable) show as 'connecting'/'disconnected' in
+    the GUI without blocking server startup.
+    """
+    global influx_writer, influx_monitor
+
+    try:
+        cfg = load_config(str(server_cfg.devices_path))
+        await manager.initialize_devices(cfg)
+
+        await manager.start_polling()
+        logger.info("Device polling started")
+
+        influx_cfg = server_cfg.to_influx_cfg()
+        if influx_cfg.enabled:
+            logger.info("Initializing InfluxDB integration...")
+            try:
+                influx_writer = InfluxWriter(influx_cfg)
+                await influx_writer.start()
+                manager.influx = influx_writer
+                influx_monitor = InfluxStateMonitor(
+                    influx_writer, manager, influx_cfg.snapshot_interval
+                )
+                await influx_monitor.start()
+                logger.info("InfluxDB integration ready")
+            except Exception as e:
+                logger.warning(f"InfluxDB failed to initialize: {e} - continuing without telemetry")
+
+        await asyncio.sleep(2.0)  # Allow polling to populate initial cache
+
+        profile_path = str(server_cfg.profile_path)
+        await profile_monitor.load_profile(profile_path)
+        await profile_monitor.start()
+        logger.info(f"Profile monitor started (path={profile_path})")
+
+        logger.info("LabHub device startup complete")
+
+    except asyncio.CancelledError:
+        logger.info("Device startup cancelled (server shutting down)")
+        raise
+    except Exception as e:
+        logger.error(f"Device startup failed: {e}", exc_info=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """FastAPI lifespan context manager for startup and shutdown."""
-    global lock, profile_monitor, influx_writer, influx_monitor, macro_manager, repl_manager
+    global lock, macro_manager, repl_manager
 
     # --- Startup ---
     logger.info("LabHub server starting...")
@@ -64,50 +112,10 @@ async def lifespan(app: FastAPI):
             f"Another LabHub instance is already running for: {server_config_path}"
         )
 
-    # 2. Initialize devices from config
-    cfg = load_config(str(server_cfg.devices_path))
-    await manager.initialize_devices(cfg)
-
-    # 3. Start property polling
-    await manager.start_polling()
-    logger.info("Device polling started")
-
-    # 4. Initialize InfluxDB integration (from server.yaml)
-    influx_cfg = server_cfg.to_influx_cfg()
-    if influx_cfg.enabled:
-        logger.info("Initializing InfluxDB integration...")
-        try:
-            influx_writer = InfluxWriter(influx_cfg)
-            await influx_writer.start()
-
-            # Wire to manager for property/command hooks
-            manager.influx = influx_writer
-
-            # Start state snapshot monitor
-            influx_monitor = InfluxStateMonitor(
-                influx_writer, manager, influx_cfg.snapshot_interval
-            )
-            await influx_monitor.start()
-
-            logger.info("InfluxDB integration ready")
-        except Exception as e:
-            logger.warning(
-                f"InfluxDB failed to initialize: {e} - continuing without telemetry"
-            )
-
-    # 5. Initialize profile monitor (for live state backup)
-    await asyncio.sleep(2.0)  # Allow polling to populate initial states
-
-    profile_path = str(server_cfg.profile_path)
-    await profile_monitor.load_profile(profile_path)
-    await profile_monitor.start()
-
-    logger.info(f"Profile monitor started (path={profile_path})")
-
-    # Set profile_monitor for admin endpoints
+    # 2. Wire profile monitor to admin endpoints (available immediately, before devices connect)
     admin.profile_monitor = profile_monitor
 
-    # 6. Initialize macro manager (optional)
+    # 3. Initialize macro manager (fast, no hardware)
     macros_path = server_cfg.macros_path
     if macros_path:
         macro_manager = MacroManager(macros_path)
@@ -115,19 +123,32 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("Macro manager not configured")
 
-    # 7. Initialize REPL session manager
+    # 4. Initialize REPL session manager (fast, no hardware)
     project_root = Path(__file__).parent.parent
     repl_manager = ReplSessionManager(
         server_cfg.python_path, project_root, macros_path, server_cfg.startup_folder_path
     )
     logger.info(f"REPL session manager initialized (startup_folder={server_cfg.startup_folder_path})")
 
-    logger.info("LabHub server ready")
+    # 5. Start device initialization as a background task.
+    #    The HTTP server becomes reachable immediately; devices connect asynchronously
+    #    and show a 'connecting' status while their connection is being established.
+    _init_task = asyncio.create_task(_background_device_startup())
+
+    logger.info("LabHub server ready (devices connecting in background)")
 
     yield  # Server is running
 
     # --- Shutdown ---
     logger.info("LabHub server shutting down...")
+
+    # Cancel background device startup if still in progress
+    if not _init_task.done():
+        _init_task.cancel()
+        try:
+            await _init_task
+        except (asyncio.CancelledError, Exception):
+            pass
 
     # Stop all REPL sessions first
     if repl_manager:

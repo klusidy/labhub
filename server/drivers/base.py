@@ -256,12 +256,21 @@ class Device:
         Exceptions raised by connect() are caught and treated as a failed
         connection (status → disconnected) so the device is always added to
         the manager even when hardware is unavailable.
+
+        Respects a ``connect_timeout`` key in device options (seconds, default 30).
         """
+        self._status = "connecting"
+        timeout = float(self.options.get("connect_timeout", 30.0)) if self.options else 30.0
         try:
             if asyncio.iscoroutinefunction(self.connect):
-                success = await self.connect()
+                coro = self.connect()
             else:
-                success = await self._run_blocking_in_thread(self.connect)
+                coro = self._run_blocking_in_thread(self.connect)
+            success = await asyncio.wait_for(coro, timeout=timeout)
+        except asyncio.TimeoutError:
+            logger.error(f"{self.id}: connect() timed out after {timeout:.0f}s")
+            self._status = "disconnected"
+            return
         except Exception as e:
             logger.error(f"{self.id}: connect() raised: {e}", exc_info=True)
             self._status = "disconnected"
