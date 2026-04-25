@@ -18,14 +18,13 @@ Key patterns demonstrated:
 """
 
 from __future__ import annotations
-import asyncio
 import logging
+import threading
 import time
-from typing import List, AsyncIterator, Dict, Any, Optional, TYPE_CHECKING
-from pandas import *
+from typing import Dict, Any, Optional, TYPE_CHECKING
 from .PAX1000LTM import *
-import numpy as np
 import pyvisa
+import os
 
 from ..base import Device, api_device, api_command, api_property, api_data, Frame
 
@@ -33,6 +32,10 @@ if TYPE_CHECKING:
     from ...device_manager import DeviceManager
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_SAVE_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "data", "pax")
+)
 
 
 @api_device()  # No arguments - metadata inferred from class
@@ -73,13 +76,15 @@ class pax(Device):  # Class name MUST match filename exactly
             dev_id, options, manager
         )   
         self.polarimeter = None
-        self.polarimeterLTM = None
+        self.polarimeterLTM: Optional[PolarimeterLTM] = None
         self.interval = 0.05
         self.hw_number_of_time_steps = 1000
+        self._continuous_measurement_thread = None
         # Cached metadata filled on successful connect.
         self.hw_resource = ""
         self.hw_model = ""
         self.hw_serial_number = ""
+        self.alighnment_assistance_active = False
         # Do include this base class initialization!
 
 
@@ -91,6 +96,7 @@ class pax(Device):  # Class name MUST match filename exactly
         Returns:
             bool: True if connection was successful, False otherwise.
         """
+        
         resource_list = pyvisa.ResourceManager().list_resources()
         if not resource_list:
             print("No devices found!")
@@ -103,26 +109,27 @@ class pax(Device):  # Class name MUST match filename exactly
         )
 
         self.polarimeter = Polarimeter(resource, 9, 0.000000532)  # measureMode:9, wavelength: 532nm
-        self.polarimeter.connectDevice()
-        if not self.polarimeter.handler.value:
+        polarimeter = self.polarimeter
+        try:      
+            self.polarimeter.connectDevice()
+            if not self.polarimeter.handler.value:
+                self.polarimeter = None
+                return False
+        except Exception as exc:
+            logger.error(f"Failed to connect to polarimeter: {exc}")
             self.polarimeter = None
             return False
 
         self.hw_resource = resource.decode("utf-8") if isinstance(resource, bytes) else str(resource)
         self.hw_model = (
-            self.polarimeter.modelName.value.decode("utf-8", errors="ignore")
-            if self.polarimeter.modelName and self.polarimeter.modelName.value
-            else ""
-        )
-        self.hw_serial_number = (
-            self.polarimeter.serialNumber.value.decode("utf-8", errors="ignore")
-            if self.polarimeter.serialNumber and self.polarimeter.serialNumber.value
+            self.polarimeter.modelName.value.decode("utf-8", errors="ignore") # type: ignore
+            if self.polarimeter.modelName and self.polarimeter.modelName.value # type: ignore
             else ""
         )
 
         # PolarimeterLTM expects (handler, sampleStage, ...). We do not use a stage here.
         self.polarimeterLTM = PolarimeterLTM(
-            self.polarimeter.handler,
+            self.polarimeter.handler, # type: ignore
             None,
             0,
             20,
@@ -132,10 +139,26 @@ class pax(Device):  # Class name MUST match filename exactly
 
     async def disconnect(self) -> bool:
         if self.polarimeter:
+            if self.polarimeterLTM:
+                self.polarimeterLTM.stop = True
+            if self._continuous_measurement_thread and self._continuous_measurement_thread.is_alive():
+                self._continuous_measurement_thread.join(timeout=1.0)
+            self._continuous_measurement_thread = None
             self.polarimeter.closeDevice()
             self.polarimeter = None
+            self.polarimeterLTM = None
             return True
         return False
+
+    async def apply_properties(self, properties: dict) -> dict:
+        filtered_properties = {
+            name: value
+            for name, value in properties.items()
+            if name != "polarimeter_measure_time"
+        }
+        if not filtered_properties:
+            return await self.read_state()
+        return await super().apply_properties(filtered_properties)
 
     # --- Properties ----------------------------------------------------------
     # Properties represent device state that can be read (and optionally written).
@@ -165,71 +188,29 @@ class pax(Device):  # Class name MUST match filename exactly
         return self.hw_model
 
     @api_property()
-    def polarimeter_serial_number(self) -> str:
-        """Serial number of the polarimeter"""
-        return self.hw_serial_number
+    def polarimeter_external_power_connected(self) -> bool:
+        """Whether the external power supply is connected."""
+        if not self.polarimeter:
+            return False
+        return self.polarimeter.hasExternalPowerSupply()
 
     @api_property()
-    def polarimeter_wavelength(self) -> float:
-        """wavelenght of the polarimeter"""
-        if not self.polarimeter:
-            return 0.0
-        wavelength = c_double()
-        lib.TLPAX_getWavelength(self.polarimeter.handler, byref(wavelength))
-        return wavelength.value
-    
-    @polarimeter_wavelength.setter
-    def polarimeter_wavelength(self, value: float):
-        if not self.polarimeter:
-            raise RuntimeError("Polarimeter is not connected")
-        else:
-            self.polarimeter.setWavelength(value)
-    
-    @api_property(min = 1, max = 9, step= 1)
-    def polarimeter_measure_mode(self) -> int:
-        if not self.polarimeter:
-            return 0
-        measure_mode = c_int()
-        lib.TLPAX_getMeasurementMode(self.polarimeter.handler, byref(measure_mode))
-        return measure_mode.value
-    
-    @polarimeter_measure_mode.setter
-    def polarimeter_measure_mode(self, value: int):
-        if not self.polarimeter:
-            raise RuntimeError("Polarimeter is not connected")
-        self.polarimeter.setMeasureMode(value)
-    
-    @api_property(min=0.01, max=1.0, step=0.01, unit="s")
-    def polarimeter_measurement_interval(self) -> float:
-        return self.interval
-    
-    @polarimeter_measurement_interval.setter
-    def polarimeter_measurement_interval(self, value: float) -> None:
-        self.interval = value
-
-
-    @api_property(min=1, max=1_000_000, step=1)
-    def number_of_steps(self) -> int:
-        """Number of samples to generate"""
-        return self.hw_number_of_time_steps
-
-    @number_of_steps.setter
-    def number_of_steps(self, value: int):
-        self.hw_number_of_time_steps = value
-
-    @api_property()
-    def last_scan_id(self) -> int:
+    def last_scan_id(self) -> str:
         """ID of the last scan taken by the polarimeter."""
         if not self.polarimeterLTM:
-            return -1
-        return self.polarimeterLTM.lastestScanID
+            return "-1"
+        if self.polarimeterLTM.lastestScanID < 256:
+            return "No measurements taken yet"
+        return str(self.polarimeterLTM.lastestScanID)
     
     @api_property()
-    def number_of_measurements_stored(self) -> int:
+    def number_of_measurements_stored(self) -> str:
         """Number of measurements currently stored in the polarimeter's memory."""
         if not self.polarimeterLTM:
-            return -1
-        return self.polarimeterLTM.lastestScanID - 255
+            return "-1"
+        if self.polarimeterLTM.lastestScanID < 256:
+            return "No measurements stored yet"
+        return str(self.polarimeterLTM.lastestScanID - 255)
     
     @api_property()
     def latest_measurement(self) -> str:
@@ -260,6 +241,91 @@ class pax(Device):  # Class name MUST match filename exactly
         return self.polarimeter is not None       
 
     @api_command()
+    def run_alignment_assistance(
+        self,
+        interval: float = 0.1,
+        aceptable_alighment: float = 98.0,
+        num_of_consecutive_aceptable_values: int = 5,
+    ) -> str:
+        if not self.polarimeterLTM:
+            return "Polarimeter is not connected"
+
+        aceptable_values = 0
+        list_of_alighment_values = []
+        while aceptable_values < num_of_consecutive_aceptable_values:
+            measurementid = self.polarimeterLTM.takeOneMeasurement()
+            measurement = self.polarimeterLTM.readFromScanID(measurementid)
+            alighment_value = measurement[2] * 100
+            if alighment_value >= aceptable_alighment:
+                aceptable_values += 1
+                list_of_alighment_values.append(round(alighment_value, 2))
+            else:
+                aceptable_values = 0
+                list_of_alighment_values = []
+            time.sleep(interval)
+
+        return f"Alignment assistance completed. List of the last {num_of_consecutive_aceptable_values} alignment values: {list_of_alighment_values}"
+
+    @api_command()
+    def save_by_measurement_id(
+        self,
+        overwrite_existing_files: bool = False,
+        start_scan_id: int = 255,
+        end_scan_id: int = 255,
+        filename: str = "measurements.csv",
+        filepath: Optional[str] = None,
+    ) -> str:
+        if not self.polarimeterLTM:
+            return "Polarimeter is not connected"
+        try:
+            normalized_start_scan_id = int(start_scan_id)
+            normalized_end_scan_id = int(end_scan_id)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("start_scan_id and end_scan_id must be integers >= 255") from exc
+
+        if normalized_start_scan_id < 255 or normalized_end_scan_id < 255:
+            raise ValueError("start_scan_id and end_scan_id must be >= 255")
+        if normalized_start_scan_id > normalized_end_scan_id:
+            raise ValueError("start_scan_id must be less than or equal to end_scan_id")
+
+        measurements = []
+        for scan_id in range(normalized_start_scan_id, normalized_end_scan_id + 1):
+            measurement = self.polarimeterLTM.readFromScanID(scan_id)
+            if measurement is not None:
+                measurements.append((scan_id, measurement))
+        if not measurements:
+            return f"No measurements found between scan ID {normalized_start_scan_id} and {normalized_end_scan_id}"
+
+        save_dir = os.path.abspath(filepath) if filepath else DEFAULT_SAVE_DIR
+        os.makedirs(save_dir, exist_ok=True)
+        if overwrite_existing_files:
+            full_path = os.path.join(save_dir, filename)
+            overwrite_warning = "file {filename} already existed and was be overwritten. " if overwrite_existing_files else ""
+        
+        elif not overwrite_existing_files and os.path.exists(os.path.join(save_dir, filename)):
+            base, ext = os.path.splitext(filename)
+            counter = 1
+            while os.path.exists(os.path.join(save_dir, f"{base}_{counter}{ext}")):
+                counter += 1
+            filename = f"{base}_{counter}{ext}"
+            full_path = os.path.join(save_dir, filename)
+            overwrite_warning = f"file {filename} already exists. Saving as {filename} instead. "
+        
+        if os.path.exists(full_path):
+            overwrite_warning = f"Warning: existing file was overwritten at {full_path}. "
+            logger.warning(overwrite_warning.strip())
+
+        with open(full_path, "w") as f:
+            f.write("scan_id,measurement\n")
+            for scan_id, measurement in measurements:
+                f.write(f"{scan_id},{measurement}\n")
+
+        return (
+            f"{overwrite_warning}"
+            f"Measurements from scan ID {normalized_start_scan_id} to {normalized_end_scan_id} "
+            f"saved to {full_path}"
+        )
+    @api_command()
     def take_one_measurement(self) -> str:
         if not self.polarimeter or not self.polarimeterLTM:
             return "Polarimeter is not connected"
@@ -268,12 +334,12 @@ class pax(Device):  # Class name MUST match filename exactly
         return (f"Measurement with id {measurementid} taken. these are the results: {measurement}")
     
     @api_command()
-    def long_scan(
+    def long_scan_by_time(
         self,
-        measure_time: Optional[Any] = None, interval_s: Optional[Any] = None, clear_memory: bool = True) -> str:
+        measure_time: Optional[float] = None, interval_s: Optional[float] = None, clear_memory: bool = True) -> str:
         error_value: int = 0
         if not self.polarimeter or not self.polarimeterLTM:
-            raise RuntimeError("Polarimeter is not connected")
+            return "Polarimeter is not connected"
 
         normalized_measure_time: Optional[int] = None
         normalized_interval_s: Optional[float] = None
@@ -310,9 +376,9 @@ class pax(Device):  # Class name MUST match filename exactly
         if clear_memory:
             self.polarimeterLTM.clearMemory()
 
-        started_at = time.time()
+        started_at = time.perf_counter()
         self.polarimeterLTM.measure()
-        elapsed = time.time() - started_at
+        elapsed = time.perf_counter() - started_at
 
         latest_scan_id = self.polarimeterLTM.lastestScanID
         latest_measurement = self.polarimeterLTM.readFromScanID(latest_scan_id)
@@ -325,19 +391,142 @@ class pax(Device):  # Class name MUST match filename exactly
             f"latest_scan_id={latest_scan_id}, "
             f"latest_measurement={latest_measurement}"
         )
-     
+    
+    @api_command()
+    def long_scan_by_steps(self, num_of_steps: int, measurement_interval : float, clear_memory: bool = True) -> str:
+        if not self.polarimeter or not self.polarimeterLTM:
+            return "Polarimeter is not connected"
+        try:
+            normalized_num_of_steps = int(num_of_steps)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("num_of_steps must be an integer > 0") from exc
+
+        try:
+            normalized_measurement_interval = float(measurement_interval)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("measurement_interval must be a number > 0") from exc
+
+        if normalized_num_of_steps <= 0:
+            raise ValueError("num_of_steps must be > 0")
+        if normalized_measurement_interval <= 0:
+            raise ValueError("measurement_interval must be > 0")
+
+        total_measure_time = normalized_num_of_steps * normalized_measurement_interval
+
+        self.hw_number_of_time_steps = normalized_num_of_steps
+        self.interval = normalized_measurement_interval
+        self.polarimeterLTM.interval = self.interval
+
+        if clear_memory:
+            self.polarimeterLTM.clearMemory()
+
+        previous_scan_id = self.polarimeterLTM.lastestScanID
+        acquired_steps = 0
+        poll_delay = min(self.interval / 10, 0.01)
+        step_timeout = max(self.interval * 3, 0.2)
+
+        started_at = time.perf_counter()
+        next_step_at = started_at
+        while acquired_steps < normalized_num_of_steps:
+            deadline = time.perf_counter() + step_timeout
+            while time.perf_counter() < deadline:
+                current_scan_id = self.polarimeterLTM.takeOneMeasurement()
+                if current_scan_id > previous_scan_id:
+                    previous_scan_id = current_scan_id
+                    acquired_steps += 1
+                    break
+                time.sleep(poll_delay)
+            else:
+                elapsed = time.perf_counter() - started_at
+                return (
+                    "Long scan timed out before collecting all requested measurements. "
+                    f"requested_steps={normalized_num_of_steps}, "
+                    f"acquired_steps={acquired_steps}, "
+                    f"interval={self.interval:.3f}s, "
+                    f"elapsed={elapsed:.3f}s"
+                )
+
+            # Keep effective acquisition cadence close to requested interval.
+            next_step_at += normalized_measurement_interval
+            remaining = next_step_at - time.perf_counter()
+            if remaining > 0:
+                time.sleep(remaining)
+
+        elapsed = time.perf_counter() - started_at
+
+        latest_scan_id = self.polarimeterLTM.lastestScanID
+        latest_measurement = self.polarimeterLTM.readFromScanID(latest_scan_id)
+
+        return (
+            "Long scan completed. "
+            f"num_of_steps={normalized_num_of_steps}, "
+            f"acquired_steps={acquired_steps}, "
+            f"measure_time={total_measure_time:.3f}s, "
+            f"interval={self.interval:.3f}s, "
+            f"elapsed={elapsed:.3f}s, "
+            f"latest_scan_id={latest_scan_id}, "
+            f"latest_measurement={latest_measurement}"
+        )
+        
+
+    @api_command()
+    def read_measurement_by_id(self, scan_id: int) -> str:
+        """Read a specific measurement from the polarimeter's memory by scan ID."""
+        if not self.polarimeterLTM:
+            return "Polarimeter is not connected"
+        try:
+            normalized_scan_id = int(scan_id)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("scan_id must be an integer >= 255") from exc
+
+        if normalized_scan_id < 255:
+            raise ValueError("scan_id must be >= 255")
+
+        measurement = self.polarimeterLTM.readFromScanID(normalized_scan_id)
+        if measurement is None:
+            return f"No measurement found with scan ID {normalized_scan_id}"
+        return f"Measurement for scan ID {normalized_scan_id}: {measurement}"
+    
     @api_command()
     def erase_all_measurements(self) -> str:
         if not self.polarimeter or not self.polarimeterLTM:
-            raise RuntimeError("Polarimeter is not connected")
+            return "Polarimeter is not connected"
         self.polarimeterLTM.clearMemory()
         return "All measurements erased from the device."
     
     @api_command()
-    def hello_world(self, name: str = "World", times: int = 1) -> str:
-        """Example command that takes an argument and returns a string."""
-        return f"Hello, {name}! This is {self.id}. (Called {times} times)"
+    def start_continuous_measurement(self, interval: float = 0.1) -> str:
+        if not self.polarimeter or not self.polarimeterLTM:
+            return "Polarimeter is not connected"
 
+        if self._continuous_measurement_thread and self._continuous_measurement_thread.is_alive():
+            return "Continuous measurement is already running"
+
+        self.polarimeterLTM.stop = False
+        self._continuous_measurement_thread = threading.Thread(
+            target=self.polarimeterLTM.measure_until_stopped,
+            args=(interval,),
+            daemon=True,
+        )
+        self._continuous_measurement_thread.start()
+        return "Continuous measurement started."
+    
+    @api_command()
+    def stop_continuous_measurement(self) -> str:
+        if not self.polarimeter or not self.polarimeterLTM:
+            return "Polarimeter is not connected"
+
+        if not self._continuous_measurement_thread or not self._continuous_measurement_thread.is_alive():
+            return "Continuous measurement is not running"
+
+        self.polarimeterLTM.stop = True
+        self._continuous_measurement_thread.join(timeout=max(self.interval * 2, 1.0))
+        if self._continuous_measurement_thread.is_alive():
+            return "Stop requested, but continuous measurement is still shutting down"
+
+        self._continuous_measurement_thread = None
+        return "Continuous measurement stopped."
+    
     @api_command()
     def delete_last_scan(self) -> str:
         """ Delete the most recent scan from the polarimeter's memory. """
@@ -346,8 +535,8 @@ class pax(Device):  # Class name MUST match filename exactly
         if self.polarimeterLTM.lastestScanID < 256:
             return "No measurements to delete"
         self.polarimeterLTM.delete_last_scan()
-        
-        return f"Deleted scan with ID {self.polarimeterLTM.lastestScanID + 1} from memory."
+        deleted_scan_id = self.polarimeterLTM.lastestScanID + 1
+        return f"Deleted scan with ID {deleted_scan_id} from memory."
 
 
 # === Additional Notes ========================================================
