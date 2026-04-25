@@ -9,7 +9,8 @@ Date: 20th December 2021
 '''
 
 import ctypes
-from ctypes import c_int, c_double, c_bool, c_char_p, c_ulong, byref
+from ctypes import c_int, c_double, c_bool, c_char_p, c_ulong, c_ushort, byref
+from multiprocessing.resource_sharer import stop
 import threading
 import time
 import csv
@@ -62,7 +63,7 @@ class Polarimeter:
         rm = pyvisa.ResourceManager()
         print("Devices found:")
         print(rm.list_resources())
-
+    
     def getNumOfDev(self):
         lib.TLPAX_findRsrc(self.handler, byref(self.deviceCount))
         print("Number of available devices: {}".format(self.deviceCount.value))
@@ -83,7 +84,7 @@ class Polarimeter:
             print("Device initialization succeed!")
         else:
             print("Error when initializing the device!")
-    
+
     def setMeasureMode(self,measureMode):
         lib.TLPAX_setMeasurementMode(self.handler, measureMode)
         time.sleep(1) # 1 second is necessary for waiting the device
@@ -98,6 +99,12 @@ class Polarimeter:
         lib.TLPAX_getWavelength(self.handler, byref(wavelength))
         print("The wavelength is set to be: {} m".format(wavelength.value))
 
+    def hasExternalPowerSupply(self):
+        """Return True when the external power supply is connected."""
+        connected = c_ushort()
+        lib.TLPAX_hasExternalPowerSupply(self.handler, byref(connected))
+        return bool(connected.value)
+
     def connectDevice(self):
         self.getNumOfDev()
         if int(self.deviceCount.value) == 0:
@@ -105,14 +112,17 @@ class Polarimeter:
             return
         self.getDevModel()
         if self.deviceAvailable.value == False:
-            print("Error, the device is not available! Probably another process is using it. Considering close that process.")
+            raise RuntimeError("Error, the device is not available! Probably another process is using it. Considering close that process.")
             return
         self.initDev()
         self.setMeasureMode(self.measureMode)
         self.setWavelength(self.wavelength)
-        
+
+
     def closeDevice(self):
-        lib.TLPAX_close(self.handler)
+        if self.handler.value:
+            lib.TLPAX_close(self.handler)
+        self.handler = c_ulong()
 
 
 class PolarimeterLTM:
@@ -148,6 +158,7 @@ class PolarimeterLTM:
         self.stageMinVelocity = 0
         self.stageAcceleration = 0
         self.stageMaxVelocity = 0
+        self.stop = False
 
         self.sync() # sync the time between timeStamp and Polarimeter time
         self.clearMemory() # clear memory first
@@ -269,6 +280,15 @@ class PolarimeterLTM:
             self.takeOneMeasurement()
             time.sleep(self.interval)
         print("Measure stopped.")
+
+    def measure_until_stopped(self, measure_interval=0.05):
+        """Take measurements until self.stop is changed to True."""
+        print("Infinite measure start...")
+        self.stop = False
+        while not self.stop:
+            self.takeOneMeasurement()
+            time.sleep(measure_interval)
+        print("Infinite measure stopped.")
 
     def takeOneMeasurement(self):
         """ Take one measurement, return its scanID """
