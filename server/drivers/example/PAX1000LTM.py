@@ -15,6 +15,7 @@ import threading
 import time
 import csv
 import os
+from typing import Dict, Any
 from ctypes import cdll
 
 # Try to load the DLL from the same directory as this script
@@ -281,15 +282,38 @@ class PolarimeterLTM:
             time.sleep(self.interval)
         print("Measure stopped.")
 
-    def measure_until_stopped(self, measure_interval=0.05):
+    def measure_until_stopped(self, measure_interval=0.05, delete = False):
         """Take measurements until self.stop is changed to True."""
         print("Infinite measure start...")
         self.stop = False
         while not self.stop:
             self.takeOneMeasurement()
+            if delete:
+                self.delete_last_scan()
             time.sleep(measure_interval)
         print("Infinite measure stopped.")
 
+    def alignment_assistance(self, measurement_data):
+        """Return the alignment assistance value as a ratio in the range 0.0 - 1.0.
+
+        The current SDK wrapper returns measurements as a list from readFromScanID,
+        where index 2 is DOP. Older or alternate integrations may pass a dict with
+        an "alignmentAID" field, so both shapes are supported.
+        """
+        if isinstance(measurement_data, dict):
+            if "alignmentAID" in measurement_data:
+                return float(measurement_data["alignmentAID"])
+            if "dop" in measurement_data:
+                return float(measurement_data["dop"])
+            raise ValueError("measurement_data dict must contain alignmentAID or dop")
+
+        if not isinstance(measurement_data, (list, tuple)):
+            raise TypeError("measurement_data must be a list, tuple, or dict")
+        if len(measurement_data) < 3:
+            raise ValueError("measurement_data must contain a DOP value at index 2")
+
+        return max(0.0, min(1.0, float(measurement_data[2])))
+    
     def takeOneMeasurement(self):
         """ Take one measurement, return its scanID """
         scanID = c_int()

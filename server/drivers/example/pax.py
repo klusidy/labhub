@@ -22,6 +22,8 @@ import logging
 import threading
 import time
 from typing import Dict, Any, Optional, TYPE_CHECKING
+
+from reactivex import start
 from .PAX1000LTM import *
 import pyvisa
 import os
@@ -243,35 +245,43 @@ class pax(Device):  # Class name MUST match filename exactly
     @api_command()
     def run_alignment_assistance(
         self,
+        delete_used_measurements: bool = True,
         interval: float = 0.1,
         aceptable_alighment: float = 98.0,
         num_of_consecutive_aceptable_values: int = 5,
-    ) -> str:
-        if not self.polarimeterLTM:
-            return "Polarimeter is not connected"
-
-        aceptable_values = 0
-        list_of_alighment_values = []
-        while aceptable_values < num_of_consecutive_aceptable_values:
-            measurementid = self.polarimeterLTM.takeOneMeasurement()
-            measurement = self.polarimeterLTM.readFromScanID(measurementid)
-            alighment_value = measurement[2] * 100
-            if alighment_value >= aceptable_alighment:
-                aceptable_values += 1
-                list_of_alighment_values.append(round(alighment_value, 2))
-            else:
-                aceptable_values = 0
-                list_of_alighment_values = []
-            time.sleep(interval)
-
-        return f"Alignment assistance completed. List of the last {num_of_consecutive_aceptable_values} alignment values: {list_of_alighment_values}"
+        timeout_s: float = 30.0,) -> str:
+        """returns a value between 0% and 100% that indicates how well the polarimeter is aligned. The higher the value, the better the alignment. """
+        self.alighnment_assistance_active = True
+        if not self.polarimeter or not self.polarimeterLTM:
+            self.alighnment_assistance_active = False
+            return f"Polarimeter is not connected"
+        start_time = time.perf_counter()
+        consecutive_aceptable_count = 0
+        num_of_measurements = 0
+        while time.perf_counter() - start_time < timeout_s and consecutive_aceptable_count < num_of_consecutive_aceptable_values:
+            if time.perf_counter() - start_time * num_of_measurements < interval:
+                time.sleep(0.01)
+                continue
+            measurement_id = self.polarimeterLTM.takeOneMeasurement()
+            num_of_measurements += 1
+            measurement = self.polarimeterLTM.readFromScanID(measurement_id)
+            alignment_value = self.polarimeterLTM.alignment_assistance(measurement)
+            if delete_used_measurements:
+                self.polarimeterLTM.delete_last_scan()
+            if alignment_value >= aceptable_alighment/100:
+                consecutive_aceptable_count += 1
+                if consecutive_aceptable_count >= num_of_consecutive_aceptable_values:
+                    self.alighnment_assistance_active = False
+                    return f"Alignment successful: {100 * alignment_value:.2f}% alignment achieved for {consecutive_aceptable_count} consecutive measurements."
+        else:
+            return f"Alignment assistance timed out after {timeout_s} seconds. Last measured alignment: {100 * alignment_value:.2f}%."
 
     @api_command()
     def save_by_measurement_id(
         self,
         overwrite_existing_files: bool = False,
         start_scan_id: int = 255,
-        end_scan_id: int = 255,
+        end_scan_id: int = 256,
         filename: str = "measurements.csv",
         filepath: Optional[str] = None,
     ) -> str:
