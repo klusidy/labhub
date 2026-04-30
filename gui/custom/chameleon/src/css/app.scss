@@ -1,0 +1,66 @@
+// Import Vue Flow base styles
+@import '@vue-flow/core/dist/style.css';
+@import '@vue-flow/core/dist/theme-default.css';
+@import '@vue-flow/controls/dist/style.css';
+
+// Dark theme overrides for Vue Flow
+.vue-flow__pane {
+  background: #1a1a1a;
+}
+
+.vue-flow__edge-path {
+  stroke: rgba(255, 255, 255, 0.4);
+  stroke-width: 2;
+}
+
+.vue-flow__edge.selected .vue-flow__edge-path {
+  stroke: #42a5f5;
+}
+
+.vue-flow__edge.animated .vue-flow__edge-path {
+  stroke-dasharray: 6;
+  animation: dashdraw 0.5s linear infinite;
+}
+
+@keyframes dashdraw {
+  from { stroke-dashoffset: 12; }
+}
+
+.vue-flow__handle {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+}
+
+.vue-flow__handle-left {
+  background: #78909c;
+}
+
+.vue-flow__handle-right {
+  background: #78909c;
+}
+
+.vue-flow__controls {
+  background: #2a2a2a;
+  border: 1px solid #444;
+  border-radius: 6px;
+
+  button {
+    background: #2a2a2a;
+    border-color: #444;
+    color: #ccc;
+
+    &:hover {
+      background: #383838;
+    }
+
+    svg {
+      fill: #ccc;
+    }
+  }
+}
+
+.vue-flow__minimap {
+  background: #1a1a1a;
+}
