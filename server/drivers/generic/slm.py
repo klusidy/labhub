@@ -103,6 +103,10 @@ class _trap(ChildDevice):
         self._trap_pattern_arr: np.ndarray | None = None
         self._overlay_arr: np.ndarray | None = None
 
+    async def _run_blocking_in_thread(self, fn):
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self._parent._QT_EXEC, fn)
+
     def connect(self) -> bool:
         opts = self._parent.options
         self._x = float(opts.get("trap_x", 0.0))
@@ -382,6 +386,10 @@ class _mask(ChildDevice):
         self._horizontal_idx: int = 0
         self._horizontal_size: int = 0
 
+    async def _run_blocking_in_thread(self, fn):
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self._parent._QT_EXEC, fn)
+
     def connect(self) -> bool:
         opts = self._parent.options
         self._vertical_show = bool(opts.get("vertical_show", False))
@@ -560,6 +568,11 @@ class slm(Device):
         self._raw_pattern: np.ndarray | None = None
         self._current_pattern: np.ndarray | None = None
 
+    async def _run_blocking_in_thread(self, fn):
+        """Run fn on the dedicated Qt thread (single-threaded executor ensures Qt thread affinity)."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self._QT_EXEC, fn)
+
     # --- Lifecycle ---
 
     def connect(self) -> bool:
@@ -577,7 +590,7 @@ class slm(Device):
         return True
 
     def disconnect(self) -> bool:
-        self.close()
+        self._QT_EXEC.submit(self._close_window).result()
         return True
 
     # --- Read-only properties ---
@@ -598,6 +611,13 @@ class slm(Device):
     def is_displaying(self) -> bool:
         """True when the SLM display window is currently open."""
         return self._window is not None
+
+    @is_displaying.setter
+    def is_displaying(self, value: bool) -> None:
+        if value:
+            self._redisplay()
+        else:
+            self._close_window()
 
     @api_property()
     def max_phase(self) -> int:
@@ -622,16 +642,6 @@ class slm(Device):
         arr = np.asarray(pattern, dtype=float)
         arr = _validate_pattern(arr)
         self._display(arr)
-
-    @api_command()
-    def close(self) -> None:
-        """Close the SLM display window."""
-        if self._window is not None:
-            self._window.close()
-            self._window.deleteLater()
-            self._window = None
-            self._pixmap = None
-            self._process_qt_events()
 
     # --- Data source: live pattern preview ---
 
@@ -690,10 +700,23 @@ class slm(Device):
         qimg = QImage(data, img.width, img.height, img.width * 3, QImage.Format_RGB888)
         return QPixmap.fromImage(qimg.copy())
 
+    def _close_window(self) -> None:
+        if self._window is not None:
+            import threading
+            from PySide6.QtCore import QThread
+            caller = threading.current_thread().name
+            same = QThread.currentThread() is self._window.thread()
+            logger.info(f"_close_window: caller={caller}, same Qt thread={same}")
+            self._window.hide()
+            self._window.deleteLater()
+            self._window = None
+            self._pixmap = None
+            self._process_qt_events()
+
     def _open_window(self, img: Image.Image) -> None:
         self._ensure_app()
         m = self._monitor
-        self._window = _SlmWindow(on_escape=self.close)
+        self._window = _SlmWindow(on_escape=self._close_window)
         self._window.setGeometry(m["x"], m["y"], m["width"], m["height"])
         self._window.setFocusPolicy(Qt.StrongFocus)
         self._pixmap = self._pil_to_qpixmap(img)
