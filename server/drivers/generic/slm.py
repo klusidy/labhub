@@ -521,6 +521,7 @@ class slm(Device):
     config_template = {
         "polling_interval": 1000,
         "monitor_index": None,  # None → auto-select first non-primary monitor
+        "enable_display": False,  # master flag: window is never created until True
         "max_phase": 220,  # uint8 gray value that produces exactly 2π phase shift
         "phase_offset": 0,  # uint8 gray value at zero phase
         "aperture_limit": -1,  # max allowed aperture_diameter in px; -1 → no limit
@@ -555,6 +556,7 @@ class slm(Device):
         super().__init__(dev_id, options, manager)
 
         self._monitor_index: int | None = options.get("monitor_index", None)
+        self._enable_display: bool = bool(options.get("enable_display", False))
         self._max_phase: int = int(options.get("max_phase", 220))
         self._phase_offset: int = int(options.get("phase_offset", 0))
 
@@ -609,11 +611,17 @@ class slm(Device):
 
     @api_property()
     def is_displaying(self) -> bool:
-        """True when the SLM display window is currently open."""
+        """True when the SLM display window is currently visible (read-only; controlled by enable_display)."""
         return self._window is not None
 
-    @is_displaying.setter
-    def is_displaying(self, value: bool) -> None:
+    @api_property()
+    def enable_display(self) -> bool:
+        """Master switch: when False the SLM window is never created, even as properties update."""
+        return self._enable_display
+
+    @enable_display.setter
+    def enable_display(self, value: bool) -> None:
+        self._enable_display = value
         if value:
             self._redisplay()
         else:
@@ -677,6 +685,8 @@ class slm(Device):
         mask_dev = self.children.get("mask")
         displayed = mask_dev.apply(arr) if mask_dev is not None else arr
         self._current_pattern = displayed
+        if not self._enable_display:
+            return
         img = self._to_pil(displayed)
         if self._window is None:
             self._open_window(img)
@@ -702,11 +712,6 @@ class slm(Device):
 
     def _close_window(self) -> None:
         if self._window is not None:
-            import threading
-            from PySide6.QtCore import QThread
-            caller = threading.current_thread().name
-            same = QThread.currentThread() is self._window.thread()
-            logger.info(f"_close_window: caller={caller}, same Qt thread={same}")
             self._window.hide()
             self._window.deleteLater()
             self._window = None

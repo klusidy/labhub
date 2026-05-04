@@ -8,6 +8,7 @@ Each client gets a persistent session that survives reconnections.
 from dataclasses import dataclass, field
 from datetime import datetime
 import asyncio
+import sys
 import os
 from pathlib import Path
 from typing import Dict, Optional, List
@@ -124,11 +125,7 @@ class ReplSessionManager:
         if self.python_path:
             python_exe = self.python_path
         else:
-            # Use server's .venv
-            if os.name == 'nt':
-                python_exe = Path(".venv") / "Scripts" / "python.exe"
-            else:
-                python_exe = Path(".venv") / "bin" / "python"
+            python_exe = Path(sys.executable)
 
         if not python_exe.exists():
             raise FileNotFoundError(f"Python executable not found: {python_exe}")

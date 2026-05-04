@@ -57,6 +57,7 @@ import logging
 logger = logging.getLogger("labhub.launcher")
 
 LABHUB_DIR = _PROJECT_ROOT
+RUNTIME_PYTHON = LABHUB_DIR / "runtime" / "python" / "python.exe"
 
 logger.debug(f"project_root is {LABHUB_DIR}")
 
@@ -211,7 +212,7 @@ class ConfigureDialog(QDialog):
         python_path_layout = QHBoxLayout()
         self.python_edit = QLineEdit()
         self.python_edit.setReadOnly(True)
-        self.python_edit.setPlaceholderText("Default: .venv/Scripts/python.exe")
+        self.python_edit.setPlaceholderText("Default: runtime\\python\\python.exe")
         btn_python_browse = QPushButton("Browse...")
         btn_python_browse.clicked.connect(self._browse_python)
         python_path_layout.addWidget(self.python_edit)
@@ -496,7 +497,7 @@ class ConfigureDialog(QDialog):
         start_dir = (
             str(Path(self.python_edit.text()).parent)
             if self.python_edit.text()
-            else str(LABHUB_DIR / ".venv" / "Scripts")
+            else str(RUNTIME_PYTHON.parent if RUNTIME_PYTHON.exists() else LABHUB_DIR)
         )
         file_path, _ = QFileDialog.getOpenFileName(
             self,
