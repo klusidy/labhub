@@ -22,5 +22,6 @@ influxdb-client[async]>=1.35.0  # for async InfluxDB integration
 pyvisa-py>=0.8.1  # for VISA instruments
 screeninfo>=0.1.0  # for screen information
 PILLOW>=9.0.0  # for image processing
-# picoscope SDK
+pypylon>=24.0.0 # for Basler cameras
+# picosc..pe SDK
 # python -m pip install -r .\requirements.txt
