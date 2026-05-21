@@ -9,7 +9,7 @@ import io
 import logging
 import math
 from concurrent.futures import ThreadPoolExecutor
-from typing import AsyncIterator, Dict, Any, Optional, TYPE_CHECKING
+from typing import AsyncIterator, Dict, Any, Optional, Literal, TYPE_CHECKING
 
 import numpy as np
 from PIL import Image
@@ -96,7 +96,7 @@ class _trap(ChildDevice):
         self._z: float = 0.0
         self._beam_type: str = "gauss"
         self._aperture_diameter: int = -1  # -1 → min(width, height)
-        self._bessel_inner_fraction: float = 0.9
+        self._bessel_ring_width: int = 50
         self._offset_h: int = 0  # horizontal centre offset from SLM centre (px)
         self._offset_v: int = 0  # vertical centre offset from SLM centre (px)
         self._auto_update: bool = True
@@ -114,7 +114,7 @@ class _trap(ChildDevice):
         self._z = float(opts.get("trap_z", 0.0))
         self._beam_type = str(opts.get("beam_type", "gauss"))
         self._aperture_diameter = int(opts.get("aperture_diameter", -1))
-        self._bessel_inner_fraction = float(opts.get("bessel_inner_fraction", 0.9))
+        self._bessel_ring_width = int(opts.get("bessel_ring_width", 50))
         self._offset_h = int(opts.get("offset_h", 0))
         self._offset_v = int(opts.get("offset_v", 0))
         self._auto_update = bool(opts.get("auto_update", True))
@@ -180,17 +180,17 @@ class _trap(ChildDevice):
         if self._auto_update:
             self._do_update()
 
-    @api_property(min=0.5, max=0.99, step=0.01)
-    def bessel_inner_fraction(self) -> float:
+    @api_property(min=0, max=600, step=1)
+    def bessel_ring_width(self) -> int:
         """
-        Inner-to-outer radius ratio of the Bessel annulus (only used when beam_type='bessel').
-        0.9 → thin ring; the inner hole covers 90 % of the aperture radius.
+        Width of the Bessel annulus in pixels (only used when beam_type='bessel').
+        50 → 50 px wide ring; the inner hole covers 90 % of the aperture radius.
         """
-        return self._bessel_inner_fraction
+        return self._bessel_ring_width
 
-    @bessel_inner_fraction.setter
-    def bessel_inner_fraction(self, value: float) -> None:
-        self._bessel_inner_fraction = value
+    @bessel_ring_width.setter
+    def bessel_ring_width(self, value: int) -> None:
+        self._bessel_ring_width = value
         if self._auto_update:
             self._do_update()
 
@@ -325,7 +325,7 @@ class _trap(ChildDevice):
             self._z,
             self._beam_type,
             aperture,
-            self._bessel_inner_fraction,
+            self._bessel_ring_width,
             root._max_phase,
             root._phase_offset,
         )
@@ -385,6 +385,7 @@ class _mask(ChildDevice):
         self._horizontal_show: bool = False
         self._horizontal_idx: int = 0
         self._horizontal_size: int = 0
+        self._mask_combination: Literal["and", "or"] = "or"
 
     async def _run_blocking_in_thread(self, fn):
         loop = asyncio.get_running_loop()
@@ -462,6 +463,19 @@ class _mask(ChildDevice):
         self._horizontal_size = int(value)
         self._parent._redisplay()
 
+    @api_property(choices=["and", "or"])
+    def mask_combination(self) -> Literal["and", "or"]:
+        """
+        When both vertical and horizontal stripes are enabled, how to combine them:
+        "or" (default) shows the union of the two stripes; "and" shows only the intersection.
+        """
+        return self._mask_combination
+
+    @mask_combination.setter
+    def mask_combination(self, value: Literal["and", "or"]) -> None:
+        self._mask_combination = value
+        self._parent._redisplay()
+
     @api_data("mask_img", kind="image")
     async def mask_img(self) -> AsyncIterator[Frame]:
         """Stream the computed trap phase pattern (without overlay, without mask) as a PNG image."""
@@ -486,14 +500,39 @@ class _mask(ChildDevice):
         if not self._vertical_show and not self._horizontal_show:
             return pattern
         result = np.zeros_like(pattern)
+        vertical_mask = np.zeros_like(pattern, dtype=bool)
         if self._vertical_show and self._vertical_size > 0:
             v0 = self._vertical_idx
             v1 = v0 + self._vertical_size
-            result[:, v0:v1] = pattern[:, v0:v1]
+            vertical_mask[:, v0:v1] = True
+        else:
+            vertical_mask[:, :] = True
+
+        horizontal_mask = np.zeros_like(pattern, dtype=bool)
         if self._horizontal_show and self._horizontal_size > 0:
             h0 = self._horizontal_idx
             h1 = h0 + self._horizontal_size
-            result[h0:h1, :] = pattern[h0:h1, :]
+            horizontal_mask[h0:h1, :] = True
+        else:
+            horizontal_mask[:, :] = True
+
+        # both masks enabled - combine according to mask_combination
+        if self._horizontal_show and self._vertical_show:
+
+            if self._mask_combination == "or":
+                combined_mask = np.logical_or(vertical_mask, horizontal_mask)
+            else:  # "and"
+                combined_mask = np.logical_and(vertical_mask, horizontal_mask)
+        # only one mask enabled - use it directly
+        elif self._vertical_show and not self._horizontal_show:
+            combined_mask = vertical_mask
+        elif not self._vertical_show and self._horizontal_show:
+            combined_mask = horizontal_mask
+        # no masks enabled - show everything
+        else:
+            combined_mask = np.ones(pattern, dtype=bool)
+
+        result[combined_mask] = pattern[combined_mask]
         return result
 
 
@@ -531,7 +570,7 @@ class slm(Device):
         "trap_z": 0.0,
         "beam_type": "gauss",
         "aperture_diameter": -1,
-        "bessel_inner_fraction": 0.9,
+        "bessel_ring_width": 50,
         "offset_h": 0,
         "offset_v": 0,
         "auto_update": True,
@@ -760,7 +799,7 @@ def _compute_trap_pattern(
     z: float,
     beam_type: str,
     aperture_diameter: int,
-    bessel_inner_fraction: float,
+    bessel_ring_width: int,
     max_phase: int,
     phase_offset: int,
 ) -> np.ndarray:
@@ -776,7 +815,7 @@ def _compute_trap_pattern(
     Z = X**2 + Y**2
     R = np.sqrt(Z)
 
-    mask = _create_mask(R, aperture_diameter, beam_type, bessel_inner_fraction)
+    mask = _create_mask(R, aperture_diameter, beam_type, bessel_ring_width)
     phase = _calc_phase(x, y, z, X, Y, Z)
     return _phase_to_grayscale(mask * phase, max_phase, phase_offset)
 
@@ -797,13 +836,13 @@ def _create_mask(
     R: np.ndarray,
     aperture_diameter: int,
     beam_type: str,
-    bessel_inner_fraction: float,
+    bessel_ring_width: int,
 ) -> np.ndarray:
     """Circular aperture mask: solid disk for 'gauss', thin annulus for 'bessel'."""
     outer_r = aperture_diameter / 2.0
     mask = np.zeros(R.shape)
     if beam_type == "bessel":
-        inner_r = outer_r * bessel_inner_fraction
+        inner_r = outer_r - bessel_ring_width
         mask[(R <= outer_r) & (R >= inner_r)] = 1.0
     else:
         mask[R <= outer_r] = 1.0
