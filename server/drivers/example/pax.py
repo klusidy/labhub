@@ -18,11 +18,16 @@ Key patterns demonstrated:
 """
 
 from __future__ import annotations
+import asyncio
+import base64
+import io
 import logging
 import threading
 import time
-from typing import Dict, Any, Optional, TYPE_CHECKING
+from typing import Dict, Any, Optional, TYPE_CHECKING, AsyncGenerator
 
+import matplotlib.pyplot as plt
+import numpy as np
 from reactivex import start
 from .PAX1000LTM import *
 import pyvisa
@@ -38,6 +43,14 @@ logger = logging.getLogger(__name__)
 DEFAULT_SAVE_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..", "..", "data", "pax")
 )
+
+
+def _fig_to_b64png(fig) -> str:
+    """Convert a matplotlib figure to a base64-encoded PNG string."""
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight", dpi=80)
+    buf.seek(0)
+    return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
 @api_device()  # No arguments - metadata inferred from class
@@ -250,7 +263,7 @@ class pax(Device):  # Class name MUST match filename exactly
         aceptable_alighment: float = 98.0,
         num_of_consecutive_aceptable_values: int = 5,
         timeout_s: float = 30.0,) -> str:
-        """returns a value between 0% and 100% that indicates how well the polarimeter is aligned. The higher the value, the better the alignment. """
+        """returns a value between 0% and 100% that indicates how well the polarimeter is aligned. The higher the value, the better the alignment."""
         self.alighnment_assistance_active = True
         if not self.polarimeter or not self.polarimeterLTM:
             self.alighnment_assistance_active = False
@@ -547,6 +560,76 @@ class pax(Device):  # Class name MUST match filename exactly
         self.polarimeterLTM.delete_last_scan()
         deleted_scan_id = self.polarimeterLTM.lastestScanID + 1
         return f"Deleted scan with ID {deleted_scan_id} from memory."
+
+    # --- Data sources: visualization ---
+
+    @api_data("measurement_graph", kind="image")  # type: ignore[arg-type]
+    async def measurement_graph(self) -> AsyncGenerator[Frame, None]:
+        """Stream a graph visualization of the latest measurement as a PNG image."""
+        loop = asyncio.get_running_loop()
+        while True:
+            if not self.polarimeter or not self.polarimeterLTM:
+                yield {"image_b64": None}
+            elif self.polarimeterLTM.lastestScanID < 256:
+                # No measurements available yet
+                yield {"image_b64": None}
+            else:
+                try:
+                    # Get the latest measurement
+                    latest_scan_id = self.polarimeterLTM.lastestScanID
+                    measurement = self.polarimeterLTM.readFromScanID(latest_scan_id)
+                    
+                    # Create graph in executor to avoid blocking
+                    b64 = await loop.run_in_executor(
+                        None,
+                        self._create_measurement_graph,
+                        measurement,
+                        latest_scan_id
+                    )
+                    yield {"image_b64": b64}
+                except Exception as e:
+                    logger.error(f"Error creating measurement graph: {e}")
+                    yield {"image_b64": None}
+            
+            await asyncio.sleep(0.5)  # Update graph every 500ms
+
+    def _create_measurement_graph(self, measurement, scan_id: int) -> str:
+        """
+        Create a matplotlib graph from measurement data and return as base64 PNG.
+        
+        Args:
+            measurement: The measurement object from readFromScanID()
+            scan_id: The ID of the measurement for labeling
+            
+        Returns:
+            Base64-encoded PNG string of the graph
+        """
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        try:
+            # Convert measurement to string if needed and try to parse/visualize
+            measurement_str = str(measurement)
+            
+            # Create a simple plot with the measurement data
+            # You may need to adjust this based on the actual measurement format
+            ax.text(0.5, 0.5, f"Measurement ID: {scan_id}\n{measurement_str[:200]}...",
+                   horizontalalignment='center', verticalalignment='center',
+                   transform=ax.transAxes, fontsize=10, wrap=True)
+            
+            ax.set_title(f"Polarimeter Measurement - Scan ID {scan_id}")
+            ax.axis('off')
+            
+        except Exception as e:
+            ax.text(0.5, 0.5, f"Error displaying measurement: {str(e)}",
+                   horizontalalignment='center', verticalalignment='center',
+                   transform=ax.transAxes, fontsize=10)
+            ax.set_title("Measurement Graph - Error")
+            ax.axis('off')
+        
+        # Convert figure to base64 PNG
+        b64 = _fig_to_b64png(fig)
+        plt.close(fig)
+        return b64
 
 
 # === Additional Notes ========================================================

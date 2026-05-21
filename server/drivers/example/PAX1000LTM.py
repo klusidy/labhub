@@ -15,8 +15,8 @@ import threading
 import time
 import csv
 import os
-from typing import Dict, Any
 from ctypes import cdll
+from typing import Any, Dict
 
 # Try to load the DLL from the same directory as this script
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -26,6 +26,125 @@ try:
     lib = cdll.LoadLibrary(dll_path)
 except OSError as e:
     raise FileNotFoundError(f"Could not find TLPAX_64.dll at {dll_path}. Make sure the DLL file is in the same directory as this script.") from e
+
+# Optional system DLL location used by alignment helpers.
+_DLL_PATH = r"C:\Program Files\IVI Foundation\VISA\Win64\Lib_x64\msc"
+_DLL_NAME = "TLPAX_64.dll"
+_dll_cache = None
+
+
+def _get_dll() -> ctypes.CDLL:
+    """Load and configure the TLPAX DLL (cached after first call)."""
+    global _dll_cache
+    if _dll_cache is not None:
+        return _dll_cache
+
+    candidate_paths = [
+        os.path.join(_DLL_PATH, _DLL_NAME),
+        dll_path,
+    ]
+
+    last_error = None
+    dll = None
+    for candidate in candidate_paths:
+        try:
+            dll = ctypes.cdll.LoadLibrary(candidate)
+            break
+        except OSError as exc:
+            last_error = exc
+
+    if dll is None:
+        # Fall back to the globally loaded library if available.
+        dll = lib
+        if dll is None:
+            raise FileNotFoundError(
+                f"Could not load {_DLL_NAME} from {candidate_paths}"
+            ) from last_error
+
+    dll.TLPAX_getMeasurementData.restype = ctypes.c_int32
+    dll.TLPAX_getMeasurementData.argtypes = [
+        ctypes.c_uint32,                      # instrumentHandle
+        ctypes.POINTER(ctypes.c_double),      # optPower
+        ctypes.POINTER(ctypes.c_double),      # phaseRetardation
+        ctypes.POINTER(ctypes.c_double),      # normalizedS0
+        ctypes.POINTER(ctypes.c_double),      # normalizedS1
+        ctypes.POINTER(ctypes.c_double),      # normalizedS2
+        ctypes.POINTER(ctypes.c_double),      # normalizedS3
+        ctypes.POINTER(ctypes.c_double),      # DOP
+        ctypes.POINTER(ctypes.c_double),      # azimuth
+        ctypes.POINTER(ctypes.c_double),      # ellipticity
+        ctypes.POINTER(ctypes.c_double),      # powerPolarized
+        ctypes.POINTER(ctypes.c_double),      # powerUnpolarized
+        ctypes.POINTER(ctypes.c_double),      # alignmentAid
+    ]
+
+    _dll_cache = dll
+    return dll
+
+
+def _normalize_handler(handler: Any) -> ctypes.c_uint32:
+    """Normalize different handle container types to c_uint32."""
+    if hasattr(handler, "value"):
+        handler_value = int(handler.value)
+    else:
+        handler_value = int(handler)
+    if handler_value < 0:
+        raise ValueError("Instrument handle must be a non-negative integer")
+    return ctypes.c_uint32(handler_value)
+
+
+def get_alignment_reading(handler: Any) -> Dict[str, Any]:
+    """Take one measurement and return values relevant to alignment."""
+    dll = _get_dll()
+    normalized_handler = _normalize_handler(handler)
+
+    opt_power = ctypes.c_double(0.0)
+    phase_ret = ctypes.c_double(0.0)
+    s0 = ctypes.c_double(0.0)
+    s1 = ctypes.c_double(0.0)
+    s2 = ctypes.c_double(0.0)
+    s3 = ctypes.c_double(0.0)
+    dop = ctypes.c_double(0.0)
+    azimuth = ctypes.c_double(0.0)
+    ellipticity = ctypes.c_double(0.0)
+    pwr_polarized = ctypes.c_double(0.0)
+    pwr_unpolarized = ctypes.c_double(0.0)
+    alignment_aid = ctypes.c_double(0.0)
+
+    status = dll.TLPAX_getMeasurementData(
+        normalized_handler,
+        ctypes.byref(opt_power),
+        ctypes.byref(phase_ret),
+        ctypes.byref(s0),
+        ctypes.byref(s1),
+        ctypes.byref(s2),
+        ctypes.byref(s3),
+        ctypes.byref(dop),
+        ctypes.byref(azimuth),
+        ctypes.byref(ellipticity),
+        ctypes.byref(pwr_polarized),
+        ctypes.byref(pwr_unpolarized),
+        ctypes.byref(alignment_aid),
+    )
+
+    if status != 0:
+        raise RuntimeError(
+            f"TLPAX_getMeasurementData failed (status {status:#010x}). "
+            "Ensure the device is connected and in an active measurement mode."
+        )
+
+    aid_value = alignment_aid.value
+    return {
+        "opt_power": opt_power.value,
+        "alignment_aid": aid_value,
+        "is_aligned": aid_value >= 0.90,
+    }
+
+
+def get_alignment_percent(handler: Any) -> float:
+    """Return beam alignment as a percentage (0.0 - 100.0)."""
+    reading = get_alignment_reading(handler)
+    return float(reading["alignment_aid"]) * 100.0
 
 from httpx import delete
 import pyvisa
@@ -282,38 +401,90 @@ class PolarimeterLTM:
             time.sleep(self.interval)
         print("Measure stopped.")
 
-    def measure_until_stopped(self, measure_interval=0.05, delete = False):
+    def get_alignment_measurement(self) -> Dict[str, Any]:
+        """Take a fresh measurement and return values relevant to alignment.
+
+        Prefers the dedicated DLL alignment aid value when available.
+        Falls back to a newly captured scan and uses DOP as a proxy.
+        """
+        try:
+            reading = get_alignment_reading(self.handler)
+            reading["source"] = "alignment_aid"
+            return reading
+        except Exception:
+            scan_id = self.takeOneMeasurement()
+            measurement = self.readFromScanID(scan_id)
+            dop = 0.0
+            power = 0.0
+            if isinstance(measurement, (list, tuple)):
+                if len(measurement) >= 3:
+                    try:
+                        dop = float(measurement[2])
+                    except (TypeError, ValueError):
+                        dop = 0.0
+                if len(measurement) >= 2:
+                    try:
+                        power = float(measurement[1])
+                    except (TypeError, ValueError):
+                        power = 0.0
+            return {
+                "opt_power": power,
+                "alignment_aid": dop,
+                "is_aligned": dop >= 0.90,
+                "source": "dop_fallback",
+            }
+
+    def alignment_assistance(self, measurement: Any = None) -> float:
+        """Return an alignment score in the range 0.0-1.0.
+
+        If `measurement` is not provided, this method acquires all required data
+        by taking a fresh measurement.
+        """
+        if measurement is None:
+            reading = self.get_alignment_measurement()
+            try:
+                return float(reading.get("alignment_aid", 0.0))
+            except (TypeError, ValueError):
+                return 0.0
+
+        if isinstance(measurement, dict) and "alignment_aid" in measurement:
+            try:
+                return float(measurement["alignment_aid"])
+            except (TypeError, ValueError):
+                return 0.0
+
+        if isinstance(measurement, (list, tuple)) and len(measurement) >= 3:
+            try:
+                return float(measurement[2])
+            except (TypeError, ValueError):
+                return 0.0
+
+        return 0.0
+
+    def alignment_assist(self) -> float:
+        """Take a fresh measurement and return alignment in percent (0-100)."""
+        return round(self.alignment_assistance() * 100, 2)
+
+    def alighment_assist(self, measurement: Any = None):
+        """Backward-compatible misspelling.
+
+        If `measurement` is None, takes a fresh measurement and returns percent.
+        """
+        if measurement is None:
+            return self.alignment_assist()
+        return round(self.alignment_assistance(measurement) * 100, 2)
+
+    def measure_until_stopped(self, measure_interval=0.05, delete: bool = False):
         """Take measurements until self.stop is changed to True."""
         print("Infinite measure start...")
         self.stop = False
         while not self.stop:
             self.takeOneMeasurement()
-            if delete:
-                self.delete_last_scan()
             time.sleep(measure_interval)
+            if delete:
+                self.delete_last_scan() 
         print("Infinite measure stopped.")
 
-    def alignment_assistance(self, measurement_data):
-        """Return the alignment assistance value as a ratio in the range 0.0 - 1.0.
-
-        The current SDK wrapper returns measurements as a list from readFromScanID,
-        where index 2 is DOP. Older or alternate integrations may pass a dict with
-        an "alignmentAID" field, so both shapes are supported.
-        """
-        if isinstance(measurement_data, dict):
-            if "alignmentAID" in measurement_data:
-                return float(measurement_data["alignmentAID"])
-            if "dop" in measurement_data:
-                return float(measurement_data["dop"])
-            raise ValueError("measurement_data dict must contain alignmentAID or dop")
-
-        if not isinstance(measurement_data, (list, tuple)):
-            raise TypeError("measurement_data must be a list, tuple, or dict")
-        if len(measurement_data) < 3:
-            raise ValueError("measurement_data must contain a DOP value at index 2")
-
-        return max(0.0, min(1.0, float(measurement_data[2])))
-    
     def takeOneMeasurement(self):
         """ Take one measurement, return its scanID """
         scanID = c_int()
