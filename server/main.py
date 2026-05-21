@@ -1,7 +1,14 @@
 from __future__ import annotations
 import asyncio, json, os, tempfile, hashlib
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, staticfiles, Body
+from fastapi import (
+    FastAPI,
+    WebSocket,
+    WebSocketDisconnect,
+    HTTPException,
+    staticfiles,
+    Body,
+)
 from typing import Dict, List, Any
 from filelock import FileLock, Timeout
 import yaml
@@ -70,7 +77,9 @@ async def _background_device_startup() -> None:
                 await influx_monitor.start()
                 logger.info("InfluxDB integration ready")
             except Exception as e:
-                logger.warning(f"InfluxDB failed to initialize: {e} - continuing without telemetry")
+                logger.warning(
+                    f"InfluxDB failed to initialize: {e} - continuing without telemetry"
+                )
 
         await asyncio.sleep(2.0)  # Allow polling to populate initial cache
 
@@ -126,9 +135,14 @@ async def lifespan(app: FastAPI):
     # 4. Initialize REPL session manager (fast, no hardware)
     project_root = Path(__file__).parent.parent
     repl_manager = ReplSessionManager(
-        server_cfg.python_path, project_root, macros_path, server_cfg.startup_folder_path
+        server_cfg.python_path,
+        project_root,
+        macros_path,
+        server_cfg.startup_folder_path,
     )
-    logger.info(f"REPL session manager initialized (startup_folder={server_cfg.startup_folder_path})")
+    logger.info(
+        f"REPL session manager initialized (startup_folder={server_cfg.startup_folder_path})"
+    )
 
     # 5. Start device initialization as a background task.
     #    The HTTP server becomes reachable immediately; devices connect asynchronously
@@ -217,10 +231,10 @@ _PROJECT_ROOT = Path(__file__).parent.parent
 # Built-in GUIs (part of the product, always resolved relative to project root)
 _BUILTIN_GUIS = [
     ("v1ui", "gui/basic/dist"),
-    ("ui",   "gui/basic2/dist/spa"),
+    ("ui", "gui/basic2/dist/spa"),
     ("devices", "gui/devices/dist/spa"),
     ("profile", "gui/profile/dist/spa"),
-    ("macros",  "gui/macros/dist/spa"),
+    ("macros", "gui/macros/dist/spa"),
 ]
 
 for _route, _rel in _BUILTIN_GUIS:
@@ -246,8 +260,8 @@ for _gui in server_cfg.custom_guis:
         logger.warning(f"Custom GUI dist not found: {_dist} (route: {_gui.route})")
 
 
-
 # ---- API helpers ----
+
 
 def _resolve(path: str):
     """Navigate the device tree by slash-separated path and return the target device.
@@ -305,6 +319,7 @@ async def list_devices():
 # NOTE: routes with path suffixes (/spec, /commands, /data/…) MUST be
 # registered before the bare {path:path} GET/PATCH catch-alls, otherwise
 # FastAPI's greedy path parameter would consume the suffix.
+
 
 @app.get("/api/v2/devices/{path:path}/spec", response_model=DeviceSpec)
 async def get_device_spec(path: str):
@@ -402,6 +417,7 @@ async def run_command(path: str, req: CommandRequest):
 
 # --- State read / property write (bare path — registered LAST among GETs) ---
 
+
 @app.get("/api/v2/devices/{path:path}", response_model=DeviceInfo)
 async def get_device(path: str):
     """Get current state for a device at any depth in the tree.
@@ -464,7 +480,9 @@ async def patch_device(path: str, req: PatchRequest):
     # Publish full root state (nested) so WS clients see the complete picture
     root_dev = manager.devices[root_id]
     root_state = await root_dev.read_state()
-    await event_bus.publish({"type": "device.state", "id": root_id, "state": root_state})
+    await event_bus.publish(
+        {"type": "device.state", "id": root_id, "state": root_state}
+    )
 
     return DeviceInfo(id=path, driver=dev._api_driver, status=dev._status, state=st)
 
@@ -511,7 +529,9 @@ async def ws_events(ws: WebSocket):
         snap = [d.model_dump() for d in await manager.list_devices()]
         if want_ids:
             snap = [d for d in snap if d["id"] in want_ids]
-        await ws.send_text(json.dumps({"type": "snapshot", "devices": snap}))
+        await ws.send_text(
+            json.dumps({"type": "snapshot", "devices": snap}, allow_nan=False)
+        )
         logger.debug(f"WS /api/v2/events - sent snapshot ({len(snap)} devices)")
 
         # Stream state updates
@@ -526,7 +546,7 @@ async def ws_events(ws: WebSocket):
                 if (now - last_sent) < min_period:
                     continue  # Rate limiting
                 last_sent = now
-            await ws.send_text(json.dumps(ev))
+            await ws.send_text(json.dumps(ev, allow_nan=False))
 
     except WebSocketDisconnect:
         logger.debug("WS /api/v2/events - client disconnected")
@@ -534,7 +554,6 @@ async def ws_events(ws: WebSocket):
         logger.error(f"WS /api/v2/events - error: {e}", exc_info=True)
     finally:
         await event_bus.unsubscribe(q)
-
 
 
 @app.websocket("/api/v2/streams/{full_path:path}")
@@ -568,7 +587,9 @@ async def ws_stream(ws: WebSocket, full_path: str):
     prod_hz = float(qps.get("rate", 12.5))
     prod_interval = (1.0 / prod_hz) if prod_hz > 0 else 0.08
 
-    logger.debug(f"WS /api/v2/streams/{full_path} - client connected (rate={prod_hz}Hz)")
+    logger.debug(
+        f"WS /api/v2/streams/{full_path} - client connected (rate={prod_hz}Hz)"
+    )
 
     # Resolve device
     try:
@@ -587,7 +608,9 @@ async def ws_stream(ws: WebSocket, full_path: str):
         await ws.close(code=4404)
         return
     except Exception as e:
-        logger.error(f"WS stream: subscribe failed for '{full_path}': {e}", exc_info=True)
+        logger.error(
+            f"WS stream: subscribe failed for '{full_path}': {e}", exc_info=True
+        )
         await ws.close(code=1011)
         return
 
@@ -607,7 +630,9 @@ async def ws_stream(ws: WebSocket, full_path: str):
             await ws.send_json(frame)
             frame_count += 1
     except WebSocketDisconnect:
-        logger.debug(f"WS stream: client disconnected from '{full_path}' ({frame_count} frames)")
+        logger.debug(
+            f"WS stream: client disconnected from '{full_path}' ({frame_count} frames)"
+        )
     except Exception as e:
         logger.error(f"WS stream: error on '{full_path}': {e}", exc_info=True)
     finally:
@@ -915,13 +940,17 @@ async def repl_websocket(websocket: WebSocket, session_id: str):
     logger.info(f"WebSocket connected for REPL session {session_id}")
 
     if repl_manager is None:
-        await websocket.send_json({"type": "error", "message": "REPL manager not initialized"})
+        await websocket.send_json(
+            {"type": "error", "message": "REPL manager not initialized"}
+        )
         await websocket.close()
         return
 
     session = repl_manager.get_session(session_id)
     if not session:
-        await websocket.send_json({"type": "error", "message": f"Session {session_id} not found"})
+        await websocket.send_json(
+            {"type": "error", "message": f"Session {session_id} not found"}
+        )
         await websocket.close()
         return
 
@@ -962,11 +991,13 @@ async def repl_websocket(websocket: WebSocket, session_id: str):
 
             elif msg_type == "interrupt":
                 await repl_manager.send_interrupt(session_id)
-                await websocket.send_json({
-                    "type": "output",
-                    "stream": "stdout",
-                    "data": "^C\n",
-                })
+                await websocket.send_json(
+                    {
+                        "type": "output",
+                        "stream": "stdout",
+                        "data": "^C\n",
+                    }
+                )
 
             elif msg_type == "ping":
                 await websocket.send_json({"type": "pong"})

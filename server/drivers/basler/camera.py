@@ -69,7 +69,7 @@ class camera(Device):
     """
 
     config_template = {
-        "serial_number": None,   # null → first available camera
+        "serial_number": None,  # null → first available camera
         "polling_interval": 2000,
     }
 
@@ -81,7 +81,7 @@ class camera(Device):
     ):
         super().__init__(dev_id, options, manager)
         self._camera = None
-        self._converter = None   # pylon.ImageFormatConverter → Mono8
+        self._converter = None  # pylon.ImageFormatConverter → Mono8
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -169,7 +169,12 @@ class camera(Device):
     def exposure_time(self, v: float) -> None:
         self._camera.ExposureTime.Value = float(v)
 
-    @api_property(min=0.0, max=48.0, unit="dB", doc="Analog gain (SFNC ≥ 2.x; max depends on camera)")
+    @api_property(
+        min=0.0,
+        max=48.0,
+        unit="dB",
+        doc="Analog gain (SFNC ≥ 2.x; max depends on camera)",
+    )
     def gain(self) -> float:
         return float(self._camera.Gain.Value)
 
@@ -220,7 +225,12 @@ class camera(Device):
     def frame_rate_enable(self, v: bool) -> None:
         self._camera.AcquisitionFrameRateEnable.Value = v
 
-    @api_property(min=0.1, max=2000.0, unit="Hz", doc="Target frame rate (active when frame_rate_enable=True)")
+    @api_property(
+        min=0.1,
+        max=2000.0,
+        unit="Hz",
+        doc="Target frame rate (active when frame_rate_enable=True)",
+    )
     def frame_rate(self) -> float:
         return float(self._camera.AcquisitionFrameRate.Value)
 
@@ -260,15 +270,17 @@ class camera(Device):
 
     @api_command(
         doc="Grab a single frame and return pixel data as a 2D list (rows × cols, uint8). "
-            "Works while the live stream is active. Large images are slow over JSON — "
-            "use the live stream for display."
+        "Works while the live stream is active. Large images are slow over JSON — "
+        "use the live stream for display."
     )
     def snap(self) -> List[List[int]]:
         from pypylon import pylon
 
         if self._camera.IsGrabbing():
             # Live stream is running — retrieve the latest buffered frame
-            grab = self._camera.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
+            grab = self._camera.RetrieveResult(
+                5000, pylon.TimeoutHandling_ThrowException
+            )
         else:
             grab = self._camera.GrabOne(5000, pylon.TimeoutHandling_ThrowException)
 
@@ -291,7 +303,7 @@ class camera(Device):
 
     @api_command(
         doc="Set region of interest. Values are clamped to sensor bounds and "
-            "alignment increments automatically."
+        "alignment increments automatically."
     )
     def set_roi(
         self,
@@ -333,7 +345,7 @@ class camera(Device):
 
     @api_command(
         doc="Run one-shot automatic exposure and return the resulting exposure time (µs). "
-            "Blocks until the camera reports convergence (≤ 5 s)."
+        "Blocks until the camera reports convergence (≤ 5 s)."
     )
     def auto_expose_once(self) -> float:
         cam = self._camera
@@ -345,7 +357,7 @@ class camera(Device):
 
     @api_command(
         doc="Run one-shot automatic gain and return the resulting gain (dB). "
-            "Blocks until the camera reports convergence (≤ 5 s)."
+        "Blocks until the camera reports convergence (≤ 5 s)."
     )
     def auto_gain_once(self) -> float:
         cam = self._camera
@@ -378,7 +390,11 @@ class camera(Device):
     # Data source: live image stream
     # ------------------------------------------------------------------
 
-    @api_data("live", kind="image", doc="Continuous live image stream (Mono8, base64-PNG frames)")
+    @api_data(
+        "live",
+        kind="image",
+        doc="Continuous live image stream (Mono8, base64-PNG frames)",
+    )
     async def live(self) -> AsyncIterator[Frame]:
         """Continuously grab frames and yield them as base64-encoded PNG images.
 
